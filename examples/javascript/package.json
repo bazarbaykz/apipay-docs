@@ -1,0 +1,22 @@
+{
+  "name": "apipay-examples",
+  "version": "1.0.0",
+  "description": "ApiPay.kz API integration examples",
+  "main": "create-invoice.js",
+  "scripts": {
+    "create-invoice": "node create-invoice.js",
+    "verify-organization": "node verify-organization.js",
+    "webhook-handler": "node webhook-handler.js"
+  },
+  "keywords": [
+    "apipay",
+    "kaspi",
+    "payment",
+    "kazakhstan"
+  ],
+  "author": "ApiPay.kz",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

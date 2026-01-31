@@ -1,0 +1,79 @@
+# ApiPay.kz API
+
+> Payment API for Kaspi Pay integration in Kazakhstan. Accept payments by phone number without bank contracts.
+
+## Documentation
+
+- [Full Documentation](https://github.com/YOUR_USERNAME/apipay-docs)
+- [OpenAPI Specification](https://github.com/YOUR_USERNAME/apipay-docs/blob/main/openapi.yaml)
+
+## API
+
+- Base URL: `https://bpapi.bazarbay.site/api`
+- Auth: Header `X-API-Key: your_key`
+- Rate Limit: 60 requests/minute
+
+## Endpoints
+
+### Organizations
+- `POST /organizations/verify` - Start verification with IIN/BIN
+- `GET /organizations/:id/status` - Poll verification status
+
+### Invoices
+- `POST /invoices` - Create payment invoice
+- `GET /invoices` - List invoices
+- `GET /invoices/:id` - Get invoice
+- `POST /invoices/:id/cancel` - Cancel pending invoice
+- `POST /invoices/:id/refund` - Refund paid invoice
+
+### Recurring
+- `POST /recurring-invoices` - Create recurring invoice
+- `GET /recurring-invoices` - List recurring invoices
+- `POST /recurring-invoices/:id/pause` - Pause
+- `POST /recurring-invoices/:id/resume` - Resume
+- `POST /recurring-invoices/:id/cancel` - Cancel
+- `POST /recurring-invoices/:id/bill-now` - Bill immediately
+- `POST /recurring-invoices/:id/skip-period` - Skip period
+
+### Refunds
+- `GET /refunds` - List all refunds
+- `GET /refunds/:id` - Get refund
+- `GET /invoices/:id/refunds` - List invoice refunds
+
+## Quick Start
+
+1. Get API key from https://baypay.bazarbay.site/login
+2. Add phone 77056610934 to Kaspi Business as "Cashier"
+3. POST /organizations/verify with your IIN/BIN
+4. Wait for "verified" status (poll every 2 sec)
+5. POST /invoices to create payment
+6. Redirect customer to payment_url
+
+## Example
+
+```javascript
+const response = await fetch('https://bpapi.bazarbay.site/api/invoices', {
+  method: 'POST',
+  headers: {
+    'X-API-Key': 'YOUR_API_KEY',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    amount: 10000,
+    phone_number: '87001234567'
+  })
+})
+const { payment_url } = await response.json()
+// Redirect customer to payment_url
+```
+
+## Webhooks
+
+Configure webhooks in dashboard (Settings > Connection).
+Events: `invoice.status_changed`
+Verify signature: `X-Webhook-Signature: sha256=<HMAC-SHA256>`
+
+## Support
+
+- WhatsApp: https://wa.me/77085167489
+- Dashboard: https://baypay.bazarbay.site
