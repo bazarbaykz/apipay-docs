@@ -4,6 +4,9 @@ Invoices are the core of ApiPay.kz. Each invoice represents a payment request th
 
 ## Create Invoice
 
+> **Note:** Creating invoices requires a verified organization.
+> Complete verification in Dashboard → Verification before using this endpoint.
+
 **Endpoint:** `POST /invoices`
 
 Creates a new payment invoice. The customer must pay within the expiration period.

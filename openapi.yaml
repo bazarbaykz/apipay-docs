@@ -9,8 +9,8 @@ info:
     ## Quick Start
 
     1. Get API key from [ApiPay.kz Dashboard](https://baypay.bazarbay.site/login)
-    2. Add phone **77056610934** to Kaspi Business as "Cashier"
-    3. Verify organization via `POST /organizations/verify`
+    2. Add service phone (from Dashboard) to Kaspi Business as "Cashier"
+    3. Verify organization in Dashboard → Verification
     4. Create invoices via `POST /invoices`
     5. Redirect customers to `payment_url`
 
@@ -26,82 +26,6 @@ security:
   - ApiKeyAuth: []
 
 paths:
-  /organizations/verify:
-    post:
-      summary: Start organization verification
-      description: |
-        Starts verification process. User must confirm in Kaspi Business within 2 minutes.
-
-        **Prerequisites:**
-        - Add phone 77056610934 to Kaspi Business with "Cashier" role
-      operationId: verifyOrganization
-      tags:
-        - Organizations
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - idn
-              properties:
-                idn:
-                  type: string
-                  description: IIN or BIN (12 digits)
-                  pattern: '^[0-9]{12}$'
-                  example: '123456789012'
-      responses:
-        '200':
-          description: Verification started
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  organization:
-                    $ref: '#/components/schemas/Organization'
-                  message:
-                    type: string
-                    example: Verification started. Please confirm in Kaspi Business app.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
-
-  /organizations/{id}/status:
-    get:
-      summary: Check verification status
-      description: Poll every 2 seconds until status is "verified" or timeout (120 seconds).
-      operationId: getOrganizationStatus
-      tags:
-        - Organizations
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-          description: Organization ID
-      responses:
-        '200':
-          description: Organization status
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  organization:
-                    $ref: '#/components/schemas/Organization'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '410':
-          description: Verification timeout (120 seconds)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
   /invoices:
     post:
       summary: Create invoice
@@ -587,24 +511,6 @@ components:
       description: API key from ApiPay.kz dashboard
 
   schemas:
-    Organization:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        idn:
-          type: string
-          example: '123456789012'
-        status:
-          type: string
-          enum: [pending, verified, failed]
-          example: verified
-        time_remaining:
-          type: integer
-          description: Seconds remaining for verification
-          example: 95
-
     CreateInvoiceRequest:
       type: object
       required:
@@ -834,8 +740,6 @@ components:
                 - Phone number must be in format 8XXXXXXXXXX
 
 tags:
-  - name: Organizations
-    description: Organization verification
   - name: Invoices
     description: Payment invoices
   - name: Refunds

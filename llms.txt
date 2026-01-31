@@ -15,10 +15,6 @@
 
 ## Endpoints
 
-### Organizations
-- `POST /organizations/verify` - Start verification with IIN/BIN
-- `GET /organizations/:id/status` - Poll verification status
-
 ### Invoices
 - `POST /invoices` - Create payment invoice
 - `GET /invoices` - List invoices
@@ -43,11 +39,10 @@
 ## Quick Start
 
 1. Get API key from https://baypay.bazarbay.site/login
-2. Add phone 77056610934 to Kaspi Business as "Cashier"
-3. POST /organizations/verify with your IIN/BIN
-4. Wait for "verified" status (poll every 2 sec)
-5. POST /invoices to create payment
-6. Redirect customer to payment_url
+2. Add service phone (from Dashboard) to Kaspi Business as "Cashier"
+3. Complete verification in Dashboard → Verification
+4. POST /invoices to create payment
+5. Redirect customer to payment_url
 
 ## Example
 

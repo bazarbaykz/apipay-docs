@@ -19,26 +19,10 @@ Before creating invoices, you must verify your organization:
 1. Get your API key from [ApiPay.kz Dashboard](https://baypay.bazarbay.site/login)
 2. Open **Kaspi Business** app on your phone
 3. Go to **Settings → Employees → Add Employee**
-4. Add phone number **77056610934** with **"Cashier"** rights
-5. Verify your organization via API (see below)
+4. Add the service phone number (from Dashboard → Settings) with **"Cashier"** rights
+5. Complete verification in **Dashboard → Verification**
 
-### 2. Verify Organization
-
-```bash
-curl -X POST https://bpapi.bazarbay.site/api/organizations/verify \
-  -H "X-API-Key: YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"idn": "123456789012"}'
-```
-
-Poll status every 2 seconds until `status: "verified"`:
-
-```bash
-curl https://bpapi.bazarbay.site/api/organizations/{id}/status \
-  -H "X-API-Key: YOUR_API_KEY"
-```
-
-### 3. Create Invoice
+### 2. Create Invoice
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/invoices \
@@ -62,8 +46,6 @@ Response:
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /organizations/verify` | Start organization verification |
-| `GET /organizations/:id/status` | Check verification status |
 | `POST /invoices` | Create payment invoice |
 | `GET /invoices` | List invoices |
 | `GET /invoices/:id` | Get invoice details |

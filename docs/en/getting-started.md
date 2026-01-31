@@ -8,13 +8,13 @@ Before you can create invoices, you need to:
 
 1. **Get API Key** — Register at [baypay.bazarbay.site](https://baypay.bazarbay.site/login) and get your API key from the dashboard
 2. **Configure Kaspi Business** — Add our service phone number to your Kaspi Business account
-3. **Verify Organization** — Complete verification via API
+3. **Verify Organization** — Complete verification in the dashboard
 
 ## Step 1: Configure Kaspi Business
 
 1. Open **Kaspi Business** app on your phone
 2. Go to **Settings → Employees → Add Employee**
-3. Add phone number: **77056610934**
+3. Add the service phone number (see Dashboard → Settings → Connection)
 4. Set role: **Cashier** (Кассир)
 5. Confirm the addition
 
@@ -29,62 +29,12 @@ Before you can create invoices, you need to:
 
 ## Step 3: Verify Organization
 
-Send verification request with your IIN (Individual Identification Number) or BIN (Business Identification Number):
+1. Go to [ApiPay.kz Dashboard](https://baypay.bazarbay.site)
+2. Navigate to **Dashboard → Verification**
+3. Complete the verification process
+4. Wait for verification approval
 
-```bash
-curl -X POST https://bpapi.bazarbay.site/api/organizations/verify \
-  -H "X-API-Key: YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"idn": "123456789012"}'
-```
-
-**Request Body:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `idn` | string | Yes | 12-digit IIN or BIN |
-
-**Response:**
-```json
-{
-  "organization": {
-    "id": 1,
-    "status": "pending"
-  },
-  "message": "Verification started. Please confirm in Kaspi Business app."
-}
-```
-
-## Step 4: Poll Verification Status
-
-The user must confirm the verification in Kaspi Business app within 2 minutes.
-
-Poll the status every 2 seconds:
-
-```bash
-curl https://bpapi.bazarbay.site/api/organizations/1/status \
-  -H "X-API-Key: YOUR_API_KEY"
-```
-
-**Response:**
-```json
-{
-  "organization": {
-    "id": 1,
-    "idn": "123456789012",
-    "status": "verified",
-    "time_remaining": 95
-  }
-}
-```
-
-**Possible statuses:**
-- `pending` — Waiting for confirmation
-- `verified` — Organization verified, ready to create invoices
-- `failed` — Verification failed
-
-> **Note**: Verification times out after 120 seconds. If timeout occurs, start the process again.
-
-## Step 5: Create Your First Invoice
+## Step 4: Create Your First Invoice
 
 Once verified, you can create invoices:
 
@@ -112,7 +62,7 @@ curl -X POST https://bpapi.bazarbay.site/api/invoices \
 }
 ```
 
-## Step 6: Redirect Customer
+## Step 5: Redirect Customer
 
 Redirect your customer to `payment_url` to complete the payment:
 
@@ -126,7 +76,7 @@ The customer will:
 2. Confirm payment amount
 3. Complete payment using Kaspi Gold card
 
-## Step 7: Handle Payment Notifications
+## Step 6: Handle Payment Notifications
 
 Set up a webhook to receive real-time payment notifications. See [Webhooks](webhooks.md) for details.
 

@@ -19,26 +19,10 @@ ApiPay.kz предоставляет простой REST API для приёма
 1. Получите API ключ в [Личном кабинете ApiPay.kz](https://baypay.bazarbay.site/login)
 2. Откройте приложение **Kaspi Business** на телефоне
 3. Перейдите в **Настройки → Сотрудники → Добавить сотрудника**
-4. Добавьте номер **77056610934** с правами **"Кассир"**
-5. Верифицируйте организацию через API (см. ниже)
+4. Добавьте сервисный номер (из Настройки → Подключение) с правами **"Кассир"**
+5. Пройдите верификацию в **Главная → Верификация**
 
-### 2. Верификация организации
-
-```bash
-curl -X POST https://bpapi.bazarbay.site/api/organizations/verify \
-  -H "X-API-Key: YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"idn": "123456789012"}'
-```
-
-Опрашивайте статус каждые 2 секунды пока `status: "verified"`:
-
-```bash
-curl https://bpapi.bazarbay.site/api/organizations/{id}/status \
-  -H "X-API-Key: YOUR_API_KEY"
-```
-
-### 3. Создание счёта
+### 2. Создание счёта
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/invoices \
@@ -62,8 +46,6 @@ curl -X POST https://bpapi.bazarbay.site/api/invoices \
 
 | Эндпоинт | Описание |
 |----------|----------|
-| `POST /organizations/verify` | Запуск верификации организации |
-| `GET /organizations/:id/status` | Проверка статуса верификации |
 | `POST /invoices` | Создание счёта на оплату |
 | `GET /invoices` | Список счетов |
 | `GET /invoices/:id` | Получение счёта |
