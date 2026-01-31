@@ -1,6 +1,6 @@
 # ApiPay.kz API
 
-> Payment API for Kaspi Pay integration in Kazakhstan. Accept payments by phone number without bank contracts.
+> Independent REST API for Kaspi Pay in Kazakhstan. Automate invoice creation by phone number, process refunds, and manage recurring payments.
 
 ## Documentation
 

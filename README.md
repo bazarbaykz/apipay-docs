@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/en/getting-started.md)
 
-**Accept Kaspi Pay payments in Kazakhstan without a bank contract.**
+**REST API for Kaspi Pay — automated invoicing, refunds, and recurring payments.**
 
-ApiPay.kz provides a simple REST API for accepting payments via Kaspi Pay using customer phone numbers. No bank agreements required, no commissions.
+ApiPay.kz is an independent service that provides a REST API for Kaspi Pay. Automate invoice creation by phone number, process refunds, and manage recurring payments.
 
 [Russian Documentation (Русская документация)](README.ru.md)
 

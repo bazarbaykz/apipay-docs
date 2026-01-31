@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/ru/getting-started.md)
 
-**Принимайте платежи через Kaspi Pay в Казахстане без договора с банком.**
+**REST API для Kaspi Pay — автоматизация счетов, возвратов и рекуррентных платежей.**
 
-ApiPay.kz предоставляет простой REST API для приёма платежей через Kaspi Pay по номеру телефона клиента. Без договоров с банком, без комиссий.
+ApiPay.kz — независимый сервис с REST API для Kaspi Pay. Автоматизируйте выставление счетов по номеру телефона, обрабатывайте возвраты и управляйте рекуррентными платежами.
 
 [English Documentation](README.md)
 
