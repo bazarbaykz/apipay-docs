@@ -19,7 +19,7 @@ Before creating invoices, you must verify your organization:
 1. Get your API key from [ApiPay.kz Dashboard](https://baypay.bazarbay.site/login)
 2. Open **Kaspi Business** app on your phone
 3. Go to **Settings → Employees → Add Employee**
-4. Add the service phone number (from Dashboard → Settings) with **"Cashier"** rights
+4. Add the service phone number (from Dashboard → Settings) with **"Accountant"** rights
 5. Complete verification in **Dashboard → Verification**
 
 ### 2. Create Invoice

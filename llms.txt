@@ -38,8 +38,7 @@
 
 ## Quick Start
 
-1. Get API key from https://baypay.bazarbay.site/login
-2. Add service phone (from Dashboard) to Kaspi Business as "Cashier"
+1. Get API key from https://baypay.bazarbay.site/login2. Add service phone (from Dashboard) to Kaspi Business as "Accountant"
 3. Complete verification in Dashboard → Verification
 4. POST /invoices to create payment
 5. Redirect customer to payment_url

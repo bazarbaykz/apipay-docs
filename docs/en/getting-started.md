@@ -15,7 +15,7 @@ Before you can create invoices, you need to:
 1. Open **Kaspi Business** app on your phone
 2. Go to **Settings → Employees → Add Employee**
 3. Add the service phone number (see Dashboard → Settings → Connection)
-4. Set role: **Cashier** (Кассир)
+4. Set role: **Accountant** (Бухгалтер)
 5. Confirm the addition
 
 > **Important**: This step allows ApiPay.kz to create invoices on behalf of your organization.
