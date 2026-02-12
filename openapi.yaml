@@ -9,8 +9,8 @@ info:
     ## Quick Start
 
     1. Get API key from [ApiPay.kz Dashboard](https://baypay.bazarbay.site/login)
-    2. Add service phone (from Dashboard) to Kaspi Business as "Accountant"
-    3. Verify organization in Dashboard → Verification
+    2. Contact support via WhatsApp (+7 708 516 74 89) to connect as "Cashier"
+    3. Wait for organization to be connected (usually 5-30 minutes)
     4. Create invoices via `POST /invoices`
     5. Redirect customers to `payment_url`
 

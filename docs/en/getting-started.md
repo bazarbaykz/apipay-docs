@@ -7,32 +7,24 @@ This guide will help you integrate ApiPay.kz into your application and start acc
 Before you can create invoices, you need to:
 
 1. **Get API Key** — Register at [baypay.bazarbay.site](https://baypay.bazarbay.site/login) and get your API key from the dashboard
-2. **Configure Kaspi Business** — Add our service phone number to your Kaspi Business account
-3. **Verify Organization** — Complete verification in the dashboard
+2. **Connect Organization** — Contact support via WhatsApp to connect your Kaspi Business
+3. **Start Creating Invoices** — Once connected, use the API or dashboard
 
-## Step 1: Configure Kaspi Business
-
-1. Open **Kaspi Business** app on your phone
-2. Go to **Settings → Employees → Add Employee**
-3. Add the service phone number (see Dashboard → Settings → Connection)
-4. Set role: **Accountant** (Бухгалтер)
-5. Confirm the addition
-
-> **Important**: This step allows ApiPay.kz to create invoices on behalf of your organization.
-
-## Step 2: Get API Key
+## Step 1: Get API Key
 
 1. Go to [baypay.bazarbay.site/login](https://baypay.bazarbay.site/login)
 2. Sign in using WhatsApp authentication
 3. Navigate to **Settings → Connection**
 4. Copy your API key
 
-## Step 3: Verify Organization
+## Step 2: Connect Organization
 
-1. Go to [ApiPay.kz Dashboard](https://baypay.bazarbay.site)
-2. Navigate to **Dashboard → Verification**
-3. Complete the verification process
-4. Wait for verification approval
+1. Contact support via [WhatsApp (+7 708 516 74 89)](https://wa.me/77085167489)
+2. Provide your user ID from the dashboard
+3. We will connect your Kaspi Business with **Cashier** rights
+4. This usually takes 5-30 minutes during business hours
+
+> **Important**: This is the only manual step. After connection, everything is automated.
 
 ## Step 4: Create Your First Invoice
 
