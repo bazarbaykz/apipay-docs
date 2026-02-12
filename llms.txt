@@ -1,53 +1,125 @@
-# ApiPay.kz API
+# ApiPay.kz — Kaspi Pay REST API
 
-> Independent REST API for Kaspi Pay in Kazakhstan. Automate invoice creation by phone number, process refunds, and manage recurring payments.
+> Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-## Documentation
+## Docs
 
-- [Full Documentation](https://github.com/YOUR_USERNAME/apipay-docs)
-- [OpenAPI Specification](https://github.com/YOUR_USERNAME/apipay-docs/blob/main/openapi.yaml)
+- [HTML Documentation](https://apipay.kz/docs.html): Полная REST API документация с примерами кода
+- [Markdown Documentation](https://apipay.kz/apipay-api-docs.md): Для парсинга ИИ-агентами
+- [OpenAPI Specification](https://apipay.kz/openapi.json): OpenAPI 3.0 REST API спецификация
+
+## Pricing (Ценообразование)
+
+- **Fixed monthly fee:** 10,000 KZT/month (~$20 USD)
+- **NO transaction fees:** 0% from payments — NO hidden fees, NO percentage
+- **Single plan includes ALL features:** invoices, subscriptions, catalog, refunds, webhooks
+- **No transaction limits:** unlimited invoices
+- **IMPORTANT:** ApiPay.kz does NOT charge any percentage from your sales!
+
+## Usage Options (Два способа использования)
+
+ApiPay.kz can be used in TWO ways:
+
+**1. Dashboard UI (no coding required)**
+- Create invoices manually via web interface
+- View payment history and statuses
+- Configure webhooks through Settings UI
+- Manage subscriptions with one click
+- Process refunds without writing code
+- Best for: small businesses, manual invoices, testing
+
+**2. REST API (for developers)**
+- Automate invoice creation from your website/app
+- Integrate into checkout flow
+- Build custom payment solutions
+- Receive webhook notifications programmatically
+- Best for: e-commerce, SaaS, automated billing
+
+Both options include ALL features: invoices, subscriptions, catalog, refunds, webhooks.
 
 ## API
 
-- Base URL: `https://bpapi.bazarbay.site/api`
+- Type: REST API
+- Base URL: `https://bpapi.bazarbay.site/api/v1`
 - Auth: Header `X-API-Key: your_key`
+- Content-Type: `application/json`
 - Rate Limit: 60 requests/minute
 
 ## Endpoints
 
-### Invoices
-- `POST /invoices` - Create payment invoice
-- `GET /invoices` - List invoices
-- `GET /invoices/:id` - Get invoice
-- `POST /invoices/:id/cancel` - Cancel pending invoice
-- `POST /invoices/:id/refund` - Refund paid invoice
+### Health Check
+- [GET /api/v1/status]: Health check (no authentication required)
 
-### Recurring
-- `POST /recurring-invoices` - Create recurring invoice
-- `GET /recurring-invoices` - List recurring invoices
-- `POST /recurring-invoices/:id/pause` - Pause
-- `POST /recurring-invoices/:id/resume` - Resume
-- `POST /recurring-invoices/:id/cancel` - Cancel
-- `POST /recurring-invoices/:id/bill-now` - Bill immediately
-- `POST /recurring-invoices/:id/skip-period` - Skip period
+### Invoices (Счета)
+- [POST /api/v1/invoices]: Create invoice (amount or cart_items, phone_number required; description, external_order_id optional)
+  - Supports two modes: without cart (pass amount) or with cart (pass cart_items, amount calculated automatically)
+  - Cart items require: Name, Price, Count, NomenclatureId, Type (FAST_SALE or CATALOGUE), UnitId
+- [GET /api/v1/invoices]: List invoices with pagination, search, and filters (status[], date_from, date_to, sort_by, sort_order)
+- [GET /api/v1/invoices/{id}]: Get invoice by ID
+- [POST /api/v1/invoices/{id}/cancel]: Cancel invoice (only pending status)
+- [POST /api/v1/invoices/{id}/refund]: Refund invoice (full or partial, see Refunds section)
+- [GET /api/v1/invoices/{id}/refunds]: List refunds for specific invoice
+- [GET /api/v1/invoices/stats]: Invoice statistics (period or start_date+end_date)
 
-### Refunds
-- `GET /refunds` - List all refunds
-- `GET /refunds/:id` - Get refund
-- `GET /invoices/:id/refunds` - List invoice refunds
+### Refunds (Возвраты)
+Full and partial refunds for paid invoices. Available for ALL users.
+
+- [POST /api/v1/invoices/{id}/refund]: Create refund
+  - Without amount = full refund
+  - With { amount: 5000, reason: "..." } = partial refund
+- [GET /api/v1/refunds]: List all refunds with filters (status[], invoice_id, date_from, date_to)
+- [GET /api/v1/invoices/{id}/refunds]: List refunds for specific invoice
+
+Refund statuses: `pending`, `processing`, `completed`, `failed`
+
+### Catalog (Каталог)
+Catalog management for organizations with catalog enabled. Includes image upload and sync with Kaspi.
+
+- [GET /api/v1/catalog]: List catalog items with search, barcode filter, first_char filter
+- [POST /api/v1/catalog/upload-image]: Upload catalog image (multipart/form-data, returns image_id)
+- [POST /api/v1/catalog]: Create catalog items (batch, 1-50 items with name, selling_price, unit_id, image_id)
+- [PATCH /api/v1/catalog/{id}]: Update catalog item (name, selling_price, unit_id, image_id, is_image_deleted)
+- [DELETE /api/v1/catalog/{id}]: Delete catalog item
+
+### Subscriptions (Подписки)
+Automatic recurring invoices on a schedule. Available for ALL users.
+
+- [POST /api/v1/subscriptions]: Create subscription
+  - Required: phone_number, amount (100-1000000), billing_period (daily|weekly|biweekly|monthly|quarterly|yearly)
+  - Optional: billing_day (1-28), description, subscriber_name, external_subscriber_id, started_at, max_retry_attempts, retry_interval_hours, grace_period_days, metadata
+- [GET /api/v1/subscriptions]: List subscriptions with filters (status, phone_number, external_subscriber_id)
+- [GET /api/v1/subscriptions/{id}]: Get subscription details with stats and last payment
+- [PUT /api/v1/subscriptions/{id}]: Update subscription
+- [POST /api/v1/subscriptions/{id}/pause]: Pause subscription
+- [POST /api/v1/subscriptions/{id}/resume]: Resume after pause
+- [POST /api/v1/subscriptions/{id}/cancel]: Cancel permanently
+- [GET /api/v1/subscriptions/{id}/invoices]: List invoices generated by subscription
+
+Billing periods: `daily`, `weekly`, `biweekly`, `monthly`, `quarterly`, `yearly`
+Statuses: `active`, `paused`, `cancelled`, `expired`
+
+## Webhooks
+
+Webhooks настраиваются через личный кабинет ApiPay.kz (Настройки > Подключение).
+При создании webhook вы получите secret для верификации подписи (HMAC-SHA256).
+
+Webhook events:
+- `invoice.status_changed` - when invoice status changes (pending -> paid, etc.)
 
 ## Quick Start
 
-1. Get API key from https://baypay.bazarbay.site/login
-2. Contact support via WhatsApp (+7 708 516 74 89) to connect as "Cashier"
-3. Wait for organization to be connected (usually 5-30 minutes)
-4. POST /invoices to create payment
-5. Redirect customer to payment_url
+1. Войдите в личный кабинет: https://apipay.kz/login
+2. Напишите в WhatsApp поддержки (+7 708 516 74 89) для подключения с правами Кассира
+3. Дождитесь подключения организации (обычно 5-30 минут)
+4. POST /api/v1/invoices для создания счёта
+5. Клиент получит уведомление в Kaspi и оплатит там
+6. Настройте webhook в личном кабинете для уведомлений
 
-## Example
+## Code Examples
 
+### Create Invoice (JavaScript)
 ```javascript
-const response = await fetch('https://bpapi.bazarbay.site/api/invoices', {
+const response = await fetch('https://bpapi.bazarbay.site/api/v1/invoices', {
   method: 'POST',
   headers: {
     'X-API-Key': 'YOUR_API_KEY',
@@ -58,17 +130,75 @@ const response = await fetch('https://bpapi.bazarbay.site/api/invoices', {
     phone_number: '87001234567'
   })
 })
-const { payment_url } = await response.json()
-// Redirect customer to payment_url
+const data = await response.json()
+console.log('Invoice created:', data.id)
 ```
 
-## Webhooks
+### Create Invoice with Cart (JavaScript)
+```javascript
+const response = await fetch('https://bpapi.bazarbay.site/api/v1/invoices', {
+  method: 'POST',
+  headers: {
+    'X-API-Key': 'YOUR_API_KEY',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    phone_number: '87001234567',
+    description: 'Cart order',
+    cart_items: [
+      { Name: 'Coffee', Price: 1500, Count: 2, NomenclatureId: 12345, Type: 'CATALOGUE', UnitId: 1, NomenclatureHistoryId: 67890 },
+      { Name: 'Cookie', Price: 500, Count: 3, NomenclatureId: -2, Type: 'FAST_SALE', UnitId: 1 }
+    ]
+  })
+})
+// amount = 1500*2 + 500*3 = 4500 (calculated automatically)
+```
 
-Configure webhooks in dashboard (Settings > Connection).
-Events: `invoice.status_changed`
-Verify signature: `X-Webhook-Signature: sha256=<HMAC-SHA256>`
+### Create Subscription (JavaScript)
+```javascript
+const response = await fetch('https://bpapi.bazarbay.site/api/v1/subscriptions', {
+  method: 'POST',
+  headers: {
+    'X-API-Key': 'YOUR_API_KEY',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    amount: 5000,
+    phone_number: '87001234567',
+    description: 'Monthly subscription',
+    billing_period: 'monthly'
+  })
+})
+const { subscription } = await response.json()
+// Manage: POST /api/v1/subscriptions/:id/pause, /resume, /cancel
+```
 
-## Support
+### Refund Invoice (JavaScript)
+```javascript
+// Full refund
+await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
+  method: 'POST',
+  headers: { 'X-API-Key': 'YOUR_API_KEY' }
+})
 
-- WhatsApp: https://wa.me/77085167489
-- Dashboard: https://baypay.bazarbay.site
+// Partial refund
+await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
+  method: 'POST',
+  headers: {
+    'X-API-Key': 'YOUR_API_KEY',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({ amount: 5000, reason: 'Partial return' })
+})
+```
+
+## Invoice Statuses
+- `pending` - awaiting payment (can be cancelled)
+- `paid` - payment completed (can be refunded)
+- `cancelled` - manually cancelled
+- `expired` - payment timeout
+
+## Optional
+
+- [Login](https://apipay.kz/login): Войти в личный кабинет
+- [WhatsApp Support](https://wa.me/77085167489): Техподдержка

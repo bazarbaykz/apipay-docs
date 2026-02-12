@@ -2,8 +2,7 @@
 """
 ApiPay.kz - Create Invoice Example
 
-This example demonstrates how to create a payment invoice
-and redirect the customer to the payment page.
+This example demonstrates how to create a payment invoice.
 
 Usage: API_KEY=your_key python create_invoice.py
 """
@@ -13,7 +12,7 @@ import requests
 import sys
 
 API_KEY = os.environ.get('API_KEY')
-API_BASE_URL = 'https://bpapi.bazarbay.site/api'
+API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1'
 
 
 def create_invoice(amount: int, phone_number: str, description: str = None, external_order_id: str = None) -> dict:
@@ -58,11 +57,10 @@ def main():
         print('\nInvoice created successfully!')
         print('----------------------------')
         print(f"Invoice ID: {invoice['id']}")
-        print(f"Kaspi Invoice ID: {invoice['kaspi_invoice_id']}")
         print(f"Amount: {invoice['amount']} KZT")
         print(f"Status: {invoice['status']}")
-        print(f"\nPayment URL: {invoice['payment_url']}")
-        print('\nRedirect your customer to the payment URL to complete payment.')
+        print(f"Phone: {invoice['phone_number']}")
+        print('\nThe customer will receive a payment notification in the Kaspi app.')
 
     except Exception as e:
         print(f'Error: {e}')

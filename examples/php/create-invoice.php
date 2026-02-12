@@ -2,14 +2,13 @@
 /**
  * ApiPay.kz - Create Invoice Example
  *
- * This example demonstrates how to create a payment invoice
- * and redirect the customer to the payment page.
+ * This example demonstrates how to create a payment invoice.
  *
  * Usage: API_KEY=your_key php create-invoice.php
  */
 
 $API_KEY = getenv('API_KEY');
-$API_BASE_URL = 'https://bpapi.bazarbay.site/api';
+$API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1';
 
 /**
  * Create a payment invoice
@@ -66,11 +65,10 @@ try {
     echo "\nInvoice created successfully!\n";
     echo "----------------------------\n";
     echo "Invoice ID: {$invoice['id']}\n";
-    echo "Kaspi Invoice ID: {$invoice['kaspi_invoice_id']}\n";
     echo "Amount: {$invoice['amount']} KZT\n";
     echo "Status: {$invoice['status']}\n";
-    echo "\nPayment URL: {$invoice['payment_url']}\n";
-    echo "\nRedirect your customer to the payment URL to complete payment.\n";
+    echo "Phone: {$invoice['phone_number']}\n";
+    echo "\nThe customer will receive a payment notification in the Kaspi app.\n";
 
 } catch (Exception $e) {
     echo "Error: {$e->getMessage()}\n";

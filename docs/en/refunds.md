@@ -4,50 +4,54 @@ Process full or partial refunds for paid invoices.
 
 ## Create Refund
 
-**Endpoint:** `POST /invoices/:id/refund`
-
-Creates a refund for a paid invoice. You can refund the full amount or a partial amount.
+**Endpoint:** `POST /invoices/{id}/refund`
 
 ### Full Refund
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/invoices/42/refund \
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "reason": "Customer request"
-  }'
+  -d '{"reason": "Customer request"}'
 ```
 
 ### Partial Refund
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/invoices/42/refund \
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "amount": 5000,
-    "reason": "Partial return"
-  }'
+  -d '{"amount": 5000, "reason": "Partial return"}'
 ```
 
 ### Parameters
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `amount` | number | No | Partial refund amount. Omit for full refund. |
+| `amount` | number | No | Partial refund amount (0.01-99999999.99). Omit for full refund. |
 | `reason` | string | No | Reason for refund (max 500 chars) |
 
 ### Response
 
 ```json
 {
-  "id": 1,
-  "invoice_id": 42,
-  "amount": "5000.00",
-  "status": "completed",
-  "reason": "Partial return",
-  "created_at": "2025-01-31T14:00:00Z"
+  "message": "Refund initiated successfully",
+  "refund": {
+    "id": 1,
+    "invoice_id": 42,
+    "amount": "5000.00",
+    "status": "pending",
+    "reason": "Partial return",
+    "initiated_by": "api",
+    "created_at": "2025-01-31T14:00:00Z"
+  },
+  "invoice": {
+    "id": 42,
+    "amount": "10000.00",
+    "status": "partially_refunded",
+    "total_refunded": "5000.00",
+    "available_for_refund": "5000.00"
+  }
 }
 ```
 
@@ -55,10 +59,8 @@ curl -X POST https://bpapi.bazarbay.site/api/invoices/42/refund \
 
 **Endpoint:** `GET /refunds`
 
-Returns all refunds across all invoices.
-
 ```bash
-curl "https://bpapi.bazarbay.site/api/refunds?page=1&per_page=20" \
+curl "https://bpapi.bazarbay.site/api/v1/refunds?page=1&per_page=20&status[]=completed" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -66,81 +68,36 @@ curl "https://bpapi.bazarbay.site/api/refunds?page=1&per_page=20" \
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `page` | integer | Page number |
-| `per_page` | integer | Items per page |
-
-### Response
-
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "invoice_id": 42,
-      "amount": "5000.00",
-      "status": "completed",
-      "reason": "Partial return",
-      "created_at": "2025-01-31T14:00:00Z"
-    }
-  ],
-  "meta": {
-    "current_page": 1,
-    "per_page": 20,
-    "total": 5
-  }
-}
-```
-
-## Get Refund
-
-**Endpoint:** `GET /refunds/:id`
-
-Get details of a specific refund.
-
-```bash
-curl https://bpapi.bazarbay.site/api/refunds/1 \
-  -H "X-API-Key: YOUR_API_KEY"
-```
+| `page` | integer | Page number (default: 1) |
+| `per_page` | integer | Items per page (1-100, default: 10) |
+| `status[]` | array | Filter: `pending`, `processing`, `completed`, `failed` |
+| `invoice_id` | integer | Filter by invoice ID |
+| `date_from` | string | Start date (YYYY-MM-DD) |
+| `date_to` | string | End date (YYYY-MM-DD) |
 
 ## List Invoice Refunds
 
-**Endpoint:** `GET /invoices/:id/refunds`
-
-Get all refunds for a specific invoice.
+**Endpoint:** `GET /invoices/{id}/refunds`
 
 ```bash
-curl https://bpapi.bazarbay.site/api/invoices/42/refunds \
+curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-### Response
+## Refund Statuses
 
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "amount": "3000.00",
-      "status": "completed",
-      "reason": "First partial refund",
-      "created_at": "2025-01-31T14:00:00Z"
-    },
-    {
-      "id": 2,
-      "amount": "2000.00",
-      "status": "completed",
-      "reason": "Second partial refund",
-      "created_at": "2025-01-31T15:00:00Z"
-    }
-  ]
-}
-```
+| Status | Description |
+|--------|-------------|
+| `pending` | Refund initiated, waiting to be processed |
+| `processing` | Being processed by Kaspi |
+| `completed` | Successfully completed |
+| `failed` | Failed (e.g., Kaspi rejection) |
 
 ## Refund Rules
 
-1. **Only paid invoices** — You can only refund invoices with `status: "paid"`
-2. **Multiple partial refunds** — You can issue multiple partial refunds up to the original amount
-3. **Amount validation** — Partial refund amount cannot exceed remaining refundable amount
+1. **Only paid invoices** — Refund invoices with `status: "paid"` or `"partially_refunded"`
+2. **Multiple partial refunds** — Issue multiple partial refunds up to the original amount
+3. **Amount validation** — Cannot exceed `available_for_refund`
 
 ## Code Examples
 
@@ -148,29 +105,24 @@ curl https://bpapi.bazarbay.site/api/invoices/42/refunds \
 
 ```javascript
 // Full refund
-const fullRefund = await fetch('https://bpapi.bazarbay.site/api/invoices/42/refund', {
+await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
   method: 'POST',
-  headers: {
-    'X-API-Key': 'YOUR_API_KEY',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    reason: 'Customer cancellation'
-  })
+  headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
+  body: JSON.stringify({ reason: 'Customer cancellation' })
 })
 
 // Partial refund
-const partialRefund = await fetch('https://bpapi.bazarbay.site/api/invoices/42/refund', {
+await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
   method: 'POST',
-  headers: {
-    'X-API-Key': 'YOUR_API_KEY',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    amount: 5000,
-    reason: 'Partial return - damaged item'
-  })
+  headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
+  body: JSON.stringify({ amount: 5000, reason: 'Partial return' })
 })
+
+// List refunds with filters
+const refunds = await fetch(
+  'https://bpapi.bazarbay.site/api/v1/refunds?status[]=completed&date_from=2025-01-01',
+  { headers: { 'X-API-Key': 'YOUR_API_KEY' } }
+)
 ```
 
 ### Python
@@ -179,69 +131,26 @@ const partialRefund = await fetch('https://bpapi.bazarbay.site/api/invoices/42/r
 import requests
 
 # Full refund
-response = requests.post(
-    'https://bpapi.bazarbay.site/api/invoices/42/refund',
-    headers={
-        'X-API-Key': 'YOUR_API_KEY',
-        'Content-Type': 'application/json'
-    },
-    json={
-        'reason': 'Customer cancellation'
-    }
-)
+requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
+    headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
+    json={'reason': 'Customer cancellation'})
 
 # Partial refund
-response = requests.post(
-    'https://bpapi.bazarbay.site/api/invoices/42/refund',
-    headers={
-        'X-API-Key': 'YOUR_API_KEY',
-        'Content-Type': 'application/json'
-    },
-    json={
-        'amount': 5000,
-        'reason': 'Partial return'
-    }
-)
+requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
+    headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
+    json={'amount': 5000, 'reason': 'Partial return'})
 ```
 
 ### PHP
 
 ```php
 // Full refund
-$ch = curl_init('https://bpapi.bazarbay.site/api/invoices/42/refund');
+$ch = curl_init('https://bpapi.bazarbay.site/api/v1/invoices/42/refund');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
-    CURLOPT_HTTPHEADER => [
-        'X-API-Key: YOUR_API_KEY',
-        'Content-Type: application/json'
-    ],
-    CURLOPT_POSTFIELDS => json_encode([
-        'reason' => 'Customer cancellation'
-    ]),
-    CURLOPT_RETURNTRANSFER => true
-]);
-$refund = json_decode(curl_exec($ch), true);
-
-// Partial refund
-$ch = curl_init('https://bpapi.bazarbay.site/api/invoices/42/refund');
-curl_setopt_array($ch, [
-    CURLOPT_POST => true,
-    CURLOPT_HTTPHEADER => [
-        'X-API-Key: YOUR_API_KEY',
-        'Content-Type: application/json'
-    ],
-    CURLOPT_POSTFIELDS => json_encode([
-        'amount' => 5000,
-        'reason' => 'Partial return'
-    ]),
+    CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],
+    CURLOPT_POSTFIELDS => json_encode(['reason' => 'Customer cancellation']),
     CURLOPT_RETURNTRANSFER => true
 ]);
 $refund = json_decode(curl_exec($ch), true);
 ```
-
-## Best Practices
-
-1. **Always include a reason** — Helps with accounting and customer service
-2. **Track refunded amounts** — Keep records of total refunded per invoice
-3. **Validate before refunding** — Check invoice status and remaining amount
-4. **Notify customers** — Send confirmation when refund is processed

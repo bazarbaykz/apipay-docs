@@ -1,11 +1,12 @@
 {
   "name": "apipay-examples",
-  "version": "1.0.0",
-  "description": "ApiPay.kz API integration examples",
+  "version": "2.0.0",
+  "description": "ApiPay.kz API v2 integration examples",
   "main": "create-invoice.js",
   "scripts": {
     "create-invoice": "node create-invoice.js",
-    "verify-organization": "node verify-organization.js",
+    "create-subscription": "node create-subscription.js",
+    "manage-catalog": "node manage-catalog.js",
     "webhook-handler": "node webhook-handler.js"
   },
   "keywords": [

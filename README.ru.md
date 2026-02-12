@@ -1,12 +1,12 @@
 # ApiPay.kz
 
-[![API Version](https://img.shields.io/badge/API-v1.0-blue.svg)](https://bpapi.bazarbay.site/api)
+[![API Version](https://img.shields.io/badge/API-v2.0-blue.svg)](https://bpapi.bazarbay.site/api/v1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/ru/getting-started.md)
 
-**REST API для Kaspi Pay — автоматизация счетов, возвратов и рекуррентных платежей.**
+**REST API для Kaspi Pay — автоматизация счетов, возвратов, подписок и управления каталогом.**
 
-ApiPay.kz — независимый сервис с REST API для Kaspi Pay. Автоматизируйте выставление счетов по номеру телефона, обрабатывайте возвраты и управляйте рекуррентными платежами.
+ApiPay.kz — независимый сервис с REST API для Kaspi Pay. Автоматизируйте выставление счетов по номеру телефона, обрабатывайте возвраты, управляйте подписками и каталогом товаров.
 
 [English Documentation](README.md)
 
@@ -14,16 +14,16 @@ ApiPay.kz — независимый сервис с REST API для Kaspi Pay. 
 
 ### 1. Подготовка
 
-Перед созданием счетов необходимо верифицировать организацию:
+Перед созданием счетов необходимо подключить организацию:
 
-1. Получите API ключ в [Личном кабинете ApiPay.kz](https://baypay.bazarbay.site/login)
+1. Получите API ключ в [Личном кабинете ApiPay.kz](https://apipay.kz/login)
 2. Напишите в [WhatsApp поддержки (+7 708 516 74 89)](https://wa.me/77085167489) — мы подключим ваш Kaspi Business с правами **"Кассира"**
 3. Дождитесь подключения организации (обычно 5-30 минут)
 
 ### 2. Создание счёта
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/invoices \
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"amount": 10000, "phone_number": "87001234567"}'
@@ -32,13 +32,12 @@ curl -X POST https://bpapi.bazarbay.site/api/invoices \
 Ответ:
 ```json
 {
-  "id": 42,
-  "payment_url": "https://kaspi.kz/pay/...",
-  "status": "pending"
+  "id": 124,
+  "amount": "10000.00",
+  "status": "pending",
+  "created_at": "2025-01-15T10:00:00Z"
 }
 ```
-
-**Перенаправьте клиента на `payment_url` для оплаты.**
 
 ## Обзор API
 
@@ -46,25 +45,40 @@ curl -X POST https://bpapi.bazarbay.site/api/invoices \
 |----------|----------|
 | `POST /invoices` | Создание счёта на оплату |
 | `GET /invoices` | Список счетов |
-| `GET /invoices/:id` | Получение счёта |
-| `POST /invoices/:id/cancel` | Отмена счёта |
-| `POST /invoices/:id/refund` | Возврат по счёту |
-| `POST /recurring-invoices` | Создание рекуррентного счёта |
-| `GET /recurring-invoices` | Список рекуррентных счетов |
+| `GET /invoices/{id}` | Получение счёта |
+| `POST /invoices/{id}/cancel` | Отмена счёта |
+| `POST /invoices/{id}/refund` | Возврат по счёту |
+| `GET /invoices/{id}/refunds` | Возвраты по счёту |
+| `GET /invoices/stats` | Статистика счетов |
+| `GET /refunds` | Список всех возвратов |
+| `GET /catalog` | Список товаров каталога |
+| `POST /catalog/upload-image` | Загрузка изображения товара |
+| `POST /catalog` | Создание товаров |
+| `PATCH /catalog/{id}` | Обновление товара |
+| `DELETE /catalog/{id}` | Удаление товара |
+| `POST /subscriptions` | Создание подписки |
+| `GET /subscriptions` | Список подписок |
+| `GET /subscriptions/{id}` | Получение подписки |
+| `PUT /subscriptions/{id}` | Обновление подписки |
+| `POST /subscriptions/{id}/pause` | Приостановка подписки |
+| `POST /subscriptions/{id}/resume` | Возобновление подписки |
+| `POST /subscriptions/{id}/cancel` | Отмена подписки |
+| `GET /subscriptions/{id}/invoices` | Счета подписки |
 
 ## Конфигурация
 
 | Параметр | Значение |
 |----------|----------|
-| Base URL | `https://bpapi.bazarbay.site/api` |
+| Base URL | `https://bpapi.bazarbay.site/api/v1` |
 | Аутентификация | Заголовок `X-API-Key: your_api_key` |
 | Rate Limit | 60 запросов/минуту |
 
 ## Документация
 
-- [Начало работы](docs/ru/getting-started.md) — Подготовка, верификация, первый счёт
+- [Начало работы](docs/ru/getting-started.md) — Подготовка, подключение, первый счёт
 - [Счета](docs/ru/invoices.md) — Создание, список, отмена счетов
-- [Рекуррентные платежи](docs/ru/recurring.md) — Подписки и регулярные списания
+- [Подписки](docs/ru/subscriptions.md) — Автоматические списания по расписанию
+- [Каталог](docs/ru/catalog.md) — Управление каталогом товаров
 - [Возвраты](docs/ru/refunds.md) — Полные и частичные возвраты
 - [Webhooks](docs/ru/webhooks.md) — Уведомления о платежах в реальном времени
 - [Коды ошибок](docs/ru/errors.md) — HTTP коды и обработка ошибок
@@ -87,7 +101,7 @@ curl -X POST https://bpapi.bazarbay.site/api/invoices \
 ## Поддержка
 
 - **WhatsApp**: [+7 708 516 7489](https://wa.me/77085167489)
-- **Личный кабинет**: [baypay.bazarbay.site](https://baypay.bazarbay.site)
+- **Личный кабинет**: [apipay.kz](https://apipay.kz)
 - **Issues**: [GitHub Issues](../../issues)
 
 ## Лицензия

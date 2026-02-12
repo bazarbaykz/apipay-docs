@@ -4,76 +4,87 @@
 
 ## Создание счёта
 
-> **Примечание:** Для создания счетов требуется верифицированная организация.
-> Пройдите верификацию в Главная → Верификация перед использованием.
-
 **Эндпоинт:** `POST /invoices`
 
-Создаёт новый счёт на оплату. Клиент должен оплатить до истечения срока действия.
+Поддерживает два режима: фиксированная сумма или корзина товаров.
 
-### Запрос
+### Запрос (фиксированная сумма)
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/invoices \
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "amount": 10000,
     "phone_number": "87001234567",
     "description": "Оплата заказа #123",
-    "external_order_id": "order_123",
-    "webhook_id": 1
+    "external_order_id": "order_123"
   }'
 ```
+
+### Запрос (с корзиной товаров)
+
+Для организаций с подключённым каталогом:
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone_number": "87001234567",
+    "description": "Заказ из каталога",
+    "cart_items": [
+      {"Name": "Кофе латте", "Price": 1500, "Count": 2, "NomenclatureId": 12345, "Type": "CATALOGUE", "UnitId": 1, "NomenclatureHistoryId": 67890},
+      {"Name": "Печенье", "Price": 500, "Count": 3, "NomenclatureId": -2, "Type": "FAST_SALE", "UnitId": 1}
+    ]
+  }'
+```
+
+Сумма рассчитывается автоматически из корзины: `1500*2 + 500*3 = 4500`.
 
 ### Параметры
 
 | Поле | Тип | Обязательно | Описание |
 |------|-----|-------------|----------|
-| `amount` | number | Да | Сумма в тенге (0.01 - 99 999 999.99) |
+| `amount` | number | Да* | Сумма в тенге (0.01 - 99 999 999.99). *Не обязательно при наличии cart_items. |
 | `phone_number` | string | Да | Телефон клиента (формат: 8XXXXXXXXXX) |
 | `description` | string | Нет | Описание платежа (макс. 500 символов) |
 | `external_order_id` | string | Нет | Ваш ID заказа для сопоставления (макс. 255 символов) |
 | `webhook_id` | number | Нет | ID конкретного webhook из личного кабинета |
+| `cart_items` | array | Нет | Массив товаров корзины (заменяет amount) |
+
+### Поля товара корзины
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `Name` | string | Да | Название товара |
+| `Price` | number | Да | Цена за единицу в тенге |
+| `Count` | number | Да | Количество |
+| `NomenclatureId` | number | Да | ID товара из каталога (или -2 для FAST_SALE) |
+| `Type` | string | Да | `CATALOGUE` или `FAST_SALE` |
+| `UnitId` | number | Да | ID единицы измерения |
+| `NomenclatureHistoryId` | number | Нет | Обязательно для типа CATALOGUE |
 
 ### Ответ
 
 ```json
 {
-  "id": 42,
-  "kaspi_invoice_id": "13234689513",
-  "kaspi_qr_token": "abc123xyz",
-  "payment_url": "https://kaspi.kz/pay/...",
+  "id": 124,
   "amount": "10000.00",
   "status": "pending",
   "description": "Оплата заказа #123",
   "external_order_id": "order_123",
+  "phone_number": "87001234567",
   "created_at": "2025-01-31T12:00:00Z"
 }
 ```
-
-### Поля ответа
-
-| Поле | Описание |
-|------|----------|
-| `id` | Внутренний ID счёта |
-| `kaspi_invoice_id` | ID счёта в системе Kaspi |
-| `kaspi_qr_token` | Токен для генерации QR-кода |
-| `payment_url` | URL для редиректа клиента на оплату |
-| `amount` | Сумма счёта |
-| `status` | Текущий статус |
-| `created_at` | Время создания |
 
 ## Список счетов
 
 **Эндпоинт:** `GET /invoices`
 
-Возвращает список счетов с пагинацией.
-
-### Запрос
-
 ```bash
-curl "https://bpapi.bazarbay.site/api/invoices?page=1&per_page=20&status[]=paid" \
+curl "https://bpapi.bazarbay.site/api/v1/invoices?page=1&per_page=20&status[]=paid&sort_by=created_at&sort_order=desc" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -83,106 +94,77 @@ curl "https://bpapi.bazarbay.site/api/invoices?page=1&per_page=20&status[]=paid"
 |----------|-----|--------------|----------|
 | `page` | integer | 1 | Номер страницы |
 | `per_page` | integer | 10 | Элементов на странице (1-100) |
-| `search` | string | — | Поиск по описанию/ID заказа (макс. 100 символов) |
-| `status[]` | array | — | Фильтр по статусу (pending, paid, cancelled, expired) |
+| `search` | string | — | Поиск по описанию/ID заказа |
+| `status[]` | array | — | Фильтр по статусу |
 | `date_from` | string | — | Начальная дата (YYYY-MM-DD) |
-| `date_to` | string | — | Конечная дата (YYYY-MM-DD, должна быть >= date_from) |
-
-### Ответ
-
-```json
-{
-  "data": [
-    {
-      "id": 42,
-      "amount": "10000.00",
-      "status": "paid",
-      "description": "Заказ #123",
-      "created_at": "2025-01-31T12:00:00Z",
-      "paid_at": "2025-01-31T12:05:00Z"
-    }
-  ],
-  "meta": {
-    "current_page": 1,
-    "per_page": 20,
-    "total": 150
-  }
-}
-```
+| `date_to` | string | — | Конечная дата (YYYY-MM-DD) |
+| `sort_by` | string | created_at | Поле сортировки |
+| `sort_order` | string | desc | `asc` или `desc` |
 
 ## Получение счёта
 
-**Эндпоинт:** `GET /invoices/:id`
-
-Возвращает детали конкретного счёта.
-
-### Запрос
+**Эндпоинт:** `GET /invoices/{id}`
 
 ```bash
-curl https://bpapi.bazarbay.site/api/invoices/42 \
+curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
-```
-
-### Ответ
-
-```json
-{
-  "id": 42,
-  "kaspi_invoice_id": "13234689513",
-  "amount": "10000.00",
-  "status": "paid",
-  "description": "Оплата заказа #123",
-  "external_order_id": "order_123",
-  "client_name": "Иван Иванов",
-  "client_phone": "87001234567",
-  "created_at": "2025-01-31T12:00:00Z",
-  "paid_at": "2025-01-31T12:05:00Z"
-}
 ```
 
 ## Отмена счёта
 
-**Эндпоинт:** `POST /invoices/:id/cancel`
+**Эндпоинт:** `POST /invoices/{id}/cancel`
 
-Отменяет ожидающий счёт. Можно отменить только счета со статусом `status: "pending"`.
-
-### Запрос
+Можно отменить только счета со статусом `pending`. Может вернуть `202 Accepted` со статусом `cancelling` при асинхронной обработке.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/invoices/42/cancel \
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-### Ответ
+## Возврат по счёту
 
-```json
-{
-  "id": 42,
-  "status": "cancelled",
-  "cancelled_at": "2025-01-31T12:10:00Z"
-}
+**Эндпоинт:** `POST /invoices/{id}/refund`
+
+Подробнее: [Возвраты](refunds.md).
+
+## Список возвратов по счёту
+
+**Эндпоинт:** `GET /invoices/{id}/refunds`
+
+```bash
+curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
+  -H "X-API-Key: YOUR_API_KEY"
 ```
 
-### Ошибки
+## Статистика счетов
 
-| Статус | Описание |
-|--------|----------|
-| 400 | Счёт нельзя отменить (не pending) |
-| 404 | Счёт не найден |
+**Эндпоинт:** `GET /invoices/stats`
+
+```bash
+curl "https://bpapi.bazarbay.site/api/v1/invoices/stats?period=month" \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+Параметры: `period` (today, week, month, year) или `start_date` + `end_date` (YYYY-MM-DD).
 
 ## Статусы счетов
 
 | Статус | Описание | Можно отменить | Можно вернуть |
 |--------|----------|----------------|---------------|
 | `pending` | Ожидает оплаты | Да | Нет |
+| `cancelling` | Отменяется (асинхронно) | Нет | Нет |
 | `paid` | Оплачен | Нет | Да |
 | `cancelled` | Отменён вручную | Нет | Нет |
 | `expired` | Истёк срок оплаты | Нет | Нет |
+| `partially_refunded` | Частичный возврат | Нет | Да |
+| `refunded` | Полный возврат | Нет | Нет |
 
 ## Переходы статусов
 
 ```
-pending → paid → (refunded)
+pending → paid → partially_refunded → refunded
+    ↓        ↓
+cancelling   refunded
     ↓
 cancelled
 
@@ -194,8 +176,7 @@ pending → expired
 ### JavaScript
 
 ```javascript
-// Создание счёта
-const response = await fetch('https://bpapi.bazarbay.site/api/invoices', {
+const response = await fetch('https://bpapi.bazarbay.site/api/v1/invoices', {
   method: 'POST',
   headers: {
     'X-API-Key': 'YOUR_API_KEY',
@@ -208,7 +189,6 @@ const response = await fetch('https://bpapi.bazarbay.site/api/invoices', {
   })
 })
 const invoice = await response.json()
-// Редирект клиента на invoice.payment_url
 ```
 
 ### Python
@@ -217,46 +197,24 @@ const invoice = await response.json()
 import requests
 
 response = requests.post(
-    'https://bpapi.bazarbay.site/api/invoices',
-    headers={
-        'X-API-Key': 'YOUR_API_KEY',
-        'Content-Type': 'application/json'
-    },
-    json={
-        'amount': 10000,
-        'phone_number': '87001234567',
-        'description': 'Оплата заказа #123'
-    }
+    'https://bpapi.bazarbay.site/api/v1/invoices',
+    headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
+    json={'amount': 10000, 'phone_number': '87001234567', 'description': 'Заказ #123'}
 )
 invoice = response.json()
-# Редирект клиента на invoice['payment_url']
 ```
 
 ### PHP
 
 ```php
-$ch = curl_init('https://bpapi.bazarbay.site/api/invoices');
+$ch = curl_init('https://bpapi.bazarbay.site/api/v1/invoices');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
-    CURLOPT_HTTPHEADER => [
-        'X-API-Key: YOUR_API_KEY',
-        'Content-Type: application/json'
-    ],
+    CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],
     CURLOPT_POSTFIELDS => json_encode([
-        'amount' => 10000,
-        'phone_number' => '87001234567',
-        'description' => 'Оплата заказа #123'
+        'amount' => 10000, 'phone_number' => '87001234567', 'description' => 'Заказ #123'
     ]),
     CURLOPT_RETURNTRANSFER => true
 ]);
-$response = json_decode(curl_exec($ch), true);
-// Редирект клиента на $response['payment_url']
+$invoice = json_decode(curl_exec($ch), true);
 ```
-
-## Лучшие практики
-
-1. **Всегда сохраняйте `external_order_id`** — Используйте для сопоставления счетов с заказами
-2. **Обрабатывайте все статусы** — Проверяйте статус счёта перед действием
-3. **Настройте webhooks** — Не полагайтесь на polling для проверки статуса
-4. **Проверяйте суммы** — Убедитесь, что суммы соответствуют вашим заказам
-5. **Обрабатывайте истечение** — Счета истекают, создавайте новые при необходимости

@@ -5,16 +5,10 @@ ApiPay.kz - Webhook Handler Example
 This example demonstrates how to:
 1. Receive webhook notifications
 2. Verify the signature
-3. Handle payment events
+3. Handle payment events (invoices and subscriptions)
 
 Usage:
     WEBHOOK_SECRET=your_secret python webhook_handler.py
-
-Test with:
-    curl -X POST http://localhost:5000/webhook \
-      -H "Content-Type: application/json" \
-      -H "X-Webhook-Signature: sha256=..." \
-      -d '{"event":"invoice.status_changed","invoice":{"id":42,"status":"paid"}}'
 
 Requirements:
     pip install flask
@@ -53,24 +47,41 @@ def handle_invoice_status_changed(invoice: dict):
         print('  Payment received!')
         print(f"  Amount: {invoice.get('amount')} KZT")
         print(f"  Client: {invoice.get('client_name')}")
-        print(f"  Paid at: {invoice.get('paid_at')}")
         if invoice.get('external_order_id'):
             print(f"  Order ID: {invoice['external_order_id']}")
             # TODO: Fulfill the order
-            # fulfill_order(invoice['external_order_id'])
 
     elif status == 'cancelled':
         print('  Invoice was cancelled')
-        print(f"  Cancelled at: {invoice.get('cancelled_at')}")
-        # TODO: Handle cancellation
 
     elif status == 'expired':
         print('  Invoice expired')
-        print(f"  Expired at: {invoice.get('expired_at')}")
-        # TODO: Handle expiration
 
-    else:
-        print(f'  Unknown status: {status}')
+
+def handle_invoice_refunded(invoice: dict):
+    """Handle invoice refunded event."""
+    print(f"\nInvoice #{invoice['id']} refunded")
+    print(f"  Status: {invoice.get('status')}")
+    print(f"  Total refunded: {invoice.get('total_refunded')} KZT")
+
+
+def handle_subscription_event(event_type: str, data: dict):
+    """Handle subscription events."""
+    sub = data['subscription']
+    print(f"\nSubscription #{sub['id']} — {event_type}")
+
+    if event_type == 'subscription.payment_succeeded':
+        inv = data['invoice']
+        print(f"  Payment succeeded! Invoice #{inv['id']}: {inv['amount']} KZT")
+
+    elif event_type == 'subscription.payment_failed':
+        print(f"  Payment failed: {data.get('reason')}")
+
+    elif event_type == 'subscription.grace_period_started':
+        print(f"  Grace period: {sub.get('grace_period_days')} days, {sub.get('retry_attempts_remaining')} retries left")
+
+    elif event_type == 'subscription.expired':
+        print('  Subscription expired')
 
 
 @app.route('/webhook', methods=['POST'])
@@ -80,22 +91,28 @@ def webhook():
     signature = request.headers.get('X-Webhook-Signature', '')
 
     if not signature:
-        print('Missing signature header')
         abort(401)
 
     if not verify_signature(payload, signature, WEBHOOK_SECRET):
-        print('Invalid signature')
         abort(401)
 
     try:
         event = request.get_json()
-        print(f"\nReceived event: {event['event']}")
+        event_type = event['event']
+        print(f"\nReceived event: {event_type} (source: {event.get('source')})")
         print(f"Timestamp: {event.get('timestamp')}")
 
-        if event['event'] == 'invoice.status_changed':
+        if event_type == 'invoice.status_changed':
             handle_invoice_status_changed(event['invoice'])
+
+        elif event_type == 'invoice.refunded':
+            handle_invoice_refunded(event['invoice'])
+
+        elif event_type.startswith('subscription.'):
+            handle_subscription_event(event_type, event['data'])
+
         else:
-            print(f"Unknown event type: {event['event']}")
+            print(f"Unknown event type: {event_type}")
 
         return 'OK', 200
 

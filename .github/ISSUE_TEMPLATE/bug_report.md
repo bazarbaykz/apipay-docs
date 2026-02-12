@@ -36,4 +36,4 @@ Any other information that might be helpful.
 
 For API issues (not documentation), please contact support:
 - WhatsApp: https://wa.me/77085167489
-- Dashboard: https://baypay.bazarbay.site
+- Dashboard: https://apipay.kz

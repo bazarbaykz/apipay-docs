@@ -1,79 +1,90 @@
 # Invoices
 
-Invoices are the core of ApiPay.kz. Each invoice represents a payment request that you send to a customer.
+Invoices are the core of ApiPay.kz. Each invoice represents a payment request sent to a customer.
 
 ## Create Invoice
 
-> **Note:** Creating invoices requires a verified organization.
-> Complete verification in Dashboard → Verification before using this endpoint.
-
 **Endpoint:** `POST /invoices`
 
-Creates a new payment invoice. The customer must pay within the expiration period.
+Creates a new payment invoice. Supports two modes: flat amount or cart items.
 
-### Request
+### Request (flat amount)
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/invoices \
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "amount": 10000,
     "phone_number": "87001234567",
     "description": "Payment for order #123",
-    "external_order_id": "order_123",
-    "webhook_id": 1
+    "external_order_id": "order_123"
   }'
 ```
+
+### Request (with cart items)
+
+For organizations with catalog enabled:
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone_number": "87001234567",
+    "description": "Cart order",
+    "cart_items": [
+      {"Name": "Coffee Latte", "Price": 1500, "Count": 2, "NomenclatureId": 12345, "Type": "CATALOGUE", "UnitId": 1, "NomenclatureHistoryId": 67890},
+      {"Name": "Cookie", "Price": 500, "Count": 3, "NomenclatureId": -2, "Type": "FAST_SALE", "UnitId": 1}
+    ]
+  }'
+```
+
+Amount is calculated automatically from cart items: `1500*2 + 500*3 = 4500`.
 
 ### Parameters
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `amount` | number | Yes | Amount in KZT (0.01 - 99,999,999.99) |
+| `amount` | number | Yes* | Amount in KZT (0.01 - 99,999,999.99). *Not required with cart_items. |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `description` | string | No | Payment description (max 500 chars) |
-| `external_order_id` | string | No | Your order ID for reference (max 255 chars) |
+| `external_order_id` | string | No | Your order ID (max 255 chars) |
 | `webhook_id` | number | No | Specific webhook ID from dashboard |
+| `cart_items` | array | No | Array of cart items (replaces amount) |
+
+### Cart Item Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `Name` | string | Yes | Item name |
+| `Price` | number | Yes | Unit price in KZT |
+| `Count` | number | Yes | Quantity |
+| `NomenclatureId` | number | Yes | Catalog item ID (or -2 for FAST_SALE) |
+| `Type` | string | Yes | `CATALOGUE` or `FAST_SALE` |
+| `UnitId` | number | Yes | Unit of measurement ID |
+| `NomenclatureHistoryId` | number | No | Required for CATALOGUE type |
 
 ### Response
 
 ```json
 {
-  "id": 42,
-  "kaspi_invoice_id": "13234689513",
-  "kaspi_qr_token": "abc123xyz",
-  "payment_url": "https://kaspi.kz/pay/...",
+  "id": 124,
   "amount": "10000.00",
   "status": "pending",
   "description": "Payment for order #123",
   "external_order_id": "order_123",
+  "phone_number": "87001234567",
   "created_at": "2025-01-31T12:00:00Z"
 }
 ```
-
-### Response Fields
-
-| Field | Description |
-|-------|-------------|
-| `id` | Internal invoice ID |
-| `kaspi_invoice_id` | Kaspi system invoice ID |
-| `kaspi_qr_token` | Token for QR code generation |
-| `payment_url` | URL to redirect customer for payment |
-| `amount` | Invoice amount |
-| `status` | Current status |
-| `created_at` | Creation timestamp |
 
 ## List Invoices
 
 **Endpoint:** `GET /invoices`
 
-Returns a paginated list of invoices.
-
-### Request
-
 ```bash
-curl "https://bpapi.bazarbay.site/api/invoices?page=1&per_page=20&status[]=paid" \
+curl "https://bpapi.bazarbay.site/api/v1/invoices?page=1&per_page=20&status[]=paid&sort_by=created_at&sort_order=desc" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -83,106 +94,77 @@ curl "https://bpapi.bazarbay.site/api/invoices?page=1&per_page=20&status[]=paid"
 |-----------|------|---------|-------------|
 | `page` | integer | 1 | Page number |
 | `per_page` | integer | 10 | Items per page (1-100) |
-| `search` | string | — | Search in description/order ID (max 100 chars) |
-| `status[]` | array | — | Filter by status (pending, paid, cancelled, expired) |
+| `search` | string | — | Search in description/order ID |
+| `status[]` | array | — | Filter by status |
 | `date_from` | string | — | Start date (YYYY-MM-DD) |
-| `date_to` | string | — | End date (YYYY-MM-DD, must be >= date_from) |
-
-### Response
-
-```json
-{
-  "data": [
-    {
-      "id": 42,
-      "amount": "10000.00",
-      "status": "paid",
-      "description": "Order #123",
-      "created_at": "2025-01-31T12:00:00Z",
-      "paid_at": "2025-01-31T12:05:00Z"
-    }
-  ],
-  "meta": {
-    "current_page": 1,
-    "per_page": 20,
-    "total": 150
-  }
-}
-```
+| `date_to` | string | — | End date (YYYY-MM-DD) |
+| `sort_by` | string | created_at | Sort field |
+| `sort_order` | string | desc | `asc` or `desc` |
 
 ## Get Invoice
 
-**Endpoint:** `GET /invoices/:id`
-
-Returns details of a specific invoice.
-
-### Request
+**Endpoint:** `GET /invoices/{id}`
 
 ```bash
-curl https://bpapi.bazarbay.site/api/invoices/42 \
+curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
-```
-
-### Response
-
-```json
-{
-  "id": 42,
-  "kaspi_invoice_id": "13234689513",
-  "amount": "10000.00",
-  "status": "paid",
-  "description": "Payment for order #123",
-  "external_order_id": "order_123",
-  "client_name": "John Doe",
-  "client_phone": "87001234567",
-  "created_at": "2025-01-31T12:00:00Z",
-  "paid_at": "2025-01-31T12:05:00Z"
-}
 ```
 
 ## Cancel Invoice
 
-**Endpoint:** `POST /invoices/:id/cancel`
+**Endpoint:** `POST /invoices/{id}/cancel`
 
-Cancels a pending invoice. Only invoices with `status: "pending"` can be cancelled.
-
-### Request
+Only invoices with `status: "pending"` can be cancelled. May return `202 Accepted` with status `cancelling` for async processing.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/invoices/42/cancel \
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-### Response
+## Refund Invoice
 
-```json
-{
-  "id": 42,
-  "status": "cancelled",
-  "cancelled_at": "2025-01-31T12:10:00Z"
-}
+**Endpoint:** `POST /invoices/{id}/refund`
+
+See [Refunds](refunds.md) for details.
+
+## Invoice Refunds
+
+**Endpoint:** `GET /invoices/{id}/refunds`
+
+```bash
+curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
+  -H "X-API-Key: YOUR_API_KEY"
 ```
 
-### Errors
+## Invoice Statistics
 
-| Status | Description |
-|--------|-------------|
-| 400 | Invoice cannot be cancelled (not pending) |
-| 404 | Invoice not found |
+**Endpoint:** `GET /invoices/stats`
+
+```bash
+curl "https://bpapi.bazarbay.site/api/v1/invoices/stats?period=month" \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+Parameters: `period` (today, week, month, year) or `start_date` + `end_date` (YYYY-MM-DD).
 
 ## Invoice Statuses
 
 | Status | Description | Can Cancel | Can Refund |
 |--------|-------------|------------|------------|
-| `pending` | Awaiting customer payment | Yes | No |
+| `pending` | Awaiting payment | Yes | No |
+| `cancelling` | Being cancelled (async) | No | No |
 | `paid` | Payment completed | No | Yes |
 | `cancelled` | Manually cancelled | No | No |
-| `expired` | Payment deadline passed | No | No |
+| `expired` | Payment timeout | No | No |
+| `partially_refunded` | Partially refunded | No | Yes |
+| `refunded` | Fully refunded | No | No |
 
 ## Status Flow
 
 ```
-pending → paid → (refunded)
+pending → paid → partially_refunded → refunded
+    ↓        ↓
+cancelling   refunded
     ↓
 cancelled
 
@@ -194,8 +176,7 @@ pending → expired
 ### JavaScript
 
 ```javascript
-// Create invoice
-const response = await fetch('https://bpapi.bazarbay.site/api/invoices', {
+const response = await fetch('https://bpapi.bazarbay.site/api/v1/invoices', {
   method: 'POST',
   headers: {
     'X-API-Key': 'YOUR_API_KEY',
@@ -208,7 +189,6 @@ const response = await fetch('https://bpapi.bazarbay.site/api/invoices', {
   })
 })
 const invoice = await response.json()
-// Redirect customer to invoice.payment_url
 ```
 
 ### Python
@@ -217,46 +197,24 @@ const invoice = await response.json()
 import requests
 
 response = requests.post(
-    'https://bpapi.bazarbay.site/api/invoices',
-    headers={
-        'X-API-Key': 'YOUR_API_KEY',
-        'Content-Type': 'application/json'
-    },
-    json={
-        'amount': 10000,
-        'phone_number': '87001234567',
-        'description': 'Payment for order #123'
-    }
+    'https://bpapi.bazarbay.site/api/v1/invoices',
+    headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
+    json={'amount': 10000, 'phone_number': '87001234567', 'description': 'Order #123'}
 )
 invoice = response.json()
-# Redirect customer to invoice['payment_url']
 ```
 
 ### PHP
 
 ```php
-$ch = curl_init('https://bpapi.bazarbay.site/api/invoices');
+$ch = curl_init('https://bpapi.bazarbay.site/api/v1/invoices');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
-    CURLOPT_HTTPHEADER => [
-        'X-API-Key: YOUR_API_KEY',
-        'Content-Type: application/json'
-    ],
+    CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],
     CURLOPT_POSTFIELDS => json_encode([
-        'amount' => 10000,
-        'phone_number' => '87001234567',
-        'description' => 'Payment for order #123'
+        'amount' => 10000, 'phone_number' => '87001234567', 'description' => 'Order #123'
     ]),
     CURLOPT_RETURNTRANSFER => true
 ]);
-$response = json_decode(curl_exec($ch), true);
-// Redirect customer to $response['payment_url']
+$invoice = json_decode(curl_exec($ch), true);
 ```
-
-## Best Practices
-
-1. **Always store `external_order_id`** — Use it to match invoices with your orders
-2. **Handle all statuses** — Check invoice status before taking action
-3. **Set up webhooks** — Don't rely on polling for payment status
-4. **Validate amounts** — Ensure amounts match your order totals
-5. **Handle timeouts** — Invoices expire, create new ones when needed

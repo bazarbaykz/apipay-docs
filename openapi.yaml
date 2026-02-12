@@ -1,176 +1,281 @@
-openapi: 3.0.3
+openapi: "3.0.0"
 info:
-  title: ApiPay.kz API
-  version: 1.0.0
-  description: |
-    API для интернет-эквайринга через Kaspi Pay в Казахстане.
-    Автоматизация выставления счетов по номеру телефона, возвраты и рекуррентные платежи.
-
-    ## Quick Start
-
-    1. Get API key from [ApiPay.kz Dashboard](https://baypay.bazarbay.site/login)
-    2. Contact support via WhatsApp (+7 708 516 74 89) to connect as "Cashier"
-    3. Wait for organization to be connected (usually 5-30 minutes)
-    4. Create invoices via `POST /invoices`
-    5. Redirect customers to `payment_url`
-
+  title: ApiPay.kz REST API
+  version: "2.0.0"
+  description: "REST API для интернет-эквайринга через Kaspi Pay в Казахстане. Приём платежей по номеру телефона без договора с банком. Поддержка каталога, подписок, возвратов и вебхуков."
   contact:
     name: ApiPay.kz Support
-    url: https://wa.me/77085167489
-
+    url: "https://wa.me/77085167489"
 servers:
-  - url: https://bpapi.bazarbay.site/api
+  - url: "https://bpapi.bazarbay.site/api/v1"
     description: Production API
-
-security:
-  - ApiKeyAuth: []
-
 paths:
+  /status:
+    get:
+      summary: Health check
+      description: Проверка доступности API. Не требует аутентификации.
+      operationId: healthCheck
+      security: []
+      responses:
+        200:
+          description: API доступен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
   /invoices:
     post:
-      summary: Create invoice
-      description: |
-        Creates a payment invoice. Requires verified organization.
-        Redirect customer to `payment_url` to complete payment.
+      summary: Создание счёта
+      description: "Создаёт счёт на оплату. Поддерживает два режима: без корзины (передать amount) или с корзиной (передать cart_items, amount рассчитывается автоматически)."
       operationId: createInvoice
-      tags:
-        - Invoices
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateInvoiceRequest'
+              type: object
+              properties:
+                amount:
+                  type: number
+                  description: Сумма в тенге (0.01 - 99999999.99). Игнорируется при наличии cart_items.
+                  minimum: 0.01
+                  maximum: 99999999.99
+                  example: 10000
+                phone_number:
+                  type: string
+                  description: "Телефон клиента (формат: 8XXXXXXXXXX)"
+                  pattern: "^8[0-9]{10}$"
+                  example: "87001234567"
+                description:
+                  type: string
+                  description: Описание платежа (макс 500 символов)
+                  maxLength: 500
+                  example: "Оплата заказа #123"
+                external_order_id:
+                  type: string
+                  description: Внешний ID заказа для сопоставления (макс 255 символов)
+                  maxLength: 255
+                  example: order_123
+                cart_items:
+                  type: array
+                  description: Товары корзины (только для организаций с каталогом). При наличии amount игнорируется.
+                  items:
+                    type: object
+                    properties:
+                      Name:
+                        type: string
+                        description: Название товара
+                        maxLength: 255
+                      Price:
+                        type: number
+                        description: Цена за единицу
+                        minimum: 0.01
+                      Count:
+                        type: integer
+                        description: Количество
+                        minimum: 1
+                      NomenclatureId:
+                        type: integer
+                        description: ID товара из каталога. -2 для FAST_SALE.
+                      Type:
+                        type: string
+                        enum: ["FAST_SALE", "CATALOGUE"]
+                        description: Тип товара
+                      UnitId:
+                        type: integer
+                        description: ID единицы измерения
+                      NomenclatureHistoryId:
+                        type: integer
+                        description: Обязательно для Type=CATALOGUE
+                    required:
+                      - Name
+                      - Price
+                      - Count
+                      - NomenclatureId
+                      - Type
+                      - UnitId
+              required: ["phone_number"]
       responses:
-        '200':
-          description: Invoice created
+        201:
+          description: Счёт создан
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Invoice'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
-
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    description: ID счёта
+                  amount:
+                    type: string
+                    description: Сумма счёта
+                  status:
+                    type: string
+                    enum: ["pending"]
+                  created_at:
+                    type: string
+                    format: date-time
+        400:
+          description: Организация не найдена или не верифицирована
+        401:
+          description: Неверный API ключ
+        422:
+          description: Ошибка валидации
     get:
-      summary: List invoices
-      description: Returns paginated list of invoices
+      summary: Список счетов
+      description: "Возвращает список счетов с пагинацией, фильтрацией и сортировкой"
       operationId: listInvoices
-      tags:
-        - Invoices
       parameters:
         - name: page
           in: query
-          schema:
+          schema: 
             type: integer
             default: 1
         - name: per_page
           in: query
-          schema:
+          schema: 
             type: integer
             default: 10
             minimum: 1
             maximum: 100
         - name: search
           in: query
-          schema:
+          schema: 
             type: string
             maxLength: 100
-          description: Search in description/order ID
-        - name: status[]
+          description: Поиск по ID или описанию
+        - name: "status[]"
           in: query
-          schema:
+          schema: 
             type: array
             items:
               type: string
-              enum: [pending, paid, cancelled, expired]
+              enum: ["pending", "paid", "cancelled", "expired"]
+          description: Фильтр по статусам
         - name: date_from
           in: query
-          schema:
+          schema: 
             type: string
             format: date
+          description: Дата от (YYYY-MM-DD)
         - name: date_to
           in: query
-          schema:
+          schema: 
             type: string
             format: date
+          description: "Дата до (YYYY-MM-DD, должна быть >= date_from)"
+        - name: sort_by
+          in: query
+          schema: 
+            type: string
+            enum: ["id", "amount", "client_name", "status", "created_at"]
+            default: created_at
+          description: Поле сортировки
+        - name: sort_order
+          in: query
+          schema: 
+            type: string
+            enum: ["asc", "desc"]
+            default: desc
+          description: Направление сортировки
       responses:
-        '200':
-          description: List of invoices
+        200:
+          description: Список счетов
+  /invoices/{id}:
+    get:
+      summary: Получить счёт
+      operationId: getInvoice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: 
+            type: integer
+      responses:
+        200:
+          description: Данные счёта
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Invoice'
-                  meta:
-                    $ref: '#/components/schemas/PaginationMeta'
-
-  /invoices/{id}:
-    get:
-      summary: Get invoice
-      operationId: getInvoice
-      tags:
-        - Invoices
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Invoice details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Invoice'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
+                  id:
+                    type: integer
+                  amount:
+                    type: string
+                  phone_number:
+                    type: string
+                  description:
+                    type: string
+                    nullable: true
+                  external_order_id:
+                    type: string
+                    nullable: true
+                  status:
+                    type: string
+                    enum: ["pending", "paid", "cancelled", "expired"]
+                  client_name:
+                    type: string
+                    nullable: true
+                  client_comment:
+                    type: string
+                    nullable: true
+                  is_sandbox:
+                    type: boolean
+                  total_refunded:
+                    type: string
+                  is_fully_refunded:
+                    type: boolean
+                  kaspi_invoice_id:
+                    type: string
+                  paid_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  created_at:
+                    type: string
+                    format: date-time
+        404:
+          description: Счёт не найден
   /invoices/{id}/cancel:
     post:
-      summary: Cancel invoice
-      description: Cancels pending invoice. Only invoices with status "pending" can be cancelled.
+      summary: Отменить счёт
+      description: "Отменяет счёт. Можно отменить только счета со статусом 'pending'."
       operationId: cancelInvoice
-      tags:
-        - Invoices
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
             type: integer
       responses:
-        '200':
-          description: Invoice cancelled
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Invoice'
-        '400':
-          description: Invoice cannot be cancelled (not pending)
-        '404':
-          $ref: '#/components/responses/NotFound'
-
+        200:
+          description: Счёт отменён
+        400:
+          description: Счёт нельзя отменить (не pending)
+        404:
+          description: Счёт не найден
+        503:
+          description: Kaspi сессия истекла
   /invoices/{id}/refund:
     post:
-      summary: Create refund
-      description: Creates full or partial refund for a paid invoice.
+      summary: Создать возврат
+      description: Создаёт полный или частичный возврат по оплаченному счёту. Без amount — полный возврат.
       operationId: createRefund
-      tags:
-        - Refunds
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
             type: integer
-          description: Invoice ID
+          description: ID счёта
       requestBody:
         content:
           application/json:
@@ -179,199 +284,461 @@ paths:
               properties:
                 amount:
                   type: number
-                  description: Partial refund amount. Omit for full refund.
+                  description: Сумма возврата (0.01-99999999.99). Если не указано — полный возврат.
                   minimum: 0.01
+                  maximum: 99999999.99
                 reason:
                   type: string
-                  description: Reason for refund
+                  description: Причина возврата (макс 500 символов)
                   maxLength: 500
       responses:
-        '200':
-          description: Refund created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Refund'
-        '400':
-          description: Invoice cannot be refunded (not paid)
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /invoices/{id}/refunds:
-    get:
-      summary: List invoice refunds
-      description: Returns all refunds for a specific invoice.
-      operationId: listInvoiceRefunds
-      tags:
-        - Refunds
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-          description: Invoice ID
-      responses:
-        '200':
-          description: List of refunds
+        201:
+          description: Возврат создан и поставлен в очередь
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Refund'
-
+                  message:
+                    type: string
+                  refund:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      invoice_id:
+                        type: integer
+                      amount:
+                        type: string
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["pending", "processing", "completed", "failed"]
+                      initiated_by:
+                        type: string
+                      created_at:
+                        type: string
+                        format: date-time
+                  invoice:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      amount:
+                        type: string
+                      total_refunded:
+                        type: string
+                      available_for_refund:
+                        type: string
+                      pending_refund_amount:
+                        type: number
+        400:
+          description: Нельзя сделать возврат (счёт не оплачен или полностью возвращён)
+        404:
+          description: Счёт не найден
+  /invoices/{id}/refunds:
+    get:
+      summary: Возвраты по счёту
+      description: Список возвратов для конкретного счёта
+      operationId: listInvoiceRefunds
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: 
+            type: integer
+          description: ID счёта
+      responses:
+        200:
+          description: Список возвратов
+        404:
+          description: Счёт не найден
+  /invoices/stats:
+    get:
+      summary: Статистика счетов
+      description: Статистика по счетам за период
+      operationId: getInvoiceStats
+      parameters:
+        - name: period
+          in: query
+          schema: 
+            type: string
+            enum: ["today", "week", "month", "year"]
+          description: Период (альтернатива start_date+end_date)
+        - name: start_date
+          in: query
+          schema: 
+            type: string
+            format: date
+          description: Начало периода (YYYY-MM-DD)
+        - name: end_date
+          in: query
+          schema: 
+            type: string
+            format: date
+          description: Конец периода (YYYY-MM-DD)
+      responses:
+        200:
+          description: Статистика счетов
   /refunds:
     get:
-      summary: List all refunds
+      summary: Список возвратов
+      description: Возвращает список всех возвратов с пагинацией и фильтрацией
       operationId: listRefunds
-      tags:
-        - Refunds
       parameters:
         - name: page
           in: query
-          schema:
+          schema: 
             type: integer
             default: 1
         - name: per_page
           in: query
-          schema:
+          schema: 
             type: integer
             default: 10
-      responses:
-        '200':
-          description: List of refunds
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Refund'
-                  meta:
-                    $ref: '#/components/schemas/PaginationMeta'
-
-  /refunds/{id}:
-    get:
-      summary: Get refund
-      operationId: getRefund
-      tags:
-        - Refunds
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
+            minimum: 1
+            maximum: 100
+        - name: "status[]"
+          in: query
+          schema: 
+            type: array
+            items:
+              type: string
+              enum: ["pending", "processing", "completed", "failed"]
+          description: Фильтр по статусам
+        - name: invoice_id
+          in: query
+          schema: 
             type: integer
+          description: Фильтр по ID счёта
+        - name: date_from
+          in: query
+          schema: 
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema: 
+            type: string
+            format: date
       responses:
-        '200':
-          description: Refund details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Refund'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /recurring-invoices:
+        200:
+          description: Список возвратов
+  /catalog:
+    get:
+      summary: Список товаров каталога
+      description: Возвращает товары каталога с поиском и фильтрацией. Только для организаций с включённым каталогом.
+      operationId: listCatalogItems
+      parameters:
+        - name: page
+          in: query
+          schema: 
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema: 
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: search
+          in: query
+          schema: 
+            type: string
+          description: Поиск по названию
+        - name: barcode
+          in: query
+          schema: 
+            type: string
+          description: Фильтр по штрихкоду
+        - name: first_char
+          in: query
+          schema: 
+            type: string
+          description: Фильтр по первой букве
+      responses:
+        200:
+          description: Список товаров каталога
+        400:
+          description: Каталог не включён для организации
+        404:
+          description: Верифицированная организация не найдена
     post:
-      summary: Create recurring invoice
-      description: Creates a recurring invoice schedule for subscription billing.
-      operationId: createRecurringInvoice
-      tags:
-        - Recurring Invoices
+      summary: Создать товары каталога
+      description: "Создаёт один или несколько товаров каталога (пакетная операция, 1-50 товаров)"
+      operationId: createCatalogItems
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateRecurringInvoiceRequest'
+              type: object
+              properties:
+                items:
+                  type: array
+                  description: Массив товаров (1-50)
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: Название товара
+                        maxLength: 255
+                      selling_price:
+                        type: number
+                        description: Цена
+                        minimum: 0.01
+                      unit_id:
+                        type: integer
+                        description: ID единицы измерения
+                      image_id:
+                        type: string
+                        format: uuid
+                        description: ID изображения из upload-image
+                    required: ["name", "selling_price", "unit_id"]
+              required: ["items"]
       responses:
-        '200':
-          description: Recurring invoice created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecurringInvoice'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
-
-    get:
-      summary: List recurring invoices
-      operationId: listRecurringInvoices
-      tags:
-        - Recurring Invoices
-      parameters:
-        - name: page
-          in: query
-          schema:
-            type: integer
-            default: 1
-        - name: per_page
-          in: query
-          schema:
-            type: integer
-            default: 10
-        - name: status
-          in: query
-          schema:
-            type: string
-            enum: [active, paused, cancelled]
+        201:
+          description: "Товары созданы, синхронизация запланирована"
+        422:
+          description: Ошибка валидации
+        502:
+          description: Ошибка Kaspi API
+        503:
+          description: Kaspi сессия истекла
+  /catalog/upload-image:
+    post:
+      summary: Загрузить изображение товара
+      description: "Загружает изображение для товара каталога. Изображения оптимизируются (макс 512x512, PNG) и дедуплицируются по MD5."
+      operationId: uploadCatalogImage
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: "Файл изображения (jpg, png, gif, webp), макс 10 МБ"
+              required: ["image"]
       responses:
-        '200':
-          description: List of recurring invoices
+        200:
+          description: Изображение загружено
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/RecurringInvoice'
-                  meta:
-                    $ref: '#/components/schemas/PaginationMeta'
-
-  /recurring-invoices/{id}:
-    get:
-      summary: Get recurring invoice
-      operationId: getRecurringInvoice
-      tags:
-        - Recurring Invoices
+                  image_id:
+                    type: string
+                    format: uuid
+                    description: ID изображения для использования при создании/обновлении товара
+  /catalog/{id}:
+    patch:
+      summary: Обновить товар каталога
+      description: Обновляет товар каталога. Все поля опциональны — обновляются только переданные.
+      operationId: updateCatalogItem
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
+            type: integer
+          description: ID товара
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 255
+                selling_price:
+                  type: number
+                  minimum: 0.01
+                unit_id:
+                  type: integer
+                image_id:
+                  type: string
+                  format: uuid
+                  description: Новый ID изображения
+                is_image_deleted:
+                  type: boolean
+                  description: Установить true для удаления изображения
+      responses:
+        200:
+          description: "Товар обновлён, синхронизация запланирована"
+        404:
+          description: Товар не найден
+        422:
+          description: Ошибка валидации
+        502:
+          description: Ошибка Kaspi API
+        503:
+          description: Kaspi сессия истекла
+    delete:
+      summary: Удалить товар каталога
+      description: Удаляет товар каталога
+      operationId: deleteCatalogItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: 
+            type: integer
+          description: ID товара
+      responses:
+        200:
+          description: "Удаление инициировано, синхронизация запланирована"
+        404:
+          description: Товар не найден
+        502:
+          description: Ошибка Kaspi API
+        503:
+          description: Kaspi сессия истекла
+  /subscriptions:
+    post:
+      summary: Создать подписку
+      description: Создаёт автоматическую подписку с повторяющимися счетами по расписанию
+      operationId: createSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone_number:
+                  type: string
+                  description: "Телефон клиента (формат: 8XXXXXXXXXX)"
+                  pattern: "^8[0-9]{10}$"
+                amount:
+                  type: number
+                  description: Сумма (100 - 1000000)
+                  minimum: 100
+                  maximum: 1000000
+                billing_period:
+                  type: string
+                  enum:
+                    - daily
+                    - weekly
+                    - biweekly
+                    - monthly
+                    - quarterly
+                    - yearly
+                  description: Период выставления счетов
+                billing_day:
+                  type: integer
+                  description: День периода (1-28)
+                  minimum: 1
+                  maximum: 28
+                description:
+                  type: string
+                  description: Описание (макс 255)
+                  maxLength: 255
+                subscriber_name:
+                  type: string
+                  description: Имя подписчика (макс 255)
+                  maxLength: 255
+                external_subscriber_id:
+                  type: string
+                  description: Ваш ID подписчика (макс 255)
+                  maxLength: 255
+                started_at:
+                  type: string
+                  format: date
+                  description: Дата начала (по умолчанию сегодня)
+                max_retry_attempts:
+                  type: integer
+                  description: Макс. попыток повтора (1-10)
+                  minimum: 1
+                  maximum: 10
+                retry_interval_hours:
+                  type: integer
+                  description: Интервал между попытками в часах (1-168)
+                  minimum: 1
+                  maximum: 168
+                grace_period_days:
+                  type: integer
+                  description: Льготный период в днях (1-30)
+                  minimum: 1
+                  maximum: 30
+                metadata:
+                  type: object
+                  description: Произвольные данные в формате JSON
+              required: ["phone_number", "amount", "billing_period"]
+      responses:
+        201:
+          description: Подписка создана
+        403:
+          description: Организация не верифицирована
+        422:
+          description: Ошибка валидации
+    get:
+      summary: Список подписок
+      operationId: listSubscriptions
+      parameters:
+        - name: page
+          in: query
+          schema: 
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema: 
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema: 
+            type: string
+            enum: ["active", "paused", "cancelled", "expired"]
+          description: Фильтр по статусу
+        - name: phone_number
+          in: query
+          schema: 
+            type: string
+          description: Фильтр по телефону
+        - name: external_subscriber_id
+          in: query
+          schema: 
+            type: string
+          description: Фильтр по ID подписчика
+      responses:
+        200:
+          description: Список подписок
+  /subscriptions/{id}:
+    get:
+      summary: Получить подписку
+      description: Возвращает подписку со статистикой и информацией о последнем платеже
+      operationId: getSubscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: 
             type: integer
       responses:
-        '200':
-          description: Recurring invoice details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecurringInvoice'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
+        200:
+          description: Данные подписки
+        404:
+          description: Подписка не найдена
     put:
-      summary: Update recurring invoice
-      description: Update amount, description, or interval.
-      operationId: updateRecurringInvoice
-      tags:
-        - Recurring Invoices
+      summary: Обновить подписку
+      description: Обновляет параметры подписки. Все поля опциональны.
+      operationId: updateSubscription
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
             type: integer
       requestBody:
         content:
@@ -381,368 +748,115 @@ paths:
               properties:
                 amount:
                   type: number
-                  minimum: 0.01
-                  maximum: 99999999.99
+                billing_day:
+                  type: integer
                 description:
                   type: string
-                  maxLength: 500
-                interval:
+                subscriber_name:
                   type: string
-                  enum: [daily, weekly, monthly, yearly]
+                external_subscriber_id:
+                  type: string
+                max_retry_attempts:
+                  type: integer
+                retry_interval_hours:
+                  type: integer
+                grace_period_days:
+                  type: integer
+                metadata:
+                  type: object
       responses:
-        '200':
-          description: Recurring invoice updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecurringInvoice'
-
-  /recurring-invoices/{id}/pause:
+        200:
+          description: Подписка обновлена
+        404:
+          description: Подписка не найдена
+        422:
+          description: Ошибка валидации
+  /subscriptions/{id}/pause:
     post:
-      summary: Pause recurring invoice
-      description: Temporarily stops billing. Can be resumed later.
-      operationId: pauseRecurringInvoice
-      tags:
-        - Recurring Invoices
+      summary: Поставить на паузу
+      description: Временно приостанавливает активную подписку
+      operationId: pauseSubscription
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
             type: integer
       responses:
-        '200':
-          description: Recurring invoice paused
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecurringInvoice'
-
-  /recurring-invoices/{id}/resume:
+        200:
+          description: Подписка приостановлена
+        400:
+          description: Нельзя приостановить (неверный статус)
+        404:
+          description: Подписка не найдена
+  /subscriptions/{id}/resume:
     post:
-      summary: Resume recurring invoice
-      description: Resumes a paused recurring invoice.
-      operationId: resumeRecurringInvoice
-      tags:
-        - Recurring Invoices
+      summary: Возобновить
+      description: Возобновляет приостановленную подписку
+      operationId: resumeSubscription
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
             type: integer
       responses:
-        '200':
-          description: Recurring invoice resumed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecurringInvoice'
-
-  /recurring-invoices/{id}/cancel:
+        200:
+          description: Подписка возобновлена
+        400:
+          description: Нельзя возобновить (неверный статус)
+        404:
+          description: Подписка не найдена
+  /subscriptions/{id}/cancel:
     post:
-      summary: Cancel recurring invoice
-      description: Permanently cancels the recurring invoice. Cannot be resumed.
-      operationId: cancelRecurringInvoice
-      tags:
-        - Recurring Invoices
+      summary: Отменить подписку
+      description: Отменяет подписку без возможности восстановления
+      operationId: cancelSubscription
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
             type: integer
       responses:
-        '200':
-          description: Recurring invoice cancelled
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecurringInvoice'
-
-  /recurring-invoices/{id}/bill-now:
-    post:
-      summary: Bill now
-      description: Triggers immediate billing, creating a new invoice.
-      operationId: billNowRecurringInvoice
-      tags:
-        - Recurring Invoices
+        200:
+          description: Подписка отменена
+        400:
+          description: Нельзя отменить (неверный статус)
+        404:
+          description: Подписка не найдена
+  /subscriptions/{id}/invoices:
+    get:
+      summary: Счета подписки
+      description: "Список счетов, созданных подпиской"
+      operationId: listSubscriptionInvoices
       parameters:
         - name: id
           in: path
           required: true
-          schema:
+          schema: 
             type: integer
-      responses:
-        '200':
-          description: Invoice created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Invoice'
-
-  /recurring-invoices/{id}/skip-period:
-    post:
-      summary: Skip period
-      description: Skips the next billing period without charging.
-      operationId: skipPeriodRecurringInvoice
-      tags:
-        - Recurring Invoices
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
+        - name: page
+          in: query
+          schema: 
             type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema: 
+            type: integer
+            default: 20
       responses:
-        '200':
-          description: Period skipped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecurringInvoice'
-
+        200:
+          description: Список счетов подписки
+        404:
+          description: Подписка не найдена
 components:
   securitySchemes:
     ApiKeyAuth:
       type: apiKey
       in: header
       name: X-API-Key
-      description: API key from ApiPay.kz dashboard
-
-  schemas:
-    CreateInvoiceRequest:
-      type: object
-      required:
-        - amount
-        - phone_number
-      properties:
-        amount:
-          type: number
-          description: Amount in KZT
-          minimum: 0.01
-          maximum: 99999999.99
-          example: 10000
-        phone_number:
-          type: string
-          description: Customer phone (format 8XXXXXXXXXX)
-          pattern: '^8[0-9]{10}$'
-          example: '87001234567'
-        description:
-          type: string
-          description: Payment description
-          maxLength: 500
-          example: Payment for order #123
-        external_order_id:
-          type: string
-          description: Your order ID for reference
-          maxLength: 255
-          example: order_123
-        webhook_id:
-          type: integer
-          description: Specific webhook ID from dashboard
-
-    Invoice:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 42
-        kaspi_invoice_id:
-          type: string
-          example: '13234689513'
-        kaspi_qr_token:
-          type: string
-          example: abc123xyz
-        payment_url:
-          type: string
-          format: uri
-          example: https://kaspi.kz/pay/...
-        amount:
-          type: string
-          example: '10000.00'
-        status:
-          type: string
-          enum: [pending, paid, cancelled, expired]
-          example: pending
-        description:
-          type: string
-          example: Payment for order #123
-        external_order_id:
-          type: string
-          example: order_123
-        client_name:
-          type: string
-          example: John Doe
-        client_phone:
-          type: string
-          example: '87001234567'
-        created_at:
-          type: string
-          format: date-time
-        paid_at:
-          type: string
-          format: date-time
-        cancelled_at:
-          type: string
-          format: date-time
-        expired_at:
-          type: string
-          format: date-time
-
-    CreateRecurringInvoiceRequest:
-      type: object
-      required:
-        - amount
-        - phone_number
-        - interval
-      properties:
-        amount:
-          type: number
-          minimum: 0.01
-          maximum: 99999999.99
-          example: 5000
-        phone_number:
-          type: string
-          pattern: '^8[0-9]{10}$'
-          example: '87001234567'
-        description:
-          type: string
-          maxLength: 500
-          example: Monthly subscription
-        interval:
-          type: string
-          enum: [daily, weekly, monthly, yearly]
-          example: monthly
-        start_date:
-          type: string
-          format: date
-          description: Start date (default today)
-        end_date:
-          type: string
-          format: date
-        webhook_id:
-          type: integer
-
-    RecurringInvoice:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        amount:
-          type: string
-          example: '5000.00'
-        phone_number:
-          type: string
-          example: '87001234567'
-        description:
-          type: string
-          example: Monthly subscription
-        interval:
-          type: string
-          enum: [daily, weekly, monthly, yearly]
-          example: monthly
-        status:
-          type: string
-          enum: [active, paused, cancelled]
-          example: active
-        start_date:
-          type: string
-          format: date
-        end_date:
-          type: string
-          format: date
-        next_billing_date:
-          type: string
-          format: date
-        created_at:
-          type: string
-          format: date-time
-
-    Refund:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        invoice_id:
-          type: integer
-          example: 42
-        amount:
-          type: string
-          example: '5000.00'
-        status:
-          type: string
-          example: completed
-        reason:
-          type: string
-          example: Customer request
-        created_at:
-          type: string
-          format: date-time
-
-    PaginationMeta:
-      type: object
-      properties:
-        current_page:
-          type: integer
-          example: 1
-        per_page:
-          type: integer
-          example: 20
-        total:
-          type: integer
-          example: 150
-
-    Error:
-      type: object
-      properties:
-        message:
-          type: string
-          example: Error description
-        errors:
-          type: object
-          additionalProperties:
-            type: array
-            items:
-              type: string
-
-  responses:
-    Unauthorized:
-      description: Invalid or missing API key
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            message: Invalid API key
-
-    NotFound:
-      description: Resource not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            message: Resource not found
-
-    ValidationError:
-      description: Validation error
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            message: Validation failed
-            errors:
-              phone_number:
-                - Phone number must be in format 8XXXXXXXXXX
-
-tags:
-  - name: Invoices
-    description: Payment invoices
-  - name: Refunds
-    description: Refunds for paid invoices
-  - name: Recurring Invoices
-    description: Subscription billing
+      description: API ключ из личного кабинета ApiPay.kz
+security:
+  - ApiKeyAuth: []

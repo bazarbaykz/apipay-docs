@@ -4,7 +4,7 @@
  * This example demonstrates how to:
  * 1. Receive webhook notifications
  * 2. Verify the signature
- * 3. Handle payment events
+ * 3. Handle payment events (invoices and subscriptions)
  *
  * Usage:
  *   WEBHOOK_SECRET=your_secret PORT=3000 node webhook-handler.js
@@ -13,7 +13,7 @@
  *   curl -X POST http://localhost:3000/webhook \
  *     -H "Content-Type: application/json" \
  *     -H "X-Webhook-Signature: sha256=..." \
- *     -d '{"event":"invoice.status_changed","invoice":{"id":42,"status":"paid"}}'
+ *     -d '{"event":"invoice.status_changed","invoice":{"id":42,"status":"paid"},"source":"api"}'
  */
 
 const http = require('http')
@@ -31,7 +31,6 @@ function verifySignature(payload, signature, secret) {
     .update(payload)
     .digest('hex')
 
-  // Use timing-safe comparison to prevent timing attacks
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
   } catch {
@@ -54,24 +53,54 @@ function handleInvoiceStatusChanged(invoice) {
       if (invoice.external_order_id) {
         console.log(`  Order ID: ${invoice.external_order_id}`)
         // TODO: Fulfill the order
-        // fulfillOrder(invoice.external_order_id)
       }
       break
 
     case 'cancelled':
       console.log(`  Invoice was cancelled`)
-      console.log(`  Cancelled at: ${invoice.cancelled_at}`)
-      // TODO: Handle cancellation
       break
 
     case 'expired':
       console.log(`  Invoice expired`)
-      console.log(`  Expired at: ${invoice.expired_at}`)
-      // TODO: Handle expiration
       break
 
     default:
-      console.log(`  Unknown status: ${invoice.status}`)
+      console.log(`  Status: ${invoice.status}`)
+  }
+}
+
+/**
+ * Handle invoice refunded event
+ */
+function handleInvoiceRefunded(invoice) {
+  console.log(`\nInvoice #${invoice.id} refunded`)
+  console.log(`  Status: ${invoice.status}`)
+  console.log(`  Total refunded: ${invoice.total_refunded} KZT`)
+}
+
+/**
+ * Handle subscription events
+ */
+function handleSubscriptionEvent(eventType, data) {
+  const sub = data.subscription
+  console.log(`\nSubscription #${sub.id} — ${eventType}`)
+
+  switch (eventType) {
+    case 'subscription.payment_succeeded':
+      console.log(`  Payment succeeded! Invoice #${data.invoice.id}: ${data.invoice.amount} KZT`)
+      break
+
+    case 'subscription.payment_failed':
+      console.log(`  Payment failed: ${data.reason}`)
+      break
+
+    case 'subscription.grace_period_started':
+      console.log(`  Grace period: ${sub.grace_period_days} days, ${sub.retry_attempts_remaining} retries left`)
+      break
+
+    case 'subscription.expired':
+      console.log(`  Subscription expired`)
+      break
   }
 }
 
@@ -79,7 +108,6 @@ function handleInvoiceStatusChanged(invoice) {
  * HTTP request handler
  */
 function handleRequest(req, res) {
-  // Only handle POST /webhook
   if (req.method !== 'POST' || req.url !== '/webhook') {
     res.writeHead(404)
     res.end('Not Found')
@@ -93,28 +121,23 @@ function handleRequest(req, res) {
   })
 
   req.on('end', () => {
-    // Get signature from header
     const signature = req.headers['x-webhook-signature']
 
     if (!signature) {
-      console.log('Missing signature header')
       res.writeHead(401)
       res.end('Missing signature')
       return
     }
 
-    // Verify signature
     if (!verifySignature(body, signature, WEBHOOK_SECRET)) {
-      console.log('Invalid signature')
       res.writeHead(401)
       res.end('Invalid signature')
       return
     }
 
-    // Parse and handle event
     try {
       const event = JSON.parse(body)
-      console.log(`\nReceived event: ${event.event}`)
+      console.log(`\nReceived event: ${event.event} (source: ${event.source})`)
       console.log(`Timestamp: ${event.timestamp}`)
 
       switch (event.event) {
@@ -122,11 +145,21 @@ function handleRequest(req, res) {
           handleInvoiceStatusChanged(event.invoice)
           break
 
+        case 'invoice.refunded':
+          handleInvoiceRefunded(event.invoice)
+          break
+
+        case 'subscription.payment_succeeded':
+        case 'subscription.payment_failed':
+        case 'subscription.grace_period_started':
+        case 'subscription.expired':
+          handleSubscriptionEvent(event.event, event.data)
+          break
+
         default:
           console.log(`Unknown event type: ${event.event}`)
       }
 
-      // Always respond with 200 to acknowledge receipt
       res.writeHead(200)
       res.end('OK')
 

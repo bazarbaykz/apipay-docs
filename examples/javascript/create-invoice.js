@@ -1,14 +1,13 @@
 /**
  * ApiPay.kz - Create Invoice Example
  *
- * This example demonstrates how to create a payment invoice
- * and redirect the customer to the payment page.
+ * This example demonstrates how to create a payment invoice.
  *
  * Usage: API_KEY=your_key node create-invoice.js
  */
 
 const API_KEY = process.env.API_KEY
-const API_BASE_URL = 'https://bpapi.bazarbay.site/api'
+const API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1'
 
 async function createInvoice(amount, phoneNumber, description, externalOrderId) {
   const response = await fetch(`${API_BASE_URL}/invoices`, {
@@ -53,11 +52,10 @@ async function main() {
     console.log('\nInvoice created successfully!')
     console.log('----------------------------')
     console.log(`Invoice ID: ${invoice.id}`)
-    console.log(`Kaspi Invoice ID: ${invoice.kaspi_invoice_id}`)
     console.log(`Amount: ${invoice.amount} KZT`)
     console.log(`Status: ${invoice.status}`)
-    console.log(`\nPayment URL: ${invoice.payment_url}`)
-    console.log('\nRedirect your customer to the payment URL to complete payment.')
+    console.log(`Phone: ${invoice.phone_number}`)
+    console.log('\nThe customer will receive a payment notification in the Kaspi app.')
 
   } catch (error) {
     console.error('Error:', error.message)
