@@ -36,6 +36,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 | `retry_interval_hours` | integer | No | Hours between retries (1-168) |
 | `grace_period_days` | integer | No | Grace period in days (1-30) |
 | `metadata` | object | No | Custom JSON data |
+| `webhook_id` | number | No | Specific webhook ID from dashboard |
+| `cart_items` | array | No | Cart items `[{ catalog_item_id, count }]` (for catalog orgs, recalculates amount) |
 
 ### Billing Periods
 
@@ -79,10 +81,14 @@ curl "https://bpapi.bazarbay.site/api/v1/subscriptions?status=active&page=1&per_
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `page` | integer | Page number (default: 1) |
-| `per_page` | integer | Items per page (1-100, default: 20) |
-| `status` | string | Filter: `active`, `paused`, `cancelled`, `expired` |
+| `per_page` | integer | Items per page (1-100, default: 10) |
+| `status` | string | Filter: `active`, `paused`, `cancelled`, `completed`, `expired` |
 | `phone_number` | string | Filter by phone |
 | `external_subscriber_id` | string | Filter by your subscriber ID |
+| `search` | string | Search by name/phone |
+| `billing_period` | string | Filter: daily, weekly, biweekly, monthly, quarterly, yearly |
+| `sort_by` | string | Sort field (id, amount, subscriber_name, next_billing_date, created_at) |
+| `sort_order` | string | `asc` or `desc` |
 
 ## Get Subscription
 
@@ -133,6 +139,8 @@ curl -X PUT https://bpapi.bazarbay.site/api/v1/subscriptions/1 \
   -d '{"amount": 7500, "description": "Premium monthly"}'
 ```
 
+Updatable fields: `amount`, `billing_day`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `metadata`, `cart_items`.
+
 ## Pause Subscription
 
 **Endpoint:** `POST /subscriptions/{id}/pause`
@@ -178,6 +186,7 @@ curl "https://bpapi.bazarbay.site/api/v1/subscriptions/1/invoices?page=1&per_pag
 | `active` | Billing on schedule |
 | `paused` | Temporarily paused, can be resumed |
 | `cancelled` | Permanently cancelled |
+| `completed` | All billing cycles completed |
 | `expired` | Expired after grace period |
 
 ## Grace Period

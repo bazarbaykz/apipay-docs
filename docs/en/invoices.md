@@ -34,13 +34,13 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
     "phone_number": "87001234567",
     "description": "Cart order",
     "cart_items": [
-      {"Name": "Coffee Latte", "Price": 1500, "Count": 2, "NomenclatureId": 12345, "Type": "CATALOGUE", "UnitId": 1, "NomenclatureHistoryId": 67890},
-      {"Name": "Cookie", "Price": 500, "Count": 3, "NomenclatureId": -2, "Type": "FAST_SALE", "UnitId": 1}
+      {"catalog_item_id": 101, "count": 2},
+      {"catalog_item_id": 205, "count": 3}
     ]
   }'
 ```
 
-Amount is calculated automatically from cart items: `1500*2 + 500*3 = 4500`.
+Amount is calculated automatically from catalog item prices.
 
 ### Parameters
 
@@ -57,13 +57,8 @@ Amount is calculated automatically from cart items: `1500*2 + 500*3 = 4500`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `Name` | string | Yes | Item name |
-| `Price` | number | Yes | Unit price in KZT |
-| `Count` | number | Yes | Quantity |
-| `NomenclatureId` | number | Yes | Catalog item ID (or -2 for FAST_SALE) |
-| `Type` | string | Yes | `CATALOGUE` or `FAST_SALE` |
-| `UnitId` | number | Yes | Unit of measurement ID |
-| `NomenclatureHistoryId` | number | No | Required for CATALOGUE type |
+| `catalog_item_id` | integer | Yes | Catalog item ID (from GET /catalog) |
+| `count` | integer | Yes | Quantity (min 1) |
 
 ### Response
 
@@ -110,6 +105,8 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
+> Response includes `items` array — snapshot of cart items at invoice creation: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id }]`.
+
 ## Cancel Invoice
 
 **Endpoint:** `POST /invoices/{id}/cancel`
@@ -118,6 +115,17 @@ Only invoices with `status: "pending"` can be cancelled. May return `202 Accepte
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+## Check Invoice Status
+
+**Endpoint:** `POST /invoices/status/check`
+
+Force-check the current status of all pending invoices for your organization. Useful when webhooks are delayed.
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/status/check \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -135,17 +143,6 @@ See [Refunds](refunds.md) for details.
 curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
   -H "X-API-Key: YOUR_API_KEY"
 ```
-
-## Invoice Statistics
-
-**Endpoint:** `GET /invoices/stats`
-
-```bash
-curl "https://bpapi.bazarbay.site/api/v1/invoices/stats?period=month" \
-  -H "X-API-Key: YOUR_API_KEY"
-```
-
-Parameters: `period` (today, week, month, year) or `start_date` + `end_date` (YYYY-MM-DD).
 
 ## Invoice Statuses
 

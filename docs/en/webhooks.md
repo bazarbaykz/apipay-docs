@@ -132,6 +132,18 @@ Sent when a subscription expires after all retries fail.
 }
 ```
 
+### webhook.test
+
+Sent when you test a webhook from the dashboard.
+
+```json
+{
+  "event": "webhook.test",
+  "source": "test",
+  "timestamp": "2026-01-15T10:00:00Z"
+}
+```
+
 ## Signature Verification
 
 Every request includes `X-Webhook-Signature: sha256=<HMAC-SHA256>`.

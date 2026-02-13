@@ -2,6 +2,19 @@
 
 API каталога позволяет управлять товарами. Товары из каталога используются при создании счетов с корзиной (`cart_items`).
 
+## Единицы измерения
+
+**Эндпоинт:** `GET /catalog/units`
+
+Возвращает доступные единицы измерения для товаров каталога.
+
+```bash
+curl https://bpapi.bazarbay.site/api/v1/catalog/units \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+Ответ: `{ "data": [{ "id": 1, "name": "шт", "name_kaz": "дана" }, ...] }`
+
 ## Список товаров
 
 **Эндпоинт:** `GET /catalog`
@@ -56,7 +69,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
   -d '{
     "phone_number": "87001234567",
     "cart_items": [
-      {"Name": "Кофе латте", "Price": 1500, "Count": 2, "Type": "CATALOGUE", "NomenclatureId": 101, "UnitId": 1}
+      {"catalog_item_id": 101, "count": 2}
     ]
   }'
 ```

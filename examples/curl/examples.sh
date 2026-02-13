@@ -42,8 +42,8 @@ echo '  -H "Content-Type: application/json" \'
 echo '  -d '\''{'
 echo '    "phone_number": "87001234567",'
 echo '    "cart_items": ['
-echo '      {"Name": "Coffee", "Price": 1500, "Count": 2, "NomenclatureId": 101, "Type": "CATALOGUE", "UnitId": 1},'
-echo '      {"Name": "Cookie", "Price": 500, "Count": 3, "NomenclatureId": -2, "Type": "FAST_SALE", "UnitId": 1}'
+echo '      {"catalog_item_id": 101, "count": 2},'
+echo '      {"catalog_item_id": 205, "count": 3}'
 echo '    ]'
 echo '  }'\'
 echo ""
@@ -66,9 +66,9 @@ echo 'curl -X POST $BASE_URL/invoices/42/cancel \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
-echo "6. Invoice Statistics"
-echo "---------------------"
-echo 'curl "$BASE_URL/invoices/stats?period=month" \'
+echo "6. Check Invoice Statuses"
+echo "-------------------------"
+echo 'curl -X POST $BASE_URL/invoices/status/check \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 

@@ -49,13 +49,14 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 | `POST /invoices/{id}/cancel` | Отмена счёта |
 | `POST /invoices/{id}/refund` | Возврат по счёту |
 | `GET /invoices/{id}/refunds` | Возвраты по счёту |
-| `GET /invoices/stats` | Статистика счетов |
+| `POST /invoices/status/check` | Проверка статусов pending-счетов |
 | `GET /refunds` | Список всех возвратов |
 | `GET /catalog` | Список товаров каталога |
 | `POST /catalog/upload-image` | Загрузка изображения товара |
 | `POST /catalog` | Создание товаров |
 | `PATCH /catalog/{id}` | Обновление товара |
 | `DELETE /catalog/{id}` | Удаление товара |
+| `GET /catalog/units` | Единицы измерения |
 | `POST /subscriptions` | Создание подписки |
 | `GET /subscriptions` | Список подписок |
 | `GET /subscriptions/{id}` | Получение подписки |

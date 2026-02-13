@@ -13,6 +13,7 @@ ApiPay.kz uses standard HTTP status codes with detailed error messages.
 | 401 | Unauthorized | Invalid, missing, or expired API key |
 | 403 | Forbidden | Organization not verified or access denied |
 | 404 | Not Found | Resource not found |
+| 410 | Gone | Resource expired (e.g., verification timeout) |
 | 422 | Validation Error | Invalid field values |
 | 429 | Too Many Requests | Rate limit exceeded |
 | 500 | Server Error | Internal server error |

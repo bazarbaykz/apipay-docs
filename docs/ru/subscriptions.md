@@ -36,6 +36,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 | `retry_interval_hours` | integer | Нет | Часов между попытками (1-168) |
 | `grace_period_days` | integer | Нет | Льготный период в днях (1-30) |
 | `metadata` | object | Нет | Произвольные данные |
+| `webhook_id` | number | Нет | ID webhook из личного кабинета |
+| `cart_items` | array | Нет | Корзина `[{ catalog_item_id, count }]` (для организаций с каталогом, пересчитывает amount) |
 
 ### Периоды списания
 
@@ -52,7 +54,19 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 
 **Эндпоинт:** `GET /subscriptions`
 
-Фильтры: `status`, `phone_number`, `external_subscriber_id`.
+### Параметры запроса
+
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `page` | integer | Номер страницы (по умолч. 1) |
+| `per_page` | integer | Элементов на странице (1-100, по умолч. 10) |
+| `status` | string | Фильтр: `active`, `paused`, `cancelled`, `completed`, `expired` |
+| `phone_number` | string | Фильтр по телефону |
+| `external_subscriber_id` | string | Фильтр по вашему ID подписчика |
+| `search` | string | Поиск по имени/телефону |
+| `billing_period` | string | Фильтр: daily, weekly, biweekly, monthly, quarterly, yearly |
+| `sort_by` | string | Поле сортировки (id, amount, subscriber_name, next_billing_date, created_at) |
+| `sort_order` | string | `asc` или `desc` |
 
 ## Получение подписки
 
@@ -63,6 +77,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 ## Обновление подписки
 
 **Эндпоинт:** `PUT /subscriptions/{id}`
+
+Обновляемые поля: `amount`, `billing_day`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `metadata`, `cart_items`.
 
 ## Приостановка
 
@@ -89,6 +105,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 | `active` | Списания по расписанию |
 | `paused` | Приостановлена |
 | `cancelled` | Отменена |
+| `completed` | Все циклы завершены |
 | `expired` | Истекла (grace period закончился) |
 
 ## Grace Period

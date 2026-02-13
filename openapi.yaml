@@ -69,38 +69,16 @@ paths:
                   items:
                     type: object
                     properties:
-                      Name:
-                        type: string
-                        description: Название товара
-                        maxLength: 255
-                      Price:
-                        type: number
-                        description: Цена за единицу
-                        minimum: 0.01
-                      Count:
+                      catalog_item_id:
+                        type: integer
+                        description: ID товара из каталога
+                      count:
                         type: integer
                         description: Количество
                         minimum: 1
-                      NomenclatureId:
-                        type: integer
-                        description: ID товара из каталога. -2 для FAST_SALE.
-                      Type:
-                        type: string
-                        enum: ["FAST_SALE", "CATALOGUE"]
-                        description: Тип товара
-                      UnitId:
-                        type: integer
-                        description: ID единицы измерения
-                      NomenclatureHistoryId:
-                        type: integer
-                        description: Обязательно для Type=CATALOGUE
                     required:
-                      - Name
-                      - Price
-                      - Count
-                      - NomenclatureId
-                      - Type
-                      - UnitId
+                      - catalog_item_id
+                      - count
               required: ["phone_number"]
       responses:
         201:
@@ -157,7 +135,7 @@ paths:
             type: array
             items:
               type: string
-              enum: ["pending", "paid", "cancelled", "expired"]
+              enum: ["pending", "cancelling", "paid", "cancelled", "expired", "partially_refunded", "refunded"]
           description: Фильтр по статусам
         - name: date_from
           in: query
@@ -220,7 +198,7 @@ paths:
                     nullable: true
                   status:
                     type: string
-                    enum: ["pending", "paid", "cancelled", "expired"]
+                    enum: ["pending", "cancelling", "paid", "cancelled", "expired", "partially_refunded", "refunded"]
                   client_name:
                     type: string
                     nullable: true
@@ -239,6 +217,26 @@ paths:
                     type: string
                     format: date-time
                     nullable: true
+                  items:
+                    type: array
+                    description: Снимок товаров корзины при создании счёта
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        invoice_id:
+                          type: integer
+                        catalog_item_id:
+                          type: integer
+                        name:
+                          type: string
+                        price:
+                          type: string
+                        count:
+                          type: integer
+                        unit_id:
+                          type: integer
                   created_at:
                     type: string
                     format: date-time
@@ -354,33 +352,14 @@ paths:
           description: Список возвратов
         404:
           description: Счёт не найден
-  /invoices/stats:
-    get:
-      summary: Статистика счетов
-      description: Статистика по счетам за период
-      operationId: getInvoiceStats
-      parameters:
-        - name: period
-          in: query
-          schema: 
-            type: string
-            enum: ["today", "week", "month", "year"]
-          description: Период (альтернатива start_date+end_date)
-        - name: start_date
-          in: query
-          schema: 
-            type: string
-            format: date
-          description: Начало периода (YYYY-MM-DD)
-        - name: end_date
-          in: query
-          schema: 
-            type: string
-            format: date
-          description: Конец периода (YYYY-MM-DD)
+  /invoices/status/check:
+    post:
+      summary: Проверка статусов
+      description: Принудительная проверка статуса всех pending-счетов организации
+      operationId: checkInvoiceStatuses
       responses:
         200:
-          description: Статистика счетов
+          description: Проверка запущена
   /refunds:
     get:
       summary: Список возвратов
@@ -425,6 +404,32 @@ paths:
       responses:
         200:
           description: Список возвратов
+  /catalog/units:
+    get:
+      summary: Единицы измерения
+      description: Возвращает список доступных единиц измерения для товаров каталога
+      operationId: listCatalogUnits
+      responses:
+        200:
+          description: Список единиц измерения
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        name:
+                          type: string
+                          example: "шт"
+                        name_kaz:
+                          type: string
+                          example: "дана"
   /catalog:
     get:
       summary: Список товаров каталога
@@ -673,6 +678,23 @@ paths:
                 metadata:
                   type: object
                   description: Произвольные данные в формате JSON
+                webhook_id:
+                  type: integer
+                  description: ID webhook из личного кабинета
+                cart_items:
+                  type: array
+                  description: "Корзина товаров (для организаций с каталогом, пересчитывает amount)"
+                  items:
+                    type: object
+                    properties:
+                      catalog_item_id:
+                        type: integer
+                      count:
+                        type: integer
+                        minimum: 1
+                    required:
+                      - catalog_item_id
+                      - count
               required: ["phone_number", "amount", "billing_period"]
       responses:
         201:
@@ -692,14 +714,14 @@ paths:
             default: 1
         - name: per_page
           in: query
-          schema: 
+          schema:
             type: integer
-            default: 20
+            default: 10
         - name: status
           in: query
-          schema: 
+          schema:
             type: string
-            enum: ["active", "paused", "cancelled", "expired"]
+            enum: ["active", "paused", "cancelled", "completed", "expired"]
           description: Фильтр по статусу
         - name: phone_number
           in: query
@@ -764,6 +786,20 @@ paths:
                   type: integer
                 metadata:
                   type: object
+                cart_items:
+                  type: array
+                  description: "Корзина товаров (пересчитывает amount)"
+                  items:
+                    type: object
+                    properties:
+                      catalog_item_id:
+                        type: integer
+                      count:
+                        type: integer
+                        minimum: 1
+                    required:
+                      - catalog_item_id
+                      - count
       responses:
         200:
           description: Подписка обновлена

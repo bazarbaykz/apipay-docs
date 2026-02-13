@@ -49,13 +49,14 @@ Response:
 | `POST /invoices/{id}/cancel` | Cancel pending invoice |
 | `POST /invoices/{id}/refund` | Refund paid invoice |
 | `GET /invoices/{id}/refunds` | Invoice refunds |
-| `GET /invoices/stats` | Invoice statistics |
+| `POST /invoices/status/check` | Check pending invoice statuses |
 | `GET /refunds` | List all refunds |
 | `GET /catalog` | List catalog items |
 | `POST /catalog/upload-image` | Upload catalog image |
 | `POST /catalog` | Create catalog items |
 | `PATCH /catalog/{id}` | Update catalog item |
 | `DELETE /catalog/{id}` | Delete catalog item |
+| `GET /catalog/units` | List measurement units |
 | `POST /subscriptions` | Create subscription |
 | `GET /subscriptions` | List subscriptions |
 | `GET /subscriptions/{id}` | Get subscription |

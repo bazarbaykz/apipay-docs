@@ -34,13 +34,13 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
     "phone_number": "87001234567",
     "description": "Заказ из каталога",
     "cart_items": [
-      {"Name": "Кофе латте", "Price": 1500, "Count": 2, "NomenclatureId": 12345, "Type": "CATALOGUE", "UnitId": 1, "NomenclatureHistoryId": 67890},
-      {"Name": "Печенье", "Price": 500, "Count": 3, "NomenclatureId": -2, "Type": "FAST_SALE", "UnitId": 1}
+      {"catalog_item_id": 101, "count": 2},
+      {"catalog_item_id": 205, "count": 3}
     ]
   }'
 ```
 
-Сумма рассчитывается автоматически из корзины: `1500*2 + 500*3 = 4500`.
+Сумма рассчитывается автоматически из цен товаров каталога.
 
 ### Параметры
 
@@ -57,13 +57,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 
 | Поле | Тип | Обязательно | Описание |
 |------|-----|-------------|----------|
-| `Name` | string | Да | Название товара |
-| `Price` | number | Да | Цена за единицу в тенге |
-| `Count` | number | Да | Количество |
-| `NomenclatureId` | number | Да | ID товара из каталога (или -2 для FAST_SALE) |
-| `Type` | string | Да | `CATALOGUE` или `FAST_SALE` |
-| `UnitId` | number | Да | ID единицы измерения |
-| `NomenclatureHistoryId` | number | Нет | Обязательно для типа CATALOGUE |
+| `catalog_item_id` | integer | Да | ID товара из каталога (из GET /catalog) |
+| `count` | integer | Да | Количество (мин. 1) |
 
 ### Ответ
 
@@ -110,6 +105,8 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
+> Ответ включает массив `items` — снимок товаров корзины при создании счёта: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id }]`.
+
 ## Отмена счёта
 
 **Эндпоинт:** `POST /invoices/{id}/cancel`
@@ -118,6 +115,17 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+## Проверка статуса счетов
+
+**Эндпоинт:** `POST /invoices/status/check`
+
+Принудительная проверка статуса всех pending-счетов организации. Полезно при задержке webhooks.
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/status/check \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -135,17 +143,6 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
 curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
   -H "X-API-Key: YOUR_API_KEY"
 ```
-
-## Статистика счетов
-
-**Эндпоинт:** `GET /invoices/stats`
-
-```bash
-curl "https://bpapi.bazarbay.site/api/v1/invoices/stats?period=month" \
-  -H "X-API-Key: YOUR_API_KEY"
-```
-
-Параметры: `period` (today, week, month, year) или `start_date` + `end_date` (YYYY-MM-DD).
 
 ## Статусы счетов
 
