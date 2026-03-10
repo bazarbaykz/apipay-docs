@@ -76,9 +76,26 @@ paths:
                         type: integer
                         description: Количество
                         minimum: 1
+                      price:
+                        type: number
+                        nullable: true
+                        description: "Кастомная цена (0.01 - 99999999.99). Заменяет каталожную цену."
+                        minimum: 0.01
+                        maximum: 99999999.99
+                      discount:
+                        type: number
+                        nullable: true
+                        description: "Скидка на строку товара (мин 0). Применяется к итогу строки."
+                        minimum: 0
                     required:
                       - catalog_item_id
                       - count
+                discount_percentage:
+                  type: number
+                  nullable: true
+                  description: "Глобальный % скидки (0-100). Применяется к позициям без явного discount."
+                  minimum: 0
+                  maximum: 100
               required: ["phone_number"]
       responses:
         201:
@@ -97,6 +114,15 @@ paths:
                   status:
                     type: string
                     enum: ["pending"]
+                  subtotal:
+                    type: string
+                    description: "Сумма до скидок (появляется только при наличии скидки)"
+                  discount_sum:
+                    type: string
+                    description: "Общая сумма скидки (появляется только при наличии скидки)"
+                  discount_percentage:
+                    type: string
+                    description: "Глобальный % скидки (появляется только если передан)"
                   created_at:
                     type: string
                     format: date-time
@@ -237,6 +263,23 @@ paths:
                           type: integer
                         unit_id:
                           type: integer
+                        original_price:
+                          type: string
+                          nullable: true
+                          description: "Каталожная цена, если переопределена кастомной price"
+                        discount:
+                          type: string
+                          nullable: true
+                          description: "Скидка на строку"
+                  subtotal:
+                    type: string
+                    description: "Сумма до скидок (появляется только при наличии скидки)"
+                  discount_sum:
+                    type: string
+                    description: "Общая сумма скидки (появляется только при наличии скидки)"
+                  discount_percentage:
+                    type: string
+                    description: "Глобальный % скидки (появляется только если передан)"
                   created_at:
                     type: string
                     format: date-time

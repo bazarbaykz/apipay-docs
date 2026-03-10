@@ -53,9 +53,10 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 ### Invoices (Счета)
 - [POST /api/v1/invoices]: Create invoice (amount or cart_items, phone_number required; description, external_order_id optional)
   - Supports two modes: without cart (pass amount) or with cart (pass cart_items, amount calculated automatically)
-  - Cart items format: [{ catalog_item_id: integer, count: integer }] — amount calculated from catalog prices
+  - Cart items format: `{ catalog_item_id, count, price?, discount? }` — supports optional price override and per-item discount
+  - Optional `discount_percentage` (0-100) applies global discount to items without explicit discount. Per-item `discount` takes priority.
 - [GET /api/v1/invoices]: List invoices with pagination, search, and filters (status[], date_from, date_to, sort_by, sort_order)
-- [GET /api/v1/invoices/{id}]: Get invoice by ID (includes items array — snapshot of cart items)
+- [GET /api/v1/invoices/{id}]: Get invoice by ID (includes items array with original_price, discount — snapshot of cart items). Fields `subtotal`, `discount_sum`, `discount_percentage` appear only when discount is applied.
 - [POST /api/v1/invoices/{id}/cancel]: Cancel invoice (only pending status)
 - [POST /api/v1/invoices/status/check]: Force-check status of all pending invoices
 - [POST /api/v1/invoices/{id}/refund]: Refund invoice (full or partial, see Refunds section)

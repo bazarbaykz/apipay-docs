@@ -23,6 +23,9 @@ Sent when an invoice status changes (paid, cancelled, expired).
     "id": 42,
     "external_order_id": "order_123",
     "amount": "15000.00",
+    "subtotal": "16500.00",
+    "discount_sum": "1500.00",
+    "discount_percentage": "10",
     "status": "paid",
     "description": "Order payment",
     "client_name": "John Doe",
@@ -32,6 +35,8 @@ Sent when an invoice status changes (paid, cancelled, expired).
   "timestamp": "2025-12-25T14:35:01Z"
 }
 ```
+
+> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied.
 
 ### invoice.refunded
 
@@ -43,6 +48,8 @@ Sent when an invoice is refunded (fully or partially).
   "invoice": {
     "id": 42,
     "amount": "15000.00",
+    "subtotal": "16500.00",
+    "discount_sum": "1500.00",
     "status": "partially_refunded",
     "total_refunded": "5000.00",
     "external_order_id": "order_123"

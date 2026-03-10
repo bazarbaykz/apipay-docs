@@ -34,13 +34,14 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
     "phone_number": "87001234567",
     "description": "Заказ из каталога",
     "cart_items": [
-      {"catalog_item_id": 101, "count": 2},
-      {"catalog_item_id": 205, "count": 3}
-    ]
+      {"catalog_item_id": 101, "count": 2, "price": 4500.00},
+      {"catalog_item_id": 205, "count": 3, "discount": 500}
+    ],
+    "discount_percentage": 10
   }'
 ```
 
-Сумма рассчитывается автоматически из цен товаров каталога.
+Сумма рассчитывается автоматически из цен товаров каталога. Поддерживает кастомные цены и скидки.
 
 ### Параметры
 
@@ -52,6 +53,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 | `external_order_id` | string | Нет | Ваш ID заказа для сопоставления (макс. 255 символов) |
 | `webhook_id` | number | Нет | ID конкретного webhook из личного кабинета |
 | `cart_items` | array | Нет | Массив товаров корзины (заменяет amount) |
+| `discount_percentage` | number | Нет | Глобальный % скидки (0-100). Применяется к позициям без явного `discount`. Per-item `discount` имеет приоритет. |
 
 ### Поля товара корзины
 
@@ -59,20 +61,27 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 |------|-----|-------------|----------|
 | `catalog_item_id` | integer | Да | ID товара из каталога (из GET /catalog) |
 | `count` | integer | Да | Количество (мин. 1) |
+| `price` | number | Нет | Кастомная цена (0.01 - 99999999.99). Заменяет каталожную цену. |
+| `discount` | number | Нет | Скидка на строку товара (мин 0). Применяется к итогу строки (price × count). |
 
 ### Ответ
 
 ```json
 {
   "id": 124,
-  "amount": "10000.00",
+  "amount": "9500.00",
   "status": "pending",
   "description": "Оплата заказа #123",
   "external_order_id": "order_123",
   "phone_number": "87001234567",
+  "subtotal": "10000.00",
+  "discount_sum": "500.00",
+  "discount_percentage": "10",
   "created_at": "2025-01-31T12:00:00Z"
 }
 ```
+
+> **Примечание:** Поля `subtotal`, `discount_sum` и `discount_percentage` появляются только при наличии скидки (обратная совместимость).
 
 ## Список счетов
 
@@ -105,7 +114,7 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-> Ответ включает массив `items` — снимок товаров корзины при создании счёта: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id }]`.
+> Ответ включает массив `items` — снимок товаров корзины при создании счёта: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id, original_price, discount }]`. Поля `subtotal`, `discount_sum`, `discount_percentage` появляются на верхнем уровне только при наличии скидки.
 
 ## Отмена счёта
 

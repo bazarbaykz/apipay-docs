@@ -34,13 +34,14 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
     "phone_number": "87001234567",
     "description": "Cart order",
     "cart_items": [
-      {"catalog_item_id": 101, "count": 2},
-      {"catalog_item_id": 205, "count": 3}
-    ]
+      {"catalog_item_id": 101, "count": 2, "price": 4500.00},
+      {"catalog_item_id": 205, "count": 3, "discount": 500}
+    ],
+    "discount_percentage": 10
   }'
 ```
 
-Amount is calculated automatically from catalog item prices.
+Amount is calculated automatically from catalog item prices. Supports custom price overrides and discounts.
 
 ### Parameters
 
@@ -52,6 +53,7 @@ Amount is calculated automatically from catalog item prices.
 | `external_order_id` | string | No | Your order ID (max 255 chars) |
 | `webhook_id` | number | No | Specific webhook ID from dashboard |
 | `cart_items` | array | No | Array of cart items (replaces amount) |
+| `discount_percentage` | number | No | Global discount percentage (0-100). Applied to items without explicit `discount`. Per-item `discount` takes priority. |
 
 ### Cart Item Fields
 
@@ -59,20 +61,27 @@ Amount is calculated automatically from catalog item prices.
 |-------|------|----------|-------------|
 | `catalog_item_id` | integer | Yes | Catalog item ID (from GET /catalog) |
 | `count` | integer | Yes | Quantity (min 1) |
+| `price` | number | No | Custom price override (0.01 - 99999999.99). Replaces catalog price. |
+| `discount` | number | No | Discount for this line (min 0). Applied to line subtotal (price × count). |
 
 ### Response
 
 ```json
 {
   "id": 124,
-  "amount": "10000.00",
+  "amount": "9500.00",
   "status": "pending",
   "description": "Payment for order #123",
   "external_order_id": "order_123",
   "phone_number": "87001234567",
+  "subtotal": "10000.00",
+  "discount_sum": "500.00",
+  "discount_percentage": "10",
   "created_at": "2025-01-31T12:00:00Z"
 }
 ```
+
+> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when a discount is applied (backward compatible).
 
 ## List Invoices
 
@@ -105,7 +114,7 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-> Response includes `items` array — snapshot of cart items at invoice creation: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id }]`.
+> Response includes `items` array — snapshot of cart items at invoice creation: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id, original_price, discount }]`. Fields `subtotal`, `discount_sum`, `discount_percentage` appear at top level only when discount is applied.
 
 ## Cancel Invoice
 
