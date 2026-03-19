@@ -29,6 +29,7 @@ Sent when an invoice status changes (paid, cancelled, expired).
     "status": "paid",
     "description": "Order payment",
     "client_name": "John Doe",
+    "is_sandbox": false,
     "paid_at": "2025-12-25T14:35:00Z"
   },
   "source": "api",
@@ -36,7 +37,7 @@ Sent when an invoice status changes (paid, cancelled, expired).
 }
 ```
 
-> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied.
+> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied. The `is_sandbox` field indicates whether the resource was created in sandbox mode.
 
 ### invoice.refunded
 
@@ -52,6 +53,7 @@ Sent when an invoice is refunded (fully or partially).
     "discount_sum": "1500.00",
     "status": "partially_refunded",
     "total_refunded": "5000.00",
+    "is_sandbox": false,
     "external_order_id": "order_123"
   },
   "source": "api",
@@ -66,20 +68,24 @@ Sent when a subscription payment succeeds.
 ```json
 {
   "event": "subscription.payment_succeeded",
-  "data": {
-    "subscription": {
-      "id": 1,
-      "status": "active",
-      "billing_period": "monthly"
-    },
-    "invoice": {
-      "id": 100,
-      "amount": "5000.00",
-      "status": "paid"
-    }
+  "subscription": {
+    "id": 10,
+    "external_subscriber_id": "CLIENT-001",
+    "phone_number": "87071234567",
+    "subscriber_name": "Ivan Ivanov",
+    "amount": "5000.00",
+    "billing_period": "monthly",
+    "status": "active",
+    "next_billing_at": "2026-03-01T00:00:00+05:00",
+    "failed_attempts": 0,
+    "in_grace_period": false,
+    "is_sandbox": false
   },
-  "source": "subscription",
-  "timestamp": "2025-02-01T00:01:00Z"
+  "invoice_id": 200,
+  "amount": "5000.00",
+  "paid_at": "2026-02-01T12:00:00+05:00",
+  "source": "My API Key",
+  "timestamp": "2026-02-01T12:00:01+05:00"
 }
 ```
 
@@ -90,15 +96,22 @@ Sent when a subscription payment fails.
 ```json
 {
   "event": "subscription.payment_failed",
-  "data": {
-    "subscription": {
-      "id": 1,
-      "status": "active"
-    },
-    "reason": "Payment declined"
+  "subscription": {
+    "id": 10,
+    "phone_number": "87071234567",
+    "amount": "5000.00",
+    "billing_period": "monthly",
+    "status": "active",
+    "failed_attempts": 2,
+    "in_grace_period": false,
+    "is_sandbox": false
   },
-  "source": "subscription",
-  "timestamp": "2025-02-01T00:01:00Z"
+  "invoice_id": 201,
+  "amount": "5000.00",
+  "reason": "Invoice expired",
+  "attempt_number": 2,
+  "source": "My API Key",
+  "timestamp": "2026-02-02T12:00:01+05:00"
 }
 ```
 
@@ -109,15 +122,19 @@ Sent when a subscription enters the grace period after payment failure.
 ```json
 {
   "event": "subscription.grace_period_started",
-  "data": {
-    "subscription": {
-      "id": 1,
-      "grace_period_days": 7,
-      "retry_attempts_remaining": 3
-    }
+  "subscription": {
+    "id": 10,
+    "phone_number": "87071234567",
+    "amount": "5000.00",
+    "status": "active",
+    "failed_attempts": 3,
+    "in_grace_period": true,
+    "is_sandbox": false
   },
-  "source": "subscription",
-  "timestamp": "2025-02-01T00:02:00Z"
+  "grace_period_days": 3,
+  "expires_at": "2026-02-05T12:00:00+05:00",
+  "source": "My API Key",
+  "timestamp": "2026-02-02T12:00:01+05:00"
 }
 ```
 
@@ -128,14 +145,18 @@ Sent when a subscription expires after all retries fail.
 ```json
 {
   "event": "subscription.expired",
-  "data": {
-    "subscription": {
-      "id": 1,
-      "status": "expired"
-    }
+  "subscription": {
+    "id": 10,
+    "phone_number": "87071234567",
+    "amount": "5000.00",
+    "status": "expired",
+    "next_billing_at": null,
+    "failed_attempts": 3,
+    "in_grace_period": false,
+    "is_sandbox": false
   },
-  "source": "subscription",
-  "timestamp": "2025-02-08T00:01:00Z"
+  "source": "My API Key",
+  "timestamp": "2026-02-05T12:00:01+05:00"
 }
 ```
 

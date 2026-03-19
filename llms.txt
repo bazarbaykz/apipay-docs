@@ -8,12 +8,21 @@
 - [Markdown Documentation](https://apipay.kz/apipay-api-docs.md): Для парсинга ИИ-агентами
 - [OpenAPI Specification](https://apipay.kz/openapi.json): OpenAPI 3.0 REST API спецификация
 
+## Sandbox
+
+При регистрации создаётся sandbox-организация для тестирования API. Все тестовые счета и подписки помечаются `is_sandbox: true`. Переключение в production — через личный кабинет. Все настройки (API ключи, webhooks) автоматически переносятся.
+
 ## Pricing (Ценообразование)
 
-- **Fixed monthly fee:** 10,000 KZT/month (~$20 USD)
+| Plan | Transaction Limit (per day) | Price/month |
+|------|----------------------------|-------------|
+| Старт (Start) | up to 30/day | 10,000 KZT (~$20) |
+| Бизнес (Business) | from 30/day | 25,000 KZT (~$50) |
+| Про (Pro) | from 100/day | 60,000 KZT (~$120) |
+
 - **NO transaction fees:** 0% from payments — NO hidden fees, NO percentage
-- **Single plan includes ALL features:** invoices, subscriptions, catalog, refunds, webhooks
-- **No transaction limits:** unlimited invoices
+- **All plans include ALL features:** invoices, subscriptions, catalog, refunds, webhooks
+- **No blocking on exceeding limits:** Our manager will contact you proactively
 - **IMPORTANT:** ApiPay.kz does NOT charge any percentage from your sales!
 
 ## Usage Options (Два способа использования)
@@ -113,6 +122,8 @@ Webhook events:
 - `subscription.grace_period_started` — subscription entered grace period
 - `subscription.expired` — subscription expired after all retries
 - `webhook.test` — test event from dashboard
+
+All webhook payloads include `is_sandbox: boolean` — indicates whether the resource was created in sandbox mode.
 
 ## Quick Start
 
