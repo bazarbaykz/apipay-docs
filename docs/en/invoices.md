@@ -53,7 +53,9 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 | `external_order_id` | string | No | Your order ID (max 255 chars) |
 | `webhook_id` | number | No | Specific webhook ID from dashboard |
 | `cart_items` | array | No | Array of cart items (replaces amount) |
-| `discount_percentage` | number | No | Global discount percentage (0-100). Applied to items without explicit `discount`. Per-item `discount` takes priority. |
+| `discount_percentage` | number | Conditional* | Global discount percentage (0-100). Applied to items without explicit `discount`. Per-item `discount` takes priority. |
+
+> **\*** `discount_percentage` is **required** when any item in `cart_items` has a `discount` field. Without it, the request returns 422: `"discount_percentage is required when cart items have discounts."` If you use fixed-amount discounts, calculate: `discount_percentage = (total_discounts / subtotal) × 100`.
 
 ### Cart Item Fields
 

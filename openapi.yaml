@@ -92,8 +92,7 @@ paths:
                       - count
                 discount_percentage:
                   type: number
-                  nullable: true
-                  description: "Глобальный % скидки (0-100). Применяется к позициям без явного discount."
+                  description: "Глобальный % скидки (0-100). Обязателен, если в cart_items есть товар с discount. Формула: discount_percentage = (сумма_скидок / сумма_без_скидки) × 100."
                   minimum: 0
                   maximum: 100
               required: ["phone_number"]

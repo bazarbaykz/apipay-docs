@@ -53,7 +53,9 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 | `external_order_id` | string | Нет | Ваш ID заказа для сопоставления (макс. 255 символов) |
 | `webhook_id` | number | Нет | ID конкретного webhook из личного кабинета |
 | `cart_items` | array | Нет | Массив товаров корзины (заменяет amount) |
-| `discount_percentage` | number | Нет | Глобальный % скидки (0-100). Применяется к позициям без явного `discount`. Per-item `discount` имеет приоритет. |
+| `discount_percentage` | number | Условно* | Глобальный % скидки (0-100). Применяется к позициям без явного `discount`. Per-item `discount` имеет приоритет. |
+
+> **\*** `discount_percentage` **обязателен**, если в `cart_items` есть хотя бы один товар с полем `discount`. Без него запрос вернёт 422: `"discount_percentage is required when cart items have discounts."` Формула для фиксированных скидок: `discount_percentage = (сумма_скидок / сумма_без_скидки) × 100`.
 
 ### Поля товара корзины
 

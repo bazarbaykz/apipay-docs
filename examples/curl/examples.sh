@@ -48,6 +48,22 @@ echo '    ]'
 echo '  }'\'
 echo ""
 
+echo "2b. Create Invoice with Cart Items and Discounts"
+echo "-------------------------------------------------"
+echo 'curl -X POST $BASE_URL/invoices \'
+echo '  -H "X-API-Key: $API_KEY" \'
+echo '  -H "Content-Type: application/json" \'
+echo '  -d '\''{'
+echo '    "phone_number": "87001234567",'
+echo '    "discount_percentage": 10,'
+echo '    "cart_items": ['
+echo '      {"catalog_item_id": 101, "count": 2, "discount": 500},'
+echo '      {"catalog_item_id": 205, "count": 3}'
+echo '    ]'
+echo '  }'\'
+echo "# discount_percentage is REQUIRED when cart items have discount"
+echo ""
+
 echo "3. List Invoices"
 echo "----------------"
 echo 'curl "$BASE_URL/invoices?page=1&per_page=20&status[]=paid&sort_by=created_at&sort_order=desc" \'
