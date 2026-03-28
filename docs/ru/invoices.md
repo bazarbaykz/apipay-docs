@@ -35,7 +35,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
     "description": "Заказ из каталога",
     "cart_items": [
       {"catalog_item_id": 101, "count": 2, "price": 4500.00},
-      {"catalog_item_id": 205, "count": 3, "discount": 500}
+      {"catalog_item_id": 205, "count": 3}
     ],
     "discount_percentage": 10
   }'
@@ -51,11 +51,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 | `phone_number` | string | Да | Телефон клиента (формат: 8XXXXXXXXXX) |
 | `description` | string | Нет | Описание платежа (макс. 500 символов) |
 | `external_order_id` | string | Нет | Ваш ID заказа для сопоставления (макс. 255 символов) |
-| `webhook_id` | number | Нет | ID конкретного webhook из личного кабинета |
 | `cart_items` | array | Нет | Массив товаров корзины (заменяет amount) |
-| `discount_percentage` | number | Условно* | Глобальный % скидки (0-100). Применяется к позициям без явного `discount`. Per-item `discount` имеет приоритет. |
-
-> **\*** `discount_percentage` **обязателен**, если в `cart_items` есть хотя бы один товар с полем `discount`. Без него запрос вернёт 422: `"discount_percentage is required when cart items have discounts."` Формула для фиксированных скидок: `discount_percentage = (сумма_скидок / сумма_без_скидки) × 100`.
+| `discount_percentage` | number | Нет | Глобальный % скидки (1-99). Применяется ко всему чеку. |
 
 ### Поля товара корзины
 
@@ -64,7 +61,6 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 | `catalog_item_id` | integer | Да | ID товара из каталога (из GET /catalog) |
 | `count` | integer | Да | Количество (мин. 1) |
 | `price` | number | Нет | Кастомная цена (0.01 - 99999999.99). Заменяет каталожную цену. |
-| `discount` | number | Нет | Скидка на строку товара (мин 0). Применяется к итогу строки (price × count). |
 
 ### Ответ
 
@@ -79,6 +75,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
   "subtotal": "10000.00",
   "discount_sum": "500.00",
   "discount_percentage": "10",
+  "paid_at": null,
   "created_at": "2025-01-31T12:00:00Z"
 }
 ```
@@ -122,22 +119,50 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
 
 **Эндпоинт:** `POST /invoices/{id}/cancel`
 
-Можно отменить только счета со статусом `pending`. Может вернуть `202 Accepted` со статусом `cancelling` при асинхронной обработке.
+Можно отменить только счета со статусом `pending`. В sandbox возвращает `200 OK` (синхронно), в production — `202 Accepted` со статусом `cancelling` (асинхронная обработка через Kaspi).
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
+### Ответ 202 (production)
+
+```json
+{
+  "message": "Invoice cancellation queued",
+  "invoice_id": 42
+}
+```
+
 ## Проверка статуса счетов
 
 **Эндпоинт:** `POST /invoices/status/check`
 
-Принудительная проверка статуса всех pending-счетов организации. Полезно при задержке webhooks.
+Принудительная проверка статуса указанных счетов. Принимает массив ID счетов (до 100). Полезно при задержке webhooks.
+
+### Параметры
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `invoice_ids` | array | Да | Массив ID счетов для проверки (макс. 100) |
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/status/check \
-  -H "X-API-Key: YOUR_API_KEY"
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "invoice_ids": [42, 43, 44]
+  }'
+```
+
+### Ответ
+
+```json
+{
+  "message": "Status check jobs dispatched",
+  "count": 3
+}
 ```
 
 ## Возврат по счёту

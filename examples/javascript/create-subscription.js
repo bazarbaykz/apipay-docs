@@ -37,7 +37,7 @@ async function main() {
   try {
     console.log('Creating subscription...')
 
-    const subscription = await createSubscription({
+    const result = await createSubscription({
       amount: 5000,
       phone_number: '87001234567',
       billing_period: 'monthly',
@@ -46,13 +46,15 @@ async function main() {
       description: 'Monthly subscription'
     })
 
+    const subscription = result.subscription
+
     console.log('\nSubscription created successfully!')
     console.log('----------------------------------')
     console.log(`Subscription ID: ${subscription.id}`)
     console.log(`Amount: ${subscription.amount} KZT`)
     console.log(`Period: ${subscription.billing_period}`)
     console.log(`Status: ${subscription.status}`)
-    console.log(`Next billing: ${subscription.next_billing_date}`)
+    console.log(`Next billing: ${subscription.next_billing_at}`)
 
   } catch (error) {
     console.error('Error:', error.message)

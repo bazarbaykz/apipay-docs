@@ -2,15 +2,15 @@ openapi: "3.0.0"
 info:
   title: ApiPay.kz REST API
   version: "2.0.0"
-  description: "REST API для интернет-эквайринга через Kaspi Pay в Казахстане. Приём платежей по номеру телефона без договора с банком. Поддержка каталога, подписок, возвратов и вебхуков. При регистрации создаётся sandbox-организация для тестирования API. Webhook payloads содержат поле is_sandbox для различения тестовых и реальных событий."
+  description: REST API для интернет-эквайринга через Kaspi Pay в Казахстане. Приём платежей по номеру телефона без договора с банком. Поддержка каталога, подписок, возвратов и вебхуков. При регистрации создаётся sandbox-организация для тестирования API. Webhook payloads содержат поле is_sandbox для различения тестовых и реальных событий.
   contact:
     name: ApiPay.kz Support
-    url: "https://wa.me/77085167489"
+    url: https://wa.me/77085167489
 servers:
-  - url: "https://bpapi.bazarbay.site/api/v1"
+  - url: https://bpapi.bazarbay.site/api/v1
     description: Production API
 paths:
-  /status:
+  "/status":
     get:
       summary: Health check
       description: Проверка доступности API. Не требует аутентификации.
@@ -20,7 +20,7 @@ paths:
         200:
           description: API доступен
           content:
-            application/json:
+            "application/json":
               schema:
                 type: object
                 properties:
@@ -30,7 +30,7 @@ paths:
                   timestamp:
                     type: string
                     format: date-time
-  /invoices:
+  "/invoices":
     post:
       summary: Создание счёта
       description: "Создаёт счёт на оплату. Поддерживает два режима: без корзины (передать amount) или с корзиной (передать cart_items, amount рассчитывается автоматически)."
@@ -38,7 +38,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/json:
+          "application/json":
             schema:
               type: object
               properties:
@@ -51,7 +51,7 @@ paths:
                 phone_number:
                   type: string
                   description: "Телефон клиента (формат: 8XXXXXXXXXX)"
-                  pattern: "^8[0-9]{10}$"
+                  pattern: ^8[0-9]{10}$
                   example: "87001234567"
                 description:
                   type: string
@@ -71,7 +71,7 @@ paths:
                     properties:
                       catalog_item_id:
                         type: integer
-                        description: ID товара из каталога
+                        description: ID товара из каталога (поле id из GET /catalog)
                       count:
                         type: integer
                         description: Количество
@@ -79,49 +79,57 @@ paths:
                       price:
                         type: number
                         nullable: true
-                        description: "Кастомная цена (0.01 - 99999999.99). Заменяет каталожную цену."
+                        description: Кастомная цена (0.01 - 99999999.99). Заменяет каталожную цену.
                         minimum: 0.01
                         maximum: 99999999.99
-                      discount:
-                        type: number
-                        nullable: true
-                        description: "Скидка на строку товара (мин 0). Применяется к итогу строки."
-                        minimum: 0
                     required:
                       - catalog_item_id
                       - count
                 discount_percentage:
                   type: number
-                  description: "Глобальный % скидки (0-100). Обязателен, если в cart_items есть товар с discount. Формула: discount_percentage = (сумма_скидок / сумма_без_скидки) × 100."
-                  minimum: 0
-                  maximum: 100
-              required: ["phone_number"]
+                  nullable: true
+                  description: Глобальный % скидки (1-99). Применяется ко всему чеку.
+                  minimum: 1
+                  maximum: 99
+              required:
+                - phone_number
       responses:
         201:
           description: Счёт создан
           content:
-            application/json:
+            "application/json":
               schema:
                 type: object
                 properties:
                   id:
                     type: integer
                     description: ID счёта
+                    example: 42
                   amount:
                     type: string
                     description: Сумма счёта
+                    example: "15000.00"
                   status:
                     type: string
-                    enum: ["pending"]
+                    enum:
+                      - pending
                   subtotal:
                     type: string
-                    description: "Сумма до скидок (появляется только при наличии скидки)"
+                    description: Сумма до скидок (появляется только при наличии скидки)
+                    example: "16500.00"
                   discount_sum:
                     type: string
-                    description: "Общая сумма скидки (появляется только при наличии скидки)"
+                    description: Общая сумма скидки (появляется только при наличии скидки)
+                    example: "1500.00"
                   discount_percentage:
                     type: string
-                    description: "Глобальный % скидки (появляется только если передан)"
+                    description: Глобальный % скидки (появляется только если передан)
+                    example: "10"
+                  paid_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: Всегда null при создании
                   created_at:
                     type: string
                     format: date-time
@@ -133,65 +141,162 @@ paths:
           description: Ошибка валидации
     get:
       summary: Список счетов
-      description: "Возвращает список счетов с пагинацией, фильтрацией и сортировкой"
+      description: Возвращает список счетов с пагинацией, фильтрацией и сортировкой
       operationId: listInvoices
       parameters:
         - name: page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 1
         - name: per_page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 10
             minimum: 1
             maximum: 100
         - name: search
           in: query
-          schema: 
+          schema:
             type: string
             maxLength: 100
           description: Поиск по ID или описанию
-        - name: "status[]"
+        - name: status[]
           in: query
-          schema: 
+          schema:
             type: array
             items:
               type: string
-              enum: ["pending", "cancelling", "paid", "cancelled", "expired", "partially_refunded", "refunded"]
+              enum:
+                - pending
+                - paid
+                - cancelled
+                - expired
           description: Фильтр по статусам
         - name: date_from
           in: query
-          schema: 
+          schema:
             type: string
             format: date
           description: Дата от (YYYY-MM-DD)
         - name: date_to
           in: query
-          schema: 
+          schema:
             type: string
             format: date
-          description: "Дата до (YYYY-MM-DD, должна быть >= date_from)"
+          description: Дата до (YYYY-MM-DD, должна быть >= date_from)
         - name: sort_by
           in: query
-          schema: 
+          schema:
             type: string
-            enum: ["id", "amount", "client_name", "status", "created_at"]
+            enum:
+              - id
+              - amount
+              - client_name
+              - status
+              - created_at
             default: created_at
           description: Поле сортировки
         - name: sort_order
           in: query
-          schema: 
+          schema:
             type: string
-            enum: ["asc", "desc"]
+            enum:
+              - asc
+              - desc
             default: desc
           description: Направление сортировки
       responses:
         200:
           description: Список счетов
-  /invoices/{id}:
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 42
+                        amount:
+                          type: string
+                          example: "15000.00"
+                        phone:
+                          type: string
+                          description: Телефон клиента (формат 7XXXXXXXXXX)
+                          example: "77001234567"
+                        description:
+                          type: string
+                          nullable: true
+                          example: "Оплата заказа #123"
+                        external_order_id:
+                          type: string
+                          nullable: true
+                          example: order_123
+                        status:
+                          type: string
+                          example: paid
+                        kaspi_invoice_id:
+                          type: string
+                          nullable: true
+                          example: "13234689513"
+                        qr_token:
+                          type: string
+                          nullable: true
+                          example: abc123
+                        qr_link:
+                          type: string
+                          nullable: true
+                          description: Ссылка на QR-код для оплаты
+                          example: https://pay.kaspi.kz/pay/abc123
+                        expires_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                          description: Время истечения счёта
+                        paid_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        is_sandbox:
+                          type: boolean
+                          example: false
+                        is_recurring:
+                          type: boolean
+                          example: false
+                          description: Счёт создан подпиской
+                        client_name:
+                          type: string
+                          nullable: true
+                          example: Иван Иванов
+                        items:
+                          type: array
+                          description: Товары счёта (пустой массив для счетов без корзины)
+                          example: []
+                        created_at:
+                          type: string
+                          format: date-time
+                  meta:
+                    type: object
+                    properties:
+                      current_page:
+                        type: integer
+                        example: 1
+                      last_page:
+                        type: integer
+                        example: 5
+                      per_page:
+                        type: integer
+                        example: 10
+                      total:
+                        type: integer
+                        example: 48
+  "/invoices/{id}":
     get:
       summary: Получить счёт
       operationId: getInvoice
@@ -199,112 +304,172 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
       responses:
         200:
           description: Данные счёта
           content:
-            application/json:
+            "application/json":
               schema:
                 type: object
                 properties:
                   id:
                     type: integer
+                    example: 42
                   amount:
                     type: string
+                    example: "15000.00"
                   phone_number:
                     type: string
+                    example: "87001234567"
                   description:
                     type: string
                     nullable: true
+                    example: "Оплата заказа #123"
                   external_order_id:
                     type: string
                     nullable: true
+                    example: order_123
                   status:
                     type: string
-                    enum: ["pending", "cancelling", "paid", "cancelled", "expired", "partially_refunded", "refunded"]
+                    enum:
+                      - pending
+                      - cancelling
+                      - paid
+                      - cancelled
+                      - expired
+                      - partially_refunded
+                      - refunded
+                    example: paid
                   client_name:
                     type: string
                     nullable: true
+                    example: Иван Иванов
                   client_comment:
                     type: string
                     nullable: true
                   is_sandbox:
                     type: boolean
+                    example: false
                   total_refunded:
                     type: string
+                    example: "0.00"
                   is_fully_refunded:
                     type: boolean
+                    example: false
                   kaspi_invoice_id:
                     type: string
-                  paid_at:
-                    type: string
-                    format: date-time
-                    nullable: true
+                    example: "13234689513"
                   items:
                     type: array
-                    description: Снимок товаров корзины при создании счёта
+                    description: Товары счёта (snapshot на момент создания). Пустой массив — организация без каталога или старый счёт.
                     items:
                       type: object
                       properties:
                         id:
                           type: integer
+                          description: ID позиции
+                          example: 1
                         invoice_id:
                           type: integer
+                          description: ID счёта
+                          example: 42
                         catalog_item_id:
                           type: integer
+                          nullable: true
+                          description: ID товара из каталога. null если товар удалён.
+                          example: 5
                         name:
                           type: string
+                          description: Название товара (snapshot)
+                          example: Coffee Latte
                         price:
                           type: string
+                          description: Цена за единицу (snapshot)
+                          example: "1800.00"
                         count:
                           type: integer
+                          description: Количество
+                          example: 2
                         unit_id:
                           type: integer
-                        original_price:
-                          type: string
-                          nullable: true
-                          description: "Каталожная цена, если переопределена кастомной price"
+                          description: ID единицы измерения
+                          example: 1
                         discount:
                           type: string
                           nullable: true
-                          description: "Скидка на строку"
+                          description: Скидка на строку
                   subtotal:
                     type: string
-                    description: "Сумма до скидок (появляется только при наличии скидки)"
+                    description: Сумма до скидок (появляется только при наличии скидки)
+                    example: "16500.00"
                   discount_sum:
                     type: string
-                    description: "Общая сумма скидки (появляется только при наличии скидки)"
+                    description: Общая сумма скидки (появляется только при наличии скидки)
+                    example: "1500.00"
                   discount_percentage:
                     type: string
-                    description: "Глобальный % скидки (появляется только если передан)"
+                    description: Глобальный % скидки (появляется только если передан)
+                    example: "10"
+                  paid_at:
+                    type: string
+                    format: date-time
+                    nullable: true
                   created_at:
                     type: string
                     format: date-time
         404:
           description: Счёт не найден
-  /invoices/{id}/cancel:
+  "/invoices/{id}/cancel":
     post:
       summary: Отменить счёт
-      description: "Отменяет счёт. Можно отменить только счета со статусом 'pending'."
+      description: Отменяет счёт со статусом pending. Sandbox → 200 (синхронно), Production → 202 (асинхронно через Kaspi).
       operationId: cancelInvoice
       parameters:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
       responses:
         200:
-          description: Счёт отменён
+          description: Счёт отменён (sandbox)
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Invoice cancelled successfully
+                  invoice:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 42
+                      status:
+                        type: string
+                        example: cancelled
+        202:
+          description: Отмена поставлена в очередь (production)
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Invoice cancellation queued
+                  invoice_id:
+                    type: integer
+                    example: 42
         400:
           description: Счёт нельзя отменить (не pending)
         404:
           description: Счёт не найден
-        503:
-          description: Kaspi сессия истекла
-  /invoices/{id}/refund:
+  "/invoices/{id}/refund":
     post:
       summary: Создать возврат
       description: Создаёт полный или частичный возврат по оплаченному счёту. Без amount — полный возврат.
@@ -313,12 +478,12 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
           description: ID счёта
       requestBody:
         content:
-          application/json:
+          "application/json":
             schema:
               type: object
               properties:
@@ -327,36 +492,63 @@ paths:
                   description: Сумма возврата (0.01-99999999.99). Если не указано — полный возврат.
                   minimum: 0.01
                   maximum: 99999999.99
+                  example: 5000
                 reason:
                   type: string
                   description: Причина возврата (макс 500 символов)
                   maxLength: 500
+                  example: Возврат товара
+                return_items:
+                  type: array
+                  description: "Конкретные позиции для возврата (для счетов с корзиной товаров). Формат: { catalog_item_id, count }"
+                  items:
+                    type: object
+                    properties:
+                      catalog_item_id:
+                        type: integer
+                        description: ID товара из каталога
+                      count:
+                        type: integer
+                        description: Количество
+                        minimum: 1
+                    required:
+                      - catalog_item_id
+                      - count
       responses:
         201:
           description: Возврат создан и поставлен в очередь
           content:
-            application/json:
+            "application/json":
               schema:
                 type: object
                 properties:
                   message:
                     type: string
+                    example: Refund queued for processing
                   refund:
                     type: object
                     properties:
                       id:
                         type: integer
+                        example: 5
                       invoice_id:
                         type: integer
+                        example: 42
                       amount:
                         type: string
+                        example: "5000.00"
                       reason:
                         type: string
+                        nullable: true
+                        example: Возврат товара
                       status:
                         type: string
-                        enum: ["pending", "processing", "completed", "failed"]
-                      initiated_by:
-                        type: string
+                        enum:
+                          - pending
+                          - processing
+                          - completed
+                          - failed
+                        example: pending
                       created_at:
                         type: string
                         format: date-time
@@ -365,44 +557,166 @@ paths:
                     properties:
                       id:
                         type: integer
+                        example: 42
                       amount:
                         type: string
+                        example: "15000.00"
                       total_refunded:
                         type: string
+                        example: "5000.00"
                       available_for_refund:
-                        type: string
+                        type: number
+                        description: Сумма доступная для возврата (число, не строка)
+                        example: 10000
                       pending_refund_amount:
                         type: number
+                        description: Сумма ожидающих возвратов (число, не строка)
+                        example: 0
         400:
           description: Нельзя сделать возврат (счёт не оплачен или полностью возвращён)
         404:
           description: Счёт не найден
-  /invoices/{id}/refunds:
+  "/invoices/{id}/refunds":
     get:
       summary: Возвраты по счёту
-      description: Список возвратов для конкретного счёта
+      description: Список возвратов для конкретного счёта с информацией о счёте
       operationId: listInvoiceRefunds
       parameters:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
           description: ID счёта
       responses:
         200:
-          description: Список возвратов
+          description: Список возвратов с информацией о счёте
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  invoice:
+                    type: object
+                    description: Информация о счёте
+                    properties:
+                      id:
+                        type: integer
+                        example: 42
+                      amount:
+                        type: string
+                        example: "15000.00"
+                      total_refunded:
+                        type: string
+                        example: "5000.00"
+                      available_for_refund:
+                        type: number
+                        example: 10000
+                      is_fully_refunded:
+                        type: boolean
+                        example: false
+                  refunds:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 5
+                        invoice_id:
+                          type: integer
+                          example: 42
+                        amount:
+                          type: string
+                          example: "5000.00"
+                        status:
+                          type: string
+                          enum:
+                            - pending
+                            - processing
+                            - completed
+                            - failed
+                          example: completed
+                        reason:
+                          type: string
+                          nullable: true
+                          example: Возврат товара
+                        items:
+                          type: array
+                          description: Позиции возврата
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: integer
+                              refund_id:
+                                type: integer
+                              invoice_item_id:
+                                type: integer
+                              catalog_item_id:
+                                type: integer
+                                nullable: true
+                              name:
+                                type: string
+                              price:
+                                type: string
+                              count:
+                                type: integer
+                              amount:
+                                type: string
+                        created_at:
+                          type: string
+                          format: date-time
+                  total:
+                    type: integer
+                    example: 1
         404:
           description: Счёт не найден
-  /invoices/status/check:
+  "/invoices/status/check":
     post:
-      summary: Проверка статусов
-      description: Принудительная проверка статуса всех pending-счетов организации
-      operationId: checkInvoiceStatuses
+      summary: Массовая проверка статусов
+      description: Массовая проверка статусов нескольких счетов за один запрос (async). Статусы обновляются асинхронно — получайте результат через GET /invoices/{id} или webhook `invoice.status_changed`.
+      operationId: bulkCheckInvoiceStatus
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: object
+              properties:
+                invoice_ids:
+                  type: array
+                  description: ID счетов для проверки (макс 100)
+                  maxItems: 100
+                  example:
+                    - 42
+                    - 43
+                    - 44
+                  items:
+                    type: integer
+              required:
+                - invoice_ids
       responses:
         200:
-          description: Проверка запущена
-  /refunds:
+          description: Задачи на обновление статусов поставлены в очередь
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Status check jobs dispatched
+                    description: Подтверждение постановки задач в очередь
+                  count:
+                    type: integer
+                    description: Количество поставленных задач
+                    example: 3
+        401:
+          description: Неверный API ключ
+        422:
+          description: Ошибка валидации
+  "/refunds":
     get:
       summary: Список возвратов
       description: Возвращает список всех возвратов с пагинацией и фильтрацией
@@ -410,59 +724,175 @@ paths:
       parameters:
         - name: page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 1
         - name: per_page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 10
             minimum: 1
             maximum: 100
-        - name: "status[]"
+        - name: status[]
           in: query
-          schema: 
+          schema:
             type: array
             items:
               type: string
-              enum: ["pending", "processing", "completed", "failed"]
+              enum:
+                - pending
+                - processing
+                - completed
+                - failed
           description: Фильтр по статусам
         - name: invoice_id
           in: query
-          schema: 
+          schema:
             type: integer
           description: Фильтр по ID счёта
         - name: date_from
           in: query
-          schema: 
+          schema:
             type: string
             format: date
         - name: date_to
           in: query
-          schema: 
+          schema:
             type: string
             format: date
       responses:
         200:
           description: Список возвратов
-  /refunds/{refund_id}:
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 5
+                        invoice_id:
+                          type: integer
+                          example: 42
+                        amount:
+                          type: string
+                          example: "5000.00"
+                        kaspi_refund_id:
+                          type: string
+                          nullable: true
+                          description: ID возврата в Kaspi
+                          example: REF-123
+                        kaspi_status:
+                          type: string
+                          nullable: true
+                          description: Статус в Kaspi
+                          example: completed
+                        status:
+                          type: string
+                          example: completed
+                        reason:
+                          type: string
+                          nullable: true
+                          example: Возврат товара
+                        initiated_by:
+                          type: string
+                          description: Кем инициирован (api, dashboard)
+                          example: api
+                        error_message:
+                          type: string
+                          nullable: true
+                          description: Сообщение об ошибке (для failed)
+                        created_at:
+                          type: string
+                          format: date-time
+                        invoice:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                              example: 42
+                            external_order_id:
+                              type: string
+                              nullable: true
+                              example: order_123
+                            amount:
+                              type: string
+                              example: "15000.00"
+                            status:
+                              type: string
+                              example: paid
+                            kaspi_invoice_id:
+                              type: string
+                              nullable: true
+                              example: "13234689513"
+                        items:
+                          type: array
+                          description: Позиции возврата (пусто если возврат по сумме)
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: integer
+                                example: 1
+                              refund_id:
+                                type: integer
+                                example: 5
+                              invoice_item_id:
+                                type: integer
+                                example: 10
+                              catalog_item_id:
+                                type: integer
+                                nullable: true
+                                example: 3
+                              name:
+                                type: string
+                                example: Coffee Latte
+                              price:
+                                type: string
+                                example: "1800.00"
+                              count:
+                                type: integer
+                                example: 1
+                              amount:
+                                type: string
+                                example: "1800.00"
+                  meta:
+                    type: object
+                    properties:
+                      current_page:
+                        type: integer
+                        example: 1
+                      last_page:
+                        type: integer
+                        example: 3
+                      per_page:
+                        type: integer
+                        example: 10
+                      total:
+                        type: integer
+                        example: 25
+  "/refunds/{id}":
     get:
       summary: Получить возврат
       description: Получить детали конкретного возврата по ID
       operationId: getRefund
       parameters:
-        - name: refund_id
+        - name: id
           in: path
           required: true
           schema:
             type: integer
-          description: ID возврата
       responses:
         200:
-          description: Данные возврата
+          description: Детали возврата
           content:
-            application/json:
+            "application/json":
               schema:
                 type: object
                 properties:
@@ -475,29 +905,102 @@ paths:
                   amount:
                     type: string
                     example: "5000.00"
+                  kaspi_refund_id:
+                    type: string
+                    nullable: true
+                    description: ID возврата в Kaspi
+                    example: REF-123
+                  kaspi_status:
+                    type: string
+                    nullable: true
+                    description: Статус в Kaspi
+                    example: completed
+                  status:
+                    type: string
+                    example: completed
                   reason:
                     type: string
                     nullable: true
-                    example: "Возврат товара"
-                  status:
+                    example: Возврат товара
+                  initiated_by:
                     type: string
-                    enum: ["pending", "processing", "completed", "failed"]
-                    example: "completed"
+                    description: Кем инициирован
+                    example: api
+                  error_message:
+                    type: string
+                    nullable: true
                   created_at:
                     type: string
                     format: date-time
+                  invoice:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 42
+                      external_order_id:
+                        type: string
+                        nullable: true
+                        example: order_123
+                      amount:
+                        type: string
+                        example: "15000.00"
+                      total_refunded:
+                        type: string
+                        example: "5000.00"
+                      is_fully_refunded:
+                        type: boolean
+                        example: false
+                      status:
+                        type: string
+                        example: paid
+                      kaspi_invoice_id:
+                        type: string
+                        nullable: true
+                        example: "13234689513"
+                  items:
+                    type: array
+                    description: Позиции возврата
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        refund_id:
+                          type: integer
+                          example: 5
+                        invoice_item_id:
+                          type: integer
+                          example: 10
+                        catalog_item_id:
+                          type: integer
+                          nullable: true
+                          example: 3
+                        name:
+                          type: string
+                          example: Coffee Latte
+                        price:
+                          type: string
+                          example: "1800.00"
+                        count:
+                          type: integer
+                          example: 1
+                        amount:
+                          type: string
+                          example: "1800.00"
         404:
           description: Возврат не найден
-  /catalog/units:
+  "/catalog/units":
     get:
       summary: Единицы измерения
-      description: Возвращает список доступных единиц измерения для товаров каталога
+      description: Получить список доступных единиц измерения для товаров каталога. Рекомендуется получить перед созданием товаров, чтобы использовать корректные unit_id.
       operationId: listCatalogUnits
       responses:
         200:
           description: Список единиц измерения
           content:
-            application/json:
+            "application/json":
               schema:
                 type: object
                 properties:
@@ -508,13 +1011,19 @@ paths:
                       properties:
                         id:
                           type: integer
+                          description: ID единицы измерения (используется в unit_id при создании товара)
+                          example: 1
                         name:
                           type: string
-                          example: "шт"
+                          description: Название на русском языке
+                          example: штука
                         name_kaz:
                           type: string
-                          example: "дана"
-  /catalog:
+                          description: Название на казахском языке
+                          example: дана
+        401:
+          description: Неверный API ключ
+  "/catalog":
     get:
       summary: Список товаров каталога
       description: Возвращает товары каталога с поиском и фильтрацией. Только для организаций с включённым каталогом.
@@ -522,46 +1031,94 @@ paths:
       parameters:
         - name: page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 1
         - name: per_page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 50
             minimum: 1
             maximum: 200
         - name: search
           in: query
-          schema: 
+          schema:
             type: string
           description: Поиск по названию
         - name: barcode
           in: query
-          schema: 
+          schema:
             type: string
           description: Фильтр по штрихкоду
         - name: first_char
           in: query
-          schema: 
+          schema:
             type: string
           description: Фильтр по первой букве
       responses:
         200:
           description: Список товаров каталога
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        name:
+                          type: string
+                          example: Coffee Latte
+                        selling_price:
+                          type: number
+                          example: 1800
+                        unit_id:
+                          type: integer
+                          example: 1
+                        barcode:
+                          type: string
+                          nullable: true
+                          example: "4901234567890"
+                        image_url:
+                          type: string
+                          nullable: true
+                          example: https://example.com/images/coffee.png
+                        status:
+                          type: string
+                          example: active
+                  meta:
+                    type: object
+                    properties:
+                      current_page:
+                        type: integer
+                        example: 1
+                      last_page:
+                        type: integer
+                        example: 2
+                      per_page:
+                        type: integer
+                        example: 50
+                      total:
+                        type: integer
+                        example: 75
         400:
           description: Каталог не включён для организации
         404:
           description: Верифицированная организация не найдена
     post:
       summary: Создать товары каталога
-      description: "Создаёт один или несколько товаров каталога (пакетная операция, 1-50 товаров)"
+      description: Создаёт один или несколько товаров каталога (пакетная операция, 1-50 товаров)
       operationId: createCatalogItems
       requestBody:
         required: true
         content:
-          application/json:
+          "application/json":
             schema:
               type: object
               properties:
@@ -577,50 +1134,94 @@ paths:
                         type: string
                         description: Название товара
                         maxLength: 255
+                        example: Coffee Latte
                       selling_price:
                         type: number
                         description: Цена
                         minimum: 0.01
+                        example: 1800
                       unit_id:
                         type: integer
                         description: ID единицы измерения
+                        example: 1
                       image_id:
                         type: string
                         format: uuid
                         description: ID изображения из upload-image
-                    required: ["name", "selling_price", "unit_id"]
-              required: ["items"]
+                      barcode:
+                        type: string
+                        nullable: true
+                        description: Штрихкод товара (макс 50 символов)
+                        maxLength: 50
+                    required:
+                      - name
+                      - selling_price
+                      - unit_id
+              required:
+                - items
       responses:
-        201:
-          description: "Товары созданы, синхронизация запланирована"
+        202:
+          description: Товары созданы со статусом pending, синхронизация запланирована
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    description: Созданные товары со статусом pending
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 10
+                        name:
+                          type: string
+                          example: Coffee Latte
+                        selling_price:
+                          type: number
+                          example: 1800
+                        unit_id:
+                          type: integer
+                          example: 1
+                        barcode:
+                          type: string
+                          nullable: true
+                        status:
+                          type: string
+                          enum:
+                            - pending
+                          description: Всегда pending при создании
         422:
           description: Ошибка валидации
         502:
           description: Ошибка Kaspi API
         503:
           description: Kaspi сессия истекла
-  /catalog/upload-image:
+  "/catalog/upload-image":
     post:
       summary: Загрузить изображение товара
-      description: "Загружает изображение для товара каталога. Изображения оптимизируются (макс 512x512, PNG) и дедуплицируются по MD5."
+      description: Загружает изображение для товара каталога. Изображения оптимизируются (макс 512x512, PNG) и дедуплицируются по MD5.
       operationId: uploadCatalogImage
       requestBody:
         required: true
         content:
-          multipart/form-data:
+          "multipart/form-data":
             schema:
               type: object
               properties:
                 image:
                   type: string
                   format: binary
-                  description: "Файл изображения (jpg, png, gif, webp), макс 10 МБ"
-              required: ["image"]
+                  description: Файл изображения (jpg, png, gif, webp), макс 10 МБ
+              required:
+                - image
       responses:
         200:
           description: Изображение загружено
           content:
-            application/json:
+            "application/json":
               schema:
                 type: object
                 properties:
@@ -628,7 +1229,7 @@ paths:
                     type: string
                     format: uuid
                     description: ID изображения для использования при создании/обновлении товара
-  /catalog/{id}:
+  "/catalog/{id}":
     patch:
       summary: Обновить товар каталога
       description: Обновляет товар каталога. Все поля опциональны — обновляются только переданные.
@@ -637,23 +1238,26 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
           description: ID товара
       requestBody:
         content:
-          application/json:
+          "application/json":
             schema:
               type: object
               properties:
                 name:
                   type: string
                   maxLength: 255
+                  example: Coffee Latte (updated)
                 selling_price:
                   type: number
                   minimum: 0.01
+                  example: 2000
                 unit_id:
                   type: integer
+                  example: 1
                 image_id:
                   type: string
                   format: uuid
@@ -661,9 +1265,26 @@ paths:
                 is_image_deleted:
                   type: boolean
                   description: Установить true для удаления изображения
+                barcode:
+                  type: string
+                  nullable: true
+                  description: Штрихкод товара (макс 50 символов)
+                  maxLength: 50
       responses:
         200:
-          description: "Товар обновлён, синхронизация запланирована"
+          description: Обновление товара (sandbox — синхронно)
+        202:
+          description: Обновление товара поставлено в очередь (production)
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Catalog item update queued
+                  catalog_item_id:
+                    type: integer
         404:
           description: Товар не найден
         422:
@@ -680,39 +1301,49 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
           description: ID товара
       responses:
         200:
-          description: "Удаление инициировано, синхронизация запланирована"
+          description: Удаление товара (sandbox — синхронно)
+        202:
+          description: Удаление товара поставлено в очередь (production)
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Catalog item deletion queued
+                  catalog_item_id:
+                    type: integer
         404:
           description: Товар не найден
-        502:
-          description: Ошибка Kaspi API
-        503:
-          description: Kaspi сессия истекла
-  /subscriptions:
+  "/subscriptions":
     post:
       summary: Создать подписку
-      description: Создаёт автоматическую подписку с повторяющимися счетами по расписанию
+      description: "Создаёт автоматическую подписку с повторяющимися счетами по расписанию. Поддерживает два режима: без корзины (передать amount) или с корзиной (передать cart_items, сумма рассчитывается автоматически)."
       operationId: createSubscription
       requestBody:
         required: true
         content:
-          application/json:
+          "application/json":
             schema:
               type: object
               properties:
                 phone_number:
                   type: string
                   description: "Телефон клиента (формат: 8XXXXXXXXXX)"
-                  pattern: "^8[0-9]{10}$"
+                  pattern: ^8[0-9]{10}$
+                  example: "87001234567"
                 amount:
                   type: number
-                  description: Сумма (100 - 1000000)
+                  description: Сумма (100 - 1000000). Игнорируется при наличии cart_items.
                   minimum: 100
                   maximum: 1000000
+                  example: 5000
                 billing_period:
                   type: string
                   enum:
@@ -728,18 +1359,22 @@ paths:
                   description: День периода (1-28)
                   minimum: 1
                   maximum: 28
+                  example: 1
                 description:
                   type: string
                   description: Описание (макс 255)
                   maxLength: 255
+                  example: Ежемесячная подписка
                 subscriber_name:
                   type: string
                   description: Имя подписчика (макс 255)
                   maxLength: 255
+                  example: Иван Иванов
                 external_subscriber_id:
                   type: string
                   description: Ваш ID подписчика (макс 255)
                   maxLength: 255
+                  example: CLIENT-001
                 started_at:
                   type: string
                   format: date
@@ -762,27 +1397,75 @@ paths:
                 metadata:
                   type: object
                   description: Произвольные данные в формате JSON
-                webhook_id:
-                  type: integer
-                  description: ID webhook из личного кабинета
                 cart_items:
                   type: array
-                  description: "Корзина товаров (для организаций с каталогом, пересчитывает amount)"
+                  description: Товары корзины (только для организаций с каталогом). При наличии amount игнорируется.
                   items:
                     type: object
                     properties:
                       catalog_item_id:
                         type: integer
+                        description: ID товара из каталога (поле id из GET /catalog)
                       count:
                         type: integer
+                        description: Количество
                         minimum: 1
                     required:
                       - catalog_item_id
                       - count
-              required: ["phone_number", "amount", "billing_period"]
+              required:
+                - phone_number
+                - billing_period
       responses:
         201:
           description: Подписка создана
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  subscription:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 10
+                      phone_number:
+                        type: string
+                        example: "87001234567"
+                      amount:
+                        type: string
+                        example: "5000.00"
+                      billing_period:
+                        type: string
+                        example: monthly
+                      billing_day:
+                        type: integer
+                        example: 1
+                      status:
+                        type: string
+                        example: active
+                      description:
+                        type: string
+                        nullable: true
+                        example: Ежемесячная подписка
+                      subscriber_name:
+                        type: string
+                        nullable: true
+                        example: Иван Иванов
+                      external_subscriber_id:
+                        type: string
+                        nullable: true
+                        example: CLIENT-001
+                      next_billing_at:
+                        type: string
+                        format: date-time
+                      is_sandbox:
+                        type: boolean
+                        example: false
+                      created_at:
+                        type: string
+                        format: date-time
         403:
           description: Организация не верифицирована
         422:
@@ -793,7 +1476,7 @@ paths:
       parameters:
         - name: page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 1
         - name: per_page
@@ -805,22 +1488,79 @@ paths:
           in: query
           schema:
             type: string
-            enum: ["active", "paused", "cancelled", "completed", "expired"]
+            enum:
+              - active
+              - paused
+              - cancelled
+              - expired
           description: Фильтр по статусу
         - name: phone_number
           in: query
-          schema: 
+          schema:
             type: string
           description: Фильтр по телефону
         - name: external_subscriber_id
           in: query
-          schema: 
+          schema:
             type: string
           description: Фильтр по ID подписчика
       responses:
         200:
           description: Список подписок
-  /subscriptions/{id}:
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 10
+                        phone_number:
+                          type: string
+                          example: "87001234567"
+                        subscriber_name:
+                          type: string
+                          nullable: true
+                          example: Иван Иванов
+                        amount:
+                          type: string
+                          example: "5000.00"
+                        billing_period:
+                          type: string
+                          example: monthly
+                        status:
+                          type: string
+                          example: active
+                        next_billing_at:
+                          type: string
+                          format: date-time
+                        is_sandbox:
+                          type: boolean
+                          example: false
+                        created_at:
+                          type: string
+                          format: date-time
+                  meta:
+                    type: object
+                    properties:
+                      current_page:
+                        type: integer
+                        example: 1
+                      last_page:
+                        type: integer
+                        example: 3
+                      per_page:
+                        type: integer
+                        example: 10
+                      total:
+                        type: integer
+                        example: 28
+  "/subscriptions/{id}":
     get:
       summary: Получить подписку
       description: Возвращает подписку со статистикой и информацией о последнем платеже
@@ -829,57 +1569,151 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
       responses:
         200:
           description: Данные подписки
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  subscription:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 10
+                      phone_number:
+                        type: string
+                        example: "87001234567"
+                      subscriber_name:
+                        type: string
+                        nullable: true
+                        example: Иван Иванов
+                      external_subscriber_id:
+                        type: string
+                        nullable: true
+                        example: CLIENT-001
+                      amount:
+                        type: string
+                        example: "5000.00"
+                      billing_period:
+                        type: string
+                        example: monthly
+                      billing_day:
+                        type: integer
+                        example: 1
+                      status:
+                        type: string
+                        example: active
+                      description:
+                        type: string
+                        nullable: true
+                        example: Ежемесячная подписка
+                      next_billing_at:
+                        type: string
+                        format: date-time
+                      failed_attempts:
+                        type: integer
+                        example: 0
+                      in_grace_period:
+                        type: boolean
+                        example: false
+                      is_sandbox:
+                        type: boolean
+                        example: false
+                      metadata:
+                        type: object
+                        nullable: true
+                      created_at:
+                        type: string
+                        format: date-time
+                  stats:
+                    type: object
+                    properties:
+                      total_payments:
+                        type: integer
+                        example: 6
+                      successful_payments:
+                        type: integer
+                        example: 5
+                      failed_payments:
+                        type: integer
+                        example: 0
+                      total_collected:
+                        type: string
+                        example: "25000.00"
+                  last_payment:
+                    type: object
+                    nullable: true
+                    properties:
+                      amount:
+                        type: string
+                        example: "5000.00"
+                      status:
+                        type: string
+                        example: paid
+                      paid_at:
+                        type: string
+                        format: date-time
         404:
           description: Подписка не найдена
     put:
       summary: Обновить подписку
-      description: Обновляет параметры подписки. Все поля опциональны.
+      description: Обновляет параметры подписки. Все поля опциональны. При передаче cart_items сумма пересчитывается автоматически.
       operationId: updateSubscription
       parameters:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
       requestBody:
         content:
-          application/json:
+          "application/json":
             schema:
               type: object
               properties:
                 amount:
                   type: number
+                  example: 7500
                 billing_day:
                   type: integer
+                  example: 15
                 description:
                   type: string
+                  example: Обновлённая подписка
                 subscriber_name:
                   type: string
+                  example: Иван Иванов
                 external_subscriber_id:
                   type: string
+                  example: CLIENT-001
                 max_retry_attempts:
                   type: integer
+                  example: 3
                 retry_interval_hours:
                   type: integer
+                  example: 6
                 grace_period_days:
                   type: integer
+                  example: 3
                 metadata:
                   type: object
                 cart_items:
                   type: array
-                  description: "Корзина товаров (пересчитывает amount)"
+                  description: Новая корзина товаров. Сумма пересчитывается автоматически.
                   items:
                     type: object
                     properties:
                       catalog_item_id:
                         type: integer
+                        description: ID товара из каталога (поле id из GET /catalog)
                       count:
                         type: integer
+                        description: Количество
                         minimum: 1
                     required:
                       - catalog_item_id
@@ -887,11 +1721,31 @@ paths:
       responses:
         200:
           description: Подписка обновлена
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Subscription updated
+                  subscription:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 10
+                      amount:
+                        type: string
+                        example: "7500.00"
+                      status:
+                        type: string
+                        example: active
         404:
           description: Подписка не найдена
         422:
           description: Ошибка валидации
-  /subscriptions/{id}/pause:
+  "/subscriptions/{id}/pause":
     post:
       summary: Поставить на паузу
       description: Временно приостанавливает активную подписку
@@ -900,16 +1754,33 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
       responses:
         200:
           description: Подписка приостановлена
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Subscription paused
+                  subscription:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 10
+                      status:
+                        type: string
+                        example: paused
         400:
           description: Нельзя приостановить (неверный статус)
         404:
           description: Подписка не найдена
-  /subscriptions/{id}/resume:
+  "/subscriptions/{id}/resume":
     post:
       summary: Возобновить
       description: Возобновляет приостановленную подписку
@@ -918,16 +1789,33 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
       responses:
         200:
           description: Подписка возобновлена
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Subscription resumed
+                  subscription:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 10
+                      status:
+                        type: string
+                        example: active
         400:
           description: Нельзя возобновить (неверный статус)
         404:
           description: Подписка не найдена
-  /subscriptions/{id}/cancel:
+  "/subscriptions/{id}/cancel":
     post:
       summary: Отменить подписку
       description: Отменяет подписку без возможности восстановления
@@ -936,39 +1824,138 @@ paths:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
       responses:
         200:
           description: Подписка отменена
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Subscription cancelled
+                  subscription:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 10
+                      status:
+                        type: string
+                        example: cancelled
         400:
           description: Нельзя отменить (неверный статус)
         404:
           description: Подписка не найдена
-  /subscriptions/{id}/invoices:
+  "/subscriptions/{id}/invoices":
     get:
       summary: Счета подписки
-      description: "Список счетов, созданных подпиской"
+      description: Список счетов, созданных подпиской
       operationId: listSubscriptionInvoices
       parameters:
         - name: id
           in: path
           required: true
-          schema: 
+          schema:
             type: integer
         - name: page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 1
         - name: per_page
           in: query
-          schema: 
+          schema:
             type: integer
             default: 20
       responses:
         200:
           description: Список счетов подписки
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        invoice_id:
+                          type: integer
+                          description: ID связанного счёта
+                          example: 42
+                        billing_period_start:
+                          type: string
+                          format: date
+                          example: "2026-02-01"
+                        billing_period_end:
+                          type: string
+                          format: date
+                          example: "2026-02-28"
+                        billing_period_label:
+                          type: string
+                          example: "01.02.2026 — 28.02.2026"
+                        amount:
+                          type: string
+                          example: "5000.00"
+                        attempt_number:
+                          type: integer
+                          description: Номер попытки оплаты
+                          example: 1
+                        status:
+                          type: string
+                          example: paid
+                        status_label:
+                          type: string
+                          example: Оплачен
+                        status_color:
+                          type: string
+                          example: green
+                        paid_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                          example: "2026-02-01T10:30:00+00:00"
+                        failure_reason:
+                          type: string
+                          nullable: true
+                          description: Причина неудачи (для failed платежей)
+                        invoice:
+                          type: object
+                          description: Связанный счёт
+                          properties:
+                            id:
+                              type: integer
+                              example: 42
+                            kaspi_invoice_id:
+                              type: string
+                              nullable: true
+                              example: INV-123456
+                            status:
+                              type: string
+                              example: paid
+                        created_at:
+                          type: string
+                          format: date-time
+                  meta:
+                    type: object
+                    properties:
+                      current_page:
+                        type: integer
+                        example: 1
+                      total:
+                        type: integer
+                        example: 3
+                      per_page:
+                        type: integer
+                        example: 20
         404:
           description: Подписка не найдена
 components:

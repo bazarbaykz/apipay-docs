@@ -30,12 +30,28 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 |-------|------|----------|-------------|
 | `amount` | number | No | Partial refund amount (0.01-99999999.99). Omit for full refund. |
 | `reason` | string | No | Reason for refund (max 500 chars) |
+| `return_items` | array | No | Array of items for item-level refund from cart. Each element: `{ catalog_item_id, count }` |
+
+### Item-Level Refund (Cart)
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "return_items": [
+      { "catalog_item_id": 101, "count": 2 },
+      { "catalog_item_id": 205, "count": 1 }
+    ],
+    "reason": "Partial item return"
+  }'
+```
 
 ### Response
 
 ```json
 {
-  "message": "Refund initiated successfully",
+  "message": "Refund queued for processing",
   "refund": {
     "id": 1,
     "invoice_id": 42,
@@ -50,7 +66,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
     "amount": "10000.00",
     "status": "partially_refunded",
     "total_refunded": "5000.00",
-    "available_for_refund": "5000.00"
+    "pending_refund_amount": 5000,
+    "available_for_refund": 5000
   }
 }
 ```
@@ -75,7 +92,32 @@ curl https://bpapi.bazarbay.site/api/v1/refunds/5 \
   "amount": "5000.00",
   "reason": "Customer return",
   "status": "completed",
-  "created_at": "2025-01-31T12:00:00Z"
+  "kaspi_refund_id": "REF-123456",
+  "kaspi_status": "completed",
+  "initiated_by": "api",
+  "error_message": null,
+  "created_at": "2025-01-31T12:00:00Z",
+  "invoice": {
+    "id": 42,
+    "external_order_id": "ORDER-100",
+    "amount": "10000.00",
+    "total_refunded": "5000.00",
+    "is_fully_refunded": false,
+    "status": "partially_refunded",
+    "kaspi_invoice_id": "KSP-789"
+  },
+  "items": [
+    {
+      "id": 1,
+      "refund_id": 5,
+      "invoice_item_id": 10,
+      "catalog_item_id": 101,
+      "name": "Item A",
+      "price": "2500.00",
+      "count": 2,
+      "amount": "5000.00"
+    }
+  ]
 }
 ```
 
@@ -98,6 +140,54 @@ curl "https://bpapi.bazarbay.site/api/v1/refunds?page=1&per_page=20&status[]=com
 | `invoice_id` | integer | Filter by invoice ID |
 | `date_from` | string | Start date (YYYY-MM-DD) |
 | `date_to` | string | End date (YYYY-MM-DD) |
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "id": 5,
+      "invoice_id": 42,
+      "amount": "5000.00",
+      "reason": "Customer return",
+      "status": "completed",
+      "kaspi_refund_id": "REF-123456",
+      "kaspi_status": "completed",
+      "initiated_by": "api",
+      "error_message": null,
+      "created_at": "2025-01-31T12:00:00Z",
+      "invoice": {
+        "id": 42,
+        "external_order_id": "ORDER-100",
+        "amount": "10000.00",
+        "total_refunded": "5000.00",
+        "is_fully_refunded": false,
+        "status": "partially_refunded",
+        "kaspi_invoice_id": "KSP-789"
+      },
+      "items": [
+        {
+          "id": 1,
+          "refund_id": 5,
+          "invoice_item_id": 10,
+          "catalog_item_id": 101,
+          "name": "Item A",
+          "price": "2500.00",
+          "count": 2,
+          "amount": "5000.00"
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "current_page": 1,
+    "last_page": 3,
+    "per_page": 10,
+    "total": 25
+  }
+}
+```
 
 ## List Invoice Refunds
 

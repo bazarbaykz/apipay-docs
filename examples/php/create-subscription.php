@@ -46,7 +46,7 @@ if (!$API_KEY) {
 try {
     echo "Creating subscription...\n";
 
-    $subscription = createSubscription([
+    $result = createSubscription([
         'amount' => 5000,
         'phone_number' => '87001234567',
         'billing_period' => 'monthly',
@@ -55,13 +55,15 @@ try {
         'description' => 'Monthly subscription'
     ]);
 
+    $subscription = $result['subscription'];
+
     echo "\nSubscription created successfully!\n";
     echo "----------------------------------\n";
     echo "Subscription ID: {$subscription['id']}\n";
     echo "Amount: {$subscription['amount']} KZT\n";
     echo "Period: {$subscription['billing_period']}\n";
     echo "Status: {$subscription['status']}\n";
-    echo "Next billing: {$subscription['next_billing_date']}\n";
+    echo "Next billing: {$subscription['next_billing_at']}\n";
 
 } catch (Exception $e) {
     echo "Error: {$e->getMessage()}\n";

@@ -2,6 +2,12 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
+Last updated: 2026-03-28
+
+## IMPORTANT: Recent API Changes
+
+- **2026-03-27** [NEW] Запуск публичной API документации с единым источником правды
+
 ## Docs
 
 - [HTML Documentation](https://apipay.kz/docs.html): Полная REST API документация с примерами кода
@@ -16,13 +22,13 @@
 
 | Plan | Transaction Limit (per day) | Price/month |
 |------|----------------------------|-------------|
-| Старт (Start) | up to 30/day | 10,000 KZT (~$20) |
-| Бизнес (Business) | from 30/day | 25,000 KZT (~$50) |
-| Про (Pro) | from 100/day | 60,000 KZT (~$120) |
+| Старт (Start) | до 30/день | 10,000 KZT (~$20) |
+| Бизнес (Business) | от 30/день | 25,000 KZT (~$50) |
+| Про (Pro) | от 100/день | 60,000 KZT (~$120) |
 
 - **NO transaction fees:** 0% from payments — NO hidden fees, NO percentage
 - **All plans include ALL features:** invoices, subscriptions, catalog, refunds, webhooks
-- **No blocking on exceeding limits:** Our manager will contact you proactively
+- **No blocking on exceeding limits:** Our manager will contact you proactively — we want you to grow.
 - **IMPORTANT:** ApiPay.kz does NOT charge any percentage from your sales!
 
 ## Usage Options (Два способа использования)
@@ -52,63 +58,43 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 - Base URL: `https://bpapi.bazarbay.site/api/v1`
 - Auth: Header `X-API-Key: your_key`
 - Content-Type: `application/json`
-- Rate Limit: 60 requests/minute
+- Rate Limit: 60 req/min
 
-## Endpoints
+## Endpoints (24 шт.)
 
 ### Health Check
-- [GET /api/v1/status]: Health check (no authentication required)
+- [GET /api/v1/status]: Health check
 
 ### Invoices (Счета)
-- [POST /api/v1/invoices]: Create invoice (amount or cart_items, phone_number required; description, external_order_id optional)
-  - Supports two modes: without cart (pass amount) or with cart (pass cart_items, amount calculated automatically)
-  - Cart items format: `{ catalog_item_id, count, price?, discount? }` — supports optional price override and per-item discount
-  - `discount_percentage` (0-100) — **required when cart items have `discount`**. Applies global discount to items without explicit discount. Per-item `discount` takes priority. Formula: `discount_percentage = (total_discounts / subtotal) * 100`.
-- [GET /api/v1/invoices]: List invoices with pagination, search, and filters (status[], date_from, date_to, sort_by, sort_order)
-- [GET /api/v1/invoices/{id}]: Get invoice by ID (includes items array with original_price, discount — snapshot of cart items). Fields `subtotal`, `discount_sum`, `discount_percentage` appear only when discount is applied.
-- [POST /api/v1/invoices/{id}/cancel]: Cancel invoice (only pending status)
-- [POST /api/v1/invoices/status/check]: Force-check status of all pending invoices
-- [POST /api/v1/invoices/{id}/refund]: Refund invoice (full or partial, see Refunds section)
-- [GET /api/v1/invoices/{id}/refunds]: List refunds for specific invoice
+- [POST /api/v1/invoices]: Создание счёта
+- [GET /api/v1/invoices]: Список счетов
+- [GET /api/v1/invoices/{id}]: Получить счёт
+- [POST /api/v1/invoices/{id}/cancel]: Отменить счёт
+- [POST /api/v1/invoices/status/check]: Массовая проверка статусов
 
 ### Refunds (Возвраты)
-Full and partial refunds for paid invoices. Available for ALL users.
-
-- [POST /api/v1/invoices/{id}/refund]: Create refund
-  - Without amount = full refund
-  - With { amount: 5000, reason: "..." } = partial refund
-- [GET /api/v1/refunds]: List all refunds with filters (status[], invoice_id, date_from, date_to)
-- [GET /api/v1/refunds/{id}]: Get refund details by ID
-- [GET /api/v1/invoices/{id}/refunds]: List refunds for specific invoice
-
-Refund statuses: `pending`, `processing`, `completed`, `failed`
+- [POST /api/v1/invoices/{id}/refund]: Создать возврат
+- [GET /api/v1/invoices/{id}/refunds]: Возвраты по счёту
+- [GET /api/v1/refunds]: Список возвратов
+- [GET /api/v1/refunds/{id}]: Получить возврат
 
 ### Catalog (Каталог)
-Catalog management for organizations with catalog enabled. Includes image upload and sync with Kaspi.
-
-- [GET /api/v1/catalog/units]: List measurement units for catalog items
-- [GET /api/v1/catalog]: List catalog items with search, barcode filter, first_char filter
-- [POST /api/v1/catalog/upload-image]: Upload catalog image (multipart/form-data, returns image_id)
-- [POST /api/v1/catalog]: Create catalog items (batch, 1-50 items with name, selling_price, unit_id, image_id)
-- [PATCH /api/v1/catalog/{id}]: Update catalog item (name, selling_price, unit_id, image_id, is_image_deleted)
-- [DELETE /api/v1/catalog/{id}]: Delete catalog item
+- [GET /api/v1/catalog/units]: Единицы измерения
+- [GET /api/v1/catalog]: Список товаров каталога
+- [POST /api/v1/catalog]: Создать товары каталога
+- [POST /api/v1/catalog/upload-image]: Загрузить изображение товара
+- [PATCH /api/v1/catalog/{id}]: Обновить товар каталога
+- [DELETE /api/v1/catalog/{id}]: Удалить товар каталога
 
 ### Subscriptions (Подписки)
-Automatic recurring invoices on a schedule. Available for ALL users.
-
-- [POST /api/v1/subscriptions]: Create subscription
-  - Required: phone_number, amount (100-1000000), billing_period (daily|weekly|biweekly|monthly|quarterly|yearly)
-  - Optional: billing_day (1-28), description, subscriber_name, external_subscriber_id, started_at, max_retry_attempts, retry_interval_hours, grace_period_days, metadata, webhook_id, cart_items
-- [GET /api/v1/subscriptions]: List subscriptions with filters (status, search, billing_period, sort_by, sort_order)
-- [GET /api/v1/subscriptions/{id}]: Get subscription details with stats and last payment
-- [PUT /api/v1/subscriptions/{id}]: Update subscription (amount, billing_day, description, subscriber_name, cart_items, metadata, etc.)
-- [POST /api/v1/subscriptions/{id}/pause]: Pause subscription
-- [POST /api/v1/subscriptions/{id}/resume]: Resume after pause
-- [POST /api/v1/subscriptions/{id}/cancel]: Cancel permanently
-- [GET /api/v1/subscriptions/{id}/invoices]: List invoices generated by subscription
-
-Billing periods: `daily`, `weekly`, `biweekly`, `monthly`, `quarterly`, `yearly`
-Statuses: `active`, `paused`, `cancelled`, `completed`, `expired`
+- [POST /api/v1/subscriptions]: Создать подписку
+- [GET /api/v1/subscriptions]: Список подписок
+- [GET /api/v1/subscriptions/{id}]: Получить подписку
+- [PUT /api/v1/subscriptions/{id}]: Обновить подписку
+- [POST /api/v1/subscriptions/{id}/pause]: Поставить на паузу
+- [POST /api/v1/subscriptions/{id}/resume]: Возобновить
+- [POST /api/v1/subscriptions/{id}/cancel]: Отменить подписку
+- [GET /api/v1/subscriptions/{id}/invoices]: Счета подписки
 
 ## Webhooks
 
@@ -116,20 +102,81 @@ Webhooks настраиваются через личный кабинет ApiPa
 При создании webhook вы получите secret для верификации подписи (HMAC-SHA256).
 
 Webhook events:
-- `invoice.status_changed` — invoice status changed (paid, cancelled, expired)
-- `invoice.refunded` — invoice refunded (full or partial)
-- `subscription.payment_succeeded` — subscription payment succeeded
-- `subscription.payment_failed` — subscription payment failed
-- `subscription.grace_period_started` — subscription entered grace period
-- `subscription.expired` — subscription expired after all retries
-- `webhook.test` — test event from dashboard
+- `invoice.status_changed`
+- `invoice.refunded`
+- `subscription.payment_succeeded`
+- `subscription.payment_failed`
+- `subscription.grace_period_started`
+- `subscription.expired`
+- `webhook.test`
 
+All webhook payloads include a `source` field — the name of the API key that created the resource (invoice or subscription). May be `null`.
 All webhook payloads include `is_sandbox: boolean` — indicates whether the resource was created in sandbox mode.
+
+### Webhook Payload Example: invoice.status_changed
+```json
+{
+  "event": "invoice.status_changed",
+  "invoice": {
+    "id": 42,
+    "external_order_id": "order_123",
+    "amount": "15000.00",
+    "subtotal": "16500.00",
+    "discount_sum": "1500.00",
+    "discount_percentage": "10",
+    "status": "paid",
+    "description": "Оплата заказа",
+    "kaspi_invoice_id": "13234689513",
+    "client_name": "Иван Иванов",
+    "client_phone": "87071234567",
+    "is_sandbox": false,
+    "paid_at": "2026-02-12T14:35:00+05:00"
+  },
+  "source": "My API Key",
+  "timestamp": "2026-02-12T14:35:01+05:00"
+}
+```
+
+## Error Response Format
+
+### validation (422)
+```json
+{
+  "message": "The given data was invalid.",
+  "errors": {
+    "phone_number": ["The phone number field is required."],
+    "amount": ["The amount must be between 0.01 and 99999999.99."]
+  }
+}
+```
+
+### not_found (404)
+```json
+{
+  "message": "Invoice not found"
+}
+```
+
+### unauthorized (401)
+```json
+{
+  "message": "Invalid or missing API key"
+}
+```
+
+## Invoice Statuses
+- `pending` — awaiting payment (can be cancelled)
+- `cancelling` — cancellation in progress (async, poll GET /invoices/{id})
+- `paid` — payment completed (can be refunded)
+- `cancelled` — manually cancelled
+- `expired` — payment timeout
+- `partially_refunded` — partially refunded (remaining amount can still be refunded)
+- `refunded` — fully refunded
 
 ## Quick Start
 
 1. Войдите в личный кабинет: https://apipay.kz/login
-2. Напишите в WhatsApp поддержки (+7 708 516 74 89) для подключения с правами Кассира
+2. Подключите кассира: https://apipay.kz/connect-cashier (или напишите в WhatsApp: +7 708 516 74 89)
 3. Дождитесь подключения организации (обычно 5-30 минут)
 4. POST /api/v1/invoices для создания счёта
 5. Клиент получит уведомление в Kaspi и оплатит там
@@ -147,9 +194,11 @@ const response = await fetch('https://bpapi.bazarbay.site/api/v1/invoices', {
   },
   body: JSON.stringify({
     amount: 10000,
-    phone_number: '87001234567'
+    phone_number: '87001234567',
+    description: 'Payment for order #123'
   })
 })
+
 const data = await response.json()
 console.log('Invoice created:', data.id)
 ```
@@ -166,11 +215,13 @@ const response = await fetch('https://bpapi.bazarbay.site/api/v1/invoices', {
     phone_number: '87001234567',
     description: 'Cart order',
     cart_items: [
-      { catalog_item_id: 101, count: 2 },
-      { catalog_item_id: 205, count: 3 }
-    ]
+      { catalog_item_id: 1, count: 2, price: 4500.00 },
+      { catalog_item_id: 5, count: 3 }
+    ],
+    discount_percentage: 10
   })
 })
+// Response includes subtotal, discount_sum, discount_percentage
 ```
 
 ### Create Subscription (JavaScript)
@@ -182,14 +233,14 @@ const response = await fetch('https://bpapi.bazarbay.site/api/v1/subscriptions',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
-    amount: 5000,
     phone_number: '87001234567',
-    description: 'Monthly subscription',
-    billing_period: 'monthly'
+    amount: 5000,
+    billing_period: 'monthly',
+    description: 'Monthly subscription'
   })
 })
-const { subscription } = await response.json()
-// Manage: POST /api/v1/subscriptions/:id/pause, /resume, /cancel
+const data = await response.json()
+console.log('Subscription:', data.subscription.id)
 ```
 
 ### Refund Invoice (JavaScript)
@@ -197,7 +248,11 @@ const { subscription } = await response.json()
 // Full refund
 await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
   method: 'POST',
-  headers: { 'X-API-Key': 'YOUR_API_KEY' }
+  headers: {
+    'X-API-Key': 'YOUR_API_KEY',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({ reason: 'Customer request' })
 })
 
 // Partial refund
@@ -211,14 +266,13 @@ await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
 })
 ```
 
-## Invoice Statuses
-- `pending` — awaiting payment (can be cancelled)
-- `cancelling` — being cancelled (async)
-- `paid` — payment completed (can be refunded)
-- `cancelled` — manually cancelled
-- `expired` — payment timeout
-- `partially_refunded` — partially refunded (can refund more)
-- `refunded` — fully refunded
+Full examples in all languages: see apipay-api-docs.md
+
+## Guides
+
+- [Local Webhook Testing](https://apipay.kz/local-testing): Тестирование вебхуков локально через ngrok — 5 шагов, код сервера
+- [Prompts & Guides Hub](https://apipay.kz/prompts): Все промпты, руководства и документация в одном месте
+- [Lovable Integration](https://apipay.kz/lovable-integration): Готовый промпт для подключения Kaspi Pay к Lovable (no-code)
 
 ## Optional
 

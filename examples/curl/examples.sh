@@ -57,7 +57,7 @@ echo '  -d '\''{'
 echo '    "phone_number": "87001234567",'
 echo '    "discount_percentage": 10,'
 echo '    "cart_items": ['
-echo '      {"catalog_item_id": 101, "count": 2, "discount": 500},'
+echo '      {"catalog_item_id": 101, "count": 2},'
 echo '      {"catalog_item_id": 205, "count": 3}'
 echo '    ]'
 echo '  }'\'
@@ -85,7 +85,9 @@ echo ""
 echo "6. Check Invoice Statuses"
 echo "-------------------------"
 echo 'curl -X POST $BASE_URL/invoices/status/check \'
-echo '  -H "X-API-Key: $API_KEY"'
+echo '  -H "X-API-Key: $API_KEY" \'
+echo '  -H "Content-Type: application/json" \'
+echo '  -d '\''{"invoice_ids": [42, 43, 44]}'\'
 echo ""
 
 # =====================================================

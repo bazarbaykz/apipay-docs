@@ -24,7 +24,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 
 | Поле | Тип | Обязательно | Описание |
 |------|-----|-------------|----------|
-| `amount` | number | Да | Сумма в тенге (100 - 1 000 000) |
+| `amount` | number | Условно | Сумма в тенге (100 - 1 000 000). Не нужно при `cart_items` |
 | `phone_number` | string | Да | Телефон клиента (формат: 8XXXXXXXXXX) |
 | `billing_period` | string | Да | Период списания |
 | `billing_day` | integer | Нет | День списания (1-28) |
@@ -60,12 +60,12 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 |----------|-----|----------|
 | `page` | integer | Номер страницы (по умолч. 1) |
 | `per_page` | integer | Элементов на странице (1-100, по умолч. 10) |
-| `status` | string | Фильтр: `active`, `paused`, `cancelled`, `completed`, `expired` |
+| `status` | string | Фильтр: `active`, `paused`, `cancelled`, `expired` |
 | `phone_number` | string | Фильтр по телефону |
 | `external_subscriber_id` | string | Фильтр по вашему ID подписчика |
 | `search` | string | Поиск по имени/телефону |
 | `billing_period` | string | Фильтр: daily, weekly, biweekly, monthly, quarterly, yearly |
-| `sort_by` | string | Поле сортировки (id, amount, subscriber_name, next_billing_date, created_at) |
+| `sort_by` | string | Поле сортировки (id, amount, subscriber_name, next_billing_at, created_at) |
 | `sort_order` | string | `asc` или `desc` |
 
 ## Получение подписки
@@ -73,6 +73,23 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 **Эндпоинт:** `GET /subscriptions/{id}`
 
 Возвращает подписку со статистикой и последним платежом.
+
+### Поля stats
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `total_payments` | integer | Всего платежей |
+| `successful_payments` | integer | Успешных платежей |
+| `failed_payments` | integer | Неуспешных платежей |
+| `total_collected` | string | Общая собранная сумма |
+
+### Поле last_payment
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `amount` | string | Сумма платежа |
+| `status` | string | Статус |
+| `paid_at` | string | Дата оплаты (ISO 8601) |
 
 ## Обновление подписки
 
@@ -98,6 +115,25 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 
 **Эндпоинт:** `GET /subscriptions/{id}/invoices`
 
+### Структура элемента (SubscriptionInvoiceResource)
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `id` | integer | ID записи подписочного счёта |
+| `invoice_id` | integer | ID связанного счёта |
+| `billing_period_start` | string | Начало периода (YYYY-MM-DD) |
+| `billing_period_end` | string | Конец периода (YYYY-MM-DD) |
+| `billing_period_label` | string | Человекочитаемый период |
+| `amount` | string | Сумма |
+| `attempt_number` | integer | Номер попытки |
+| `status` | string | Статус |
+| `status_label` | string | Человекочитаемый статус |
+| `status_color` | string | Цвет для UI |
+| `paid_at` | string\|null | Дата оплаты (ISO 8601) |
+| `failure_reason` | string\|null | Причина ошибки |
+| `invoice` | object | `{ id, kaspi_invoice_id, status }` |
+| `created_at` | string | Дата создания (ISO 8601) |
+
 ## Статусы
 
 | Статус | Описание |
@@ -105,7 +141,6 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 | `active` | Списания по расписанию |
 | `paused` | Приостановлена |
 | `cancelled` | Отменена |
-| `completed` | Все циклы завершены |
 | `expired` | Истекла (grace period закончился) |
 
 ## Grace Period

@@ -42,7 +42,7 @@ def main():
     try:
         print('Creating subscription...')
 
-        subscription = create_subscription({
+        result = create_subscription({
             'amount': 5000,
             'phone_number': '87001234567',
             'billing_period': 'monthly',
@@ -51,13 +51,15 @@ def main():
             'description': 'Monthly subscription'
         })
 
+        subscription = result['subscription']
+
         print('\nSubscription created successfully!')
         print('----------------------------------')
         print(f"Subscription ID: {subscription['id']}")
         print(f"Amount: {subscription['amount']} KZT")
         print(f"Period: {subscription['billing_period']}")
         print(f"Status: {subscription['status']}")
-        print(f"Next billing: {subscription.get('next_billing_date')}")
+        print(f"Next billing: {subscription.get('next_billing_at')}")
 
     except Exception as e:
         print(f'Error: {e}')

@@ -35,7 +35,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
     "description": "Cart order",
     "cart_items": [
       {"catalog_item_id": 101, "count": 2, "price": 4500.00},
-      {"catalog_item_id": 205, "count": 3, "discount": 500}
+      {"catalog_item_id": 205, "count": 3}
     ],
     "discount_percentage": 10
   }'
@@ -51,11 +51,8 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `description` | string | No | Payment description (max 500 chars) |
 | `external_order_id` | string | No | Your order ID (max 255 chars) |
-| `webhook_id` | number | No | Specific webhook ID from dashboard |
 | `cart_items` | array | No | Array of cart items (replaces amount) |
-| `discount_percentage` | number | Conditional* | Global discount percentage (0-100). Applied to items without explicit `discount`. Per-item `discount` takes priority. |
-
-> **\*** `discount_percentage` is **required** when any item in `cart_items` has a `discount` field. Without it, the request returns 422: `"discount_percentage is required when cart items have discounts."` If you use fixed-amount discounts, calculate: `discount_percentage = (total_discounts / subtotal) × 100`.
+| `discount_percentage` | number | No | Global discount percentage (1-99). Applied to the entire invoice. |
 
 ### Cart Item Fields
 
@@ -64,7 +61,6 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 | `catalog_item_id` | integer | Yes | Catalog item ID (from GET /catalog) |
 | `count` | integer | Yes | Quantity (min 1) |
 | `price` | number | No | Custom price override (0.01 - 99999999.99). Replaces catalog price. |
-| `discount` | number | No | Discount for this line (min 0). Applied to line subtotal (price × count). |
 
 ### Response
 
@@ -79,6 +75,7 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
   "subtotal": "10000.00",
   "discount_sum": "500.00",
   "discount_percentage": "10",
+  "paid_at": null,
   "created_at": "2025-01-31T12:00:00Z"
 }
 ```
@@ -122,22 +119,50 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
 
 **Endpoint:** `POST /invoices/{id}/cancel`
 
-Only invoices with `status: "pending"` can be cancelled. May return `202 Accepted` with status `cancelling` for async processing.
+Only invoices with `status: "pending"` can be cancelled. In sandbox returns `200 OK` (synchronous), in production returns `202 Accepted` with status `cancelling` (async processing via Kaspi).
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
+### Response 202 (production)
+
+```json
+{
+  "message": "Invoice cancellation queued",
+  "invoice_id": 42
+}
+```
+
 ## Check Invoice Status
 
 **Endpoint:** `POST /invoices/status/check`
 
-Force-check the current status of all pending invoices for your organization. Useful when webhooks are delayed.
+Force-check the status of specified invoices. Accepts an array of invoice IDs (up to 100). Useful when webhooks are delayed.
+
+### Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `invoice_ids` | array | Yes | Array of invoice IDs to check (max 100) |
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/status/check \
-  -H "X-API-Key: YOUR_API_KEY"
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "invoice_ids": [42, 43, 44]
+  }'
+```
+
+### Response
+
+```json
+{
+  "message": "Status check jobs dispatched",
+  "count": 3
+}
 ```
 
 ## Refund Invoice

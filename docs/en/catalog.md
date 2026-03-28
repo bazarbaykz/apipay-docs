@@ -80,6 +80,9 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog \
 | `selling_price` | number | Yes | Price in KZT (min 0.01) |
 | `unit_id` | integer | Yes | Unit of measurement ID |
 | `image_id` | string | No | Image UUID from upload-image |
+| `barcode` | string | No | Barcode (max 50 chars) |
+
+**Response code:** `202 Accepted` (async processing).
 
 ## Update Catalog Item
 
@@ -92,11 +95,15 @@ curl -X PATCH https://bpapi.bazarbay.site/api/v1/catalog/101 \
   -d '{"name": "Coffee Latte Grande", "selling_price": 1800}'
 ```
 
-Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`.
+Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode`.
+
+**Response code:** `200 OK` (sandbox) / `202 Accepted` (production).
 
 ## Delete Catalog Item
 
 **Endpoint:** `DELETE /catalog/{id}`
+
+**Response code:** `200 OK` (sandbox) / `202 Accepted` (production).
 
 ```bash
 curl -X DELETE https://bpapi.bazarbay.site/api/v1/catalog/101 \

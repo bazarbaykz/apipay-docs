@@ -30,12 +30,28 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 |------|-----|-------------|----------|
 | `amount` | number | Нет | Сумма частичного возврата (0.01-99999999.99). Пропустите для полного возврата. |
 | `reason` | string | Нет | Причина возврата (макс. 500 символов) |
+| `return_items` | array | Нет | Массив товаров для поэлементного возврата из корзины. Каждый элемент: `{ catalog_item_id, count }` |
+
+### Возврат по товарам (корзина)
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "return_items": [
+      { "catalog_item_id": 101, "count": 2 },
+      { "catalog_item_id": 205, "count": 1 }
+    ],
+    "reason": "Возврат части товаров"
+  }'
+```
 
 ### Ответ
 
 ```json
 {
-  "message": "Возврат инициирован успешно",
+  "message": "Refund queued for processing",
   "refund": {
     "id": 1,
     "invoice_id": 42,
@@ -50,7 +66,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
     "amount": "10000.00",
     "status": "partially_refunded",
     "total_refunded": "5000.00",
-    "available_for_refund": "5000.00"
+    "pending_refund_amount": 5000,
+    "available_for_refund": 5000
   }
 }
 ```
@@ -75,7 +92,32 @@ curl https://bpapi.bazarbay.site/api/v1/refunds/5 \
   "amount": "5000.00",
   "reason": "Возврат товара",
   "status": "completed",
-  "created_at": "2025-01-31T12:00:00Z"
+  "kaspi_refund_id": "REF-123456",
+  "kaspi_status": "completed",
+  "initiated_by": "api",
+  "error_message": null,
+  "created_at": "2025-01-31T12:00:00Z",
+  "invoice": {
+    "id": 42,
+    "external_order_id": "ORDER-100",
+    "amount": "10000.00",
+    "total_refunded": "5000.00",
+    "is_fully_refunded": false,
+    "status": "partially_refunded",
+    "kaspi_invoice_id": "KSP-789"
+  },
+  "items": [
+    {
+      "id": 1,
+      "refund_id": 5,
+      "invoice_item_id": 10,
+      "catalog_item_id": 101,
+      "name": "Товар А",
+      "price": "2500.00",
+      "count": 2,
+      "amount": "5000.00"
+    }
+  ]
 }
 ```
 
@@ -98,6 +140,54 @@ curl "https://bpapi.bazarbay.site/api/v1/refunds?page=1&per_page=20&status[]=com
 | `invoice_id` | integer | Фильтр по ID счёта |
 | `date_from` | string | Начальная дата (YYYY-MM-DD) |
 | `date_to` | string | Конечная дата (YYYY-MM-DD) |
+
+### Ответ
+
+```json
+{
+  "data": [
+    {
+      "id": 5,
+      "invoice_id": 42,
+      "amount": "5000.00",
+      "reason": "Возврат товара",
+      "status": "completed",
+      "kaspi_refund_id": "REF-123456",
+      "kaspi_status": "completed",
+      "initiated_by": "api",
+      "error_message": null,
+      "created_at": "2025-01-31T12:00:00Z",
+      "invoice": {
+        "id": 42,
+        "external_order_id": "ORDER-100",
+        "amount": "10000.00",
+        "total_refunded": "5000.00",
+        "is_fully_refunded": false,
+        "status": "partially_refunded",
+        "kaspi_invoice_id": "KSP-789"
+      },
+      "items": [
+        {
+          "id": 1,
+          "refund_id": 5,
+          "invoice_item_id": 10,
+          "catalog_item_id": 101,
+          "name": "Товар А",
+          "price": "2500.00",
+          "count": 2,
+          "amount": "5000.00"
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "current_page": 1,
+    "last_page": 3,
+    "per_page": 10,
+    "total": 25
+  }
+}
+```
 
 ## Список возвратов по счёту
 

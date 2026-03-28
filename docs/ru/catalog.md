@@ -48,17 +48,23 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog \
   -d '{"items": [{"name": "Кофе латте", "selling_price": 1500, "unit_id": 1, "image_id": "550e8400-..."}]}'
 ```
 
-Поля: `name` (обяз.), `selling_price` (обяз.), `unit_id` (обяз.), `image_id` (опц.).
+Поля: `name` (обяз.), `selling_price` (обяз.), `unit_id` (обяз.), `image_id` (опц.), `barcode` (опц., строка, макс. 50).
+
+**Код ответа:** `202 Accepted` (асинхронная обработка).
 
 ## Обновление товара
 
 **Эндпоинт:** `PATCH /catalog/{id}`
 
-Поля: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`.
+Поля: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode`.
+
+**Код ответа:** `200 OK` (sandbox) / `202 Accepted` (production).
 
 ## Удаление товара
 
 **Эндпоинт:** `DELETE /catalog/{id}`
+
+**Код ответа:** `200 OK` (sandbox) / `202 Accepted` (production).
 
 ## Использование с корзиной
 

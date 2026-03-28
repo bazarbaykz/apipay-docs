@@ -24,7 +24,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `amount` | number | Yes | Amount in KZT (100 - 1,000,000) |
+| `amount` | number | Conditional | Amount in KZT (100 - 1,000,000). Not required when `cart_items` provided |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `billing_period` | string | Yes | Billing cycle (see table below) |
 | `billing_day` | integer | No | Day of billing (1-28) |
@@ -62,7 +62,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
   "billing_period": "monthly",
   "billing_day": 1,
   "status": "active",
-  "next_billing_date": "2025-03-01",
+  "next_billing_at": "2025-03-01",
   "created_at": "2025-02-01T12:00:00Z"
 }
 ```
@@ -82,12 +82,12 @@ curl "https://bpapi.bazarbay.site/api/v1/subscriptions?status=active&page=1&per_
 |-----------|------|-------------|
 | `page` | integer | Page number (default: 1) |
 | `per_page` | integer | Items per page (1-100, default: 10) |
-| `status` | string | Filter: `active`, `paused`, `cancelled`, `completed`, `expired` |
+| `status` | string | Filter: `active`, `paused`, `cancelled`, `expired` |
 | `phone_number` | string | Filter by phone |
 | `external_subscriber_id` | string | Filter by your subscriber ID |
 | `search` | string | Search by name/phone |
 | `billing_period` | string | Filter: daily, weekly, biweekly, monthly, quarterly, yearly |
-| `sort_by` | string | Sort field (id, amount, subscriber_name, next_billing_date, created_at) |
+| `sort_by` | string | Sort field (id, amount, subscriber_name, next_billing_at, created_at) |
 | `sort_order` | string | `asc` or `desc` |
 
 ## Get Subscription
@@ -112,14 +112,14 @@ curl https://bpapi.bazarbay.site/api/v1/subscriptions/1 \
   "billing_period": "monthly",
   "billing_day": 1,
   "status": "active",
-  "next_billing_date": "2025-03-01",
+  "next_billing_at": "2025-03-01",
   "stats": {
     "total_payments": 5,
-    "total_amount": "25000.00",
-    "failed_payments": 0
+    "successful_payments": 5,
+    "failed_payments": 0,
+    "total_collected": "25000.00"
   },
   "last_payment": {
-    "id": 42,
     "amount": "5000.00",
     "status": "paid",
     "paid_at": "2025-02-01T10:30:00Z"
@@ -179,6 +179,25 @@ curl "https://bpapi.bazarbay.site/api/v1/subscriptions/1/invoices?page=1&per_pag
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
+### Response Item Structure (SubscriptionInvoiceResource)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | integer | Subscription invoice record ID |
+| `invoice_id` | integer | Related invoice ID |
+| `billing_period_start` | string | Period start (YYYY-MM-DD) |
+| `billing_period_end` | string | Period end (YYYY-MM-DD) |
+| `billing_period_label` | string | Human-readable period label |
+| `amount` | string | Amount |
+| `attempt_number` | integer | Attempt number |
+| `status` | string | Status |
+| `status_label` | string | Human-readable status |
+| `status_color` | string | Color for UI rendering |
+| `paid_at` | string\|null | Payment date (ISO 8601) |
+| `failure_reason` | string\|null | Failure reason |
+| `invoice` | object | `{ id, kaspi_invoice_id, status }` |
+| `created_at` | string | Created date (ISO 8601) |
+
 ## Statuses
 
 | Status | Description |
@@ -186,7 +205,6 @@ curl "https://bpapi.bazarbay.site/api/v1/subscriptions/1/invoices?page=1&per_pag
 | `active` | Billing on schedule |
 | `paused` | Temporarily paused, can be resumed |
 | `cancelled` | Permanently cancelled |
-| `completed` | All billing cycles completed |
 | `expired` | Expired after grace period |
 
 ## Grace Period
