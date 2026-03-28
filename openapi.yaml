@@ -446,6 +446,48 @@ paths:
       responses:
         200:
           description: Список возвратов
+  /refunds/{refund_id}:
+    get:
+      summary: Получить возврат
+      description: Получить детали конкретного возврата по ID
+      operationId: getRefund
+      parameters:
+        - name: refund_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID возврата
+      responses:
+        200:
+          description: Данные возврата
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    example: 5
+                  invoice_id:
+                    type: integer
+                    example: 42
+                  amount:
+                    type: string
+                    example: "5000.00"
+                  reason:
+                    type: string
+                    nullable: true
+                    example: "Возврат товара"
+                  status:
+                    type: string
+                    enum: ["pending", "processing", "completed", "failed"]
+                    example: "completed"
+                  created_at:
+                    type: string
+                    format: date-time
+        404:
+          description: Возврат не найден
   /catalog/units:
     get:
       summary: Единицы измерения

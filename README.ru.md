@@ -51,6 +51,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 | `GET /invoices/{id}/refunds` | Возвраты по счёту |
 | `POST /invoices/status/check` | Проверка статусов pending-счетов |
 | `GET /refunds` | Список всех возвратов |
+| `GET /refunds/{id}` | Получение возврата |
 | `GET /catalog` | Список товаров каталога |
 | `POST /catalog/upload-image` | Загрузка изображения товара |
 | `POST /catalog` | Создание товаров |

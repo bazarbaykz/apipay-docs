@@ -78,6 +78,7 @@ Full and partial refunds for paid invoices. Available for ALL users.
   - Without amount = full refund
   - With { amount: 5000, reason: "..." } = partial refund
 - [GET /api/v1/refunds]: List all refunds with filters (status[], invoice_id, date_from, date_to)
+- [GET /api/v1/refunds/{id}]: Get refund details by ID
 - [GET /api/v1/invoices/{id}/refunds]: List refunds for specific invoice
 
 Refund statuses: `pending`, `processing`, `completed`, `failed`

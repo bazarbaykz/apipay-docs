@@ -55,6 +55,30 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 }
 ```
 
+## Get Refund
+
+**Endpoint:** `GET /refunds/{id}`
+
+Get details of a specific refund by ID.
+
+```bash
+curl https://bpapi.bazarbay.site/api/v1/refunds/5 \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+### Response
+
+```json
+{
+  "id": 5,
+  "invoice_id": 42,
+  "amount": "5000.00",
+  "reason": "Customer return",
+  "status": "completed",
+  "created_at": "2025-01-31T12:00:00Z"
+}
+```
+
 ## List All Refunds
 
 **Endpoint:** `GET /refunds`
