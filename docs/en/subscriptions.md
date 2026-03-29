@@ -38,6 +38,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 | `metadata` | object | No | Custom JSON data |
 | `webhook_id` | number | No | Specific webhook ID from dashboard |
 | `cart_items` | array | No | Cart items `[{ catalog_item_id, count }]` (for catalog orgs, recalculates amount) |
+| `bill_immediately` | boolean | No | If `true` — first invoice is created immediately. Default: `false` (first invoice on schedule) |
 
 ### Billing Periods
 

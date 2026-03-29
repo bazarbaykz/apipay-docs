@@ -1423,6 +1423,10 @@ paths:
                     required:
                       - catalog_item_id
                       - count
+                bill_immediately:
+                  type: boolean
+                  default: false
+                  description: "Если true — первый счёт выставляется сразу после создания подписки. По умолчанию false (первый счёт по расписанию в next_billing_at)."
               required:
                 - phone_number
                 - billing_period

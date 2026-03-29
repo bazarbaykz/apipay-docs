@@ -38,6 +38,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 | `metadata` | object | Нет | Произвольные данные |
 | `webhook_id` | number | Нет | ID webhook из личного кабинета |
 | `cart_items` | array | Нет | Корзина `[{ catalog_item_id, count }]` (для организаций с каталогом, пересчитывает amount) |
+| `bill_immediately` | boolean | Нет | Если `true` — первый счёт выставляется сразу. По умолчанию `false` (первый счёт по расписанию) |
 
 ### Периоды списания
 

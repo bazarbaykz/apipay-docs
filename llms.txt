@@ -6,6 +6,7 @@ Last updated: 2026-03-28
 
 ## IMPORTANT: Recent API Changes
 
+- **2026-03-29** [NEW] Добавлен параметр `bill_immediately` в POST /subscriptions — немедленное выставление первого счёта
 - **2026-03-29** [NEW] Добавлено поле `created_at` в ответы эндпоинтов каталога (GET /catalog, POST /catalog)
 - **2026-03-27** [NEW] Запуск публичной API документации с единым источником правды
 
