@@ -1092,6 +1092,11 @@ paths:
                         status:
                           type: string
                           example: active
+                        created_at:
+                          type: string
+                          format: date-time
+                          description: Дата создания товара в системе (ISO 8601)
+                          example: "2026-03-29T10:30:00+00:00"
                   meta:
                     type: object
                     properties:
@@ -1193,6 +1198,11 @@ paths:
                           enum:
                             - pending
                           description: Всегда pending при создании
+                        created_at:
+                          type: string
+                          format: date-time
+                          description: Дата создания товара в системе (ISO 8601)
+                          example: "2026-03-29T10:30:00+00:00"
         422:
           description: Ошибка валидации
         502:

@@ -34,6 +34,8 @@ curl "https://bpapi.bazarbay.site/api/v1/catalog?search=coffee&page=1&per_page=2
 | `barcode` | string | -- | Filter by barcode |
 | `first_char` | string | -- | Filter by first character of name |
 
+Each item in the response includes `created_at` — the creation timestamp in the system (ISO 8601). Available immediately after creation, even before Kaspi returns `date_added`.
+
 ## Upload Image
 
 **Endpoint:** `POST /catalog/upload-image`
