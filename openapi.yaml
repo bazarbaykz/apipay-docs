@@ -245,15 +245,6 @@ paths:
                           type: string
                           nullable: true
                           example: "13234689513"
-                        qr_token:
-                          type: string
-                          nullable: true
-                          example: abc123
-                        qr_link:
-                          type: string
-                          nullable: true
-                          description: Ссылка на QR-код для оплаты
-                          example: https://pay.kaspi.kz/pay/abc123
                         expires_at:
                           type: string
                           format: date-time
