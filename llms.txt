@@ -2,10 +2,16 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-Last updated: 2026-03-28
+Last updated: 2026-04-07
 
 ## IMPORTANT: Recent API Changes
 
+- **2026-04-07** [NEW] Статусы `processing` (ожидает отправки в Kaspi) и `error` (ошибка отправки) для счетов
+- **2026-04-07** [NEW] Поле `error_message` (string|null) в ответах счетов — описание ошибки
+- **2026-04-07** [NEW] Kaspi-ошибки при создании счёта: 400 `kaspi_session_not_configured`, 503 `kaspi_session_invalid`
+- **2026-04-07** [CHANGED] POST /invoices/{id}/cancel теперь работает для `pending` и `processing`
+- **2026-04-07** [CHANGED] POST /invoices/status/check — обновлён формат ответа: `{ invoices: [...] }` с актуальными статусами
+- **2026-04-07** [REMOVED] GET /refunds/{id} — удалён из API
 - **2026-03-29** [NEW] Добавлен параметр `bill_immediately` в POST /subscriptions — немедленное выставление первого счёта
 - **2026-03-29** [NEW] Добавлено поле `created_at` в ответы эндпоинтов каталога (GET /catalog, POST /catalog)
 - **2026-03-27** [NEW] Запуск публичной API документации с единым источником правды
@@ -62,10 +68,7 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 - Content-Type: `application/json`
 - Rate Limit: 60 req/min
 
-## Endpoints (24 шт.)
-
-### Health Check
-- [GET /api/v1/status]: Health check
+## Endpoints (22 шт.)
 
 ### Invoices (Счета)
 - [POST /api/v1/invoices]: Создание счёта
@@ -78,7 +81,6 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 - [POST /api/v1/invoices/{id}/refund]: Создать возврат
 - [GET /api/v1/invoices/{id}/refunds]: Возвраты по счёту
 - [GET /api/v1/refunds]: Список возвратов
-- [GET /api/v1/refunds/{id}]: Получить возврат
 
 ### Catalog (Каталог)
 - [GET /api/v1/catalog/units]: Единицы измерения
@@ -167,11 +169,13 @@ All webhook payloads include `is_sandbox: boolean` — indicates whether the res
 ```
 
 ## Invoice Statuses
+- `processing` — awaiting delivery to Kaspi (can be cancelled)
 - `pending` — awaiting payment (can be cancelled)
 - `cancelling` — cancellation in progress (async, poll GET /invoices/{id})
 - `paid` — payment completed (can be refunded)
 - `cancelled` — manually cancelled
 - `expired` — payment timeout
+- `error` — delivery to Kaspi failed (see `error_message`)
 - `partially_refunded` — partially refunded (remaining amount can still be refunded)
 - `refunded` — fully refunded
 

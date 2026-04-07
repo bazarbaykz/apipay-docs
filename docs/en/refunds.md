@@ -72,55 +72,6 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 }
 ```
 
-## Get Refund
-
-**Endpoint:** `GET /refunds/{id}`
-
-Get details of a specific refund by ID.
-
-```bash
-curl https://bpapi.bazarbay.site/api/v1/refunds/5 \
-  -H "X-API-Key: YOUR_API_KEY"
-```
-
-### Response
-
-```json
-{
-  "id": 5,
-  "invoice_id": 42,
-  "amount": "5000.00",
-  "reason": "Customer return",
-  "status": "completed",
-  "kaspi_refund_id": "REF-123456",
-  "kaspi_status": "completed",
-  "initiated_by": "api",
-  "error_message": null,
-  "created_at": "2025-01-31T12:00:00Z",
-  "invoice": {
-    "id": 42,
-    "external_order_id": "ORDER-100",
-    "amount": "10000.00",
-    "total_refunded": "5000.00",
-    "is_fully_refunded": false,
-    "status": "partially_refunded",
-    "kaspi_invoice_id": "KSP-789"
-  },
-  "items": [
-    {
-      "id": 1,
-      "refund_id": 5,
-      "invoice_item_id": 10,
-      "catalog_item_id": 101,
-      "name": "Item A",
-      "price": "2500.00",
-      "count": 2,
-      "amount": "5000.00"
-    }
-  ]
-}
-```
-
 ## List All Refunds
 
 **Endpoint:** `GET /refunds`

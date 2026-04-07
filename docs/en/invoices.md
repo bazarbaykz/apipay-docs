@@ -68,13 +68,14 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 {
   "id": 124,
   "amount": "9500.00",
-  "status": "pending",
+  "status": "processing",
   "description": "Payment for order #123",
   "external_order_id": "order_123",
   "phone_number": "87001234567",
   "subtotal": "10000.00",
   "discount_sum": "500.00",
   "discount_percentage": "10",
+  "error_message": null,
   "paid_at": null,
   "created_at": "2025-01-31T12:00:00Z"
 }
@@ -119,7 +120,7 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
 
 **Endpoint:** `POST /invoices/{id}/cancel`
 
-Only invoices with `status: "pending"` can be cancelled. In sandbox returns `200 OK` (synchronous), in production returns `202 Accepted` with status `cancelling` (async processing via Kaspi).
+Invoices with `status: "pending"` or `"processing"` can be cancelled. In sandbox returns `200 OK` (synchronous), in production returns `202 Accepted` with status `cancelling` (async processing via Kaspi).
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
@@ -160,8 +161,16 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/status/check \
 
 ```json
 {
-  "message": "Status check jobs dispatched",
-  "count": 3
+  "invoices": [
+    {
+      "id": 42,
+      "status": "paid",
+      "kaspi_invoice_id": "ABC123",
+      "amount": "5000.00",
+      "error_message": null,
+      "updated_at": "2026-02-26T10:30:00+06:00"
+    }
+  ]
 }
 ```
 
@@ -184,24 +193,27 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
 
 | Status | Description | Can Cancel | Can Refund |
 |--------|-------------|------------|------------|
+| `processing` | Awaiting delivery to Kaspi | Yes | No |
 | `pending` | Awaiting payment | Yes | No |
 | `cancelling` | Being cancelled (async) | No | No |
 | `paid` | Payment completed | No | Yes |
 | `cancelled` | Manually cancelled | No | No |
 | `expired` | Payment timeout | No | No |
+| `error` | Delivery to Kaspi failed (see `error_message`) | No | No |
 | `partially_refunded` | Partially refunded | No | Yes |
 | `refunded` | Fully refunded | No | No |
 
 ## Status Flow
 
 ```
-pending → paid → partially_refunded → refunded
-    ↓        ↓
-cancelling   refunded
-    ↓
-cancelled
+processing → pending → paid → partially_refunded → refunded
+    ↓           ↓        ↓
+  error    cancelling   refunded
+                ↓
+            cancelled
 
 pending → expired
+processing → cancelled (via cancel)
 ```
 
 ## Code Examples

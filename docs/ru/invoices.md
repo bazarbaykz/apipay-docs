@@ -68,13 +68,14 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 {
   "id": 124,
   "amount": "9500.00",
-  "status": "pending",
+  "status": "processing",
   "description": "Оплата заказа #123",
   "external_order_id": "order_123",
   "phone_number": "87001234567",
   "subtotal": "10000.00",
   "discount_sum": "500.00",
   "discount_percentage": "10",
+  "error_message": null,
   "paid_at": null,
   "created_at": "2025-01-31T12:00:00Z"
 }
@@ -119,7 +120,7 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
 
 **Эндпоинт:** `POST /invoices/{id}/cancel`
 
-Можно отменить только счета со статусом `pending`. В sandbox возвращает `200 OK` (синхронно), в production — `202 Accepted` со статусом `cancelling` (асинхронная обработка через Kaspi).
+Можно отменить счета со статусом `pending` или `processing`. В sandbox возвращает `200 OK` (синхронно), в production — `202 Accepted` со статусом `cancelling` (асинхронная обработка через Kaspi).
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
@@ -160,8 +161,16 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/status/check \
 
 ```json
 {
-  "message": "Status check jobs dispatched",
-  "count": 3
+  "invoices": [
+    {
+      "id": 42,
+      "status": "paid",
+      "kaspi_invoice_id": "ABC123",
+      "amount": "5000.00",
+      "error_message": null,
+      "updated_at": "2026-02-26T10:30:00+06:00"
+    }
+  ]
 }
 ```
 
@@ -184,24 +193,27 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
 
 | Статус | Описание | Можно отменить | Можно вернуть |
 |--------|----------|----------------|---------------|
+| `processing` | Выставляется (отправлен в Kaspi, ожидает подтверждения) | Да | Нет |
 | `pending` | Ожидает оплаты | Да | Нет |
 | `cancelling` | Отменяется (асинхронно) | Нет | Нет |
 | `paid` | Оплачен | Нет | Да |
 | `cancelled` | Отменён вручную | Нет | Нет |
 | `expired` | Истёк срок оплаты | Нет | Нет |
+| `error` | Ошибка отправки в Kaspi (см. `error_message`) | Нет | Нет |
 | `partially_refunded` | Частичный возврат | Нет | Да |
 | `refunded` | Полный возврат | Нет | Нет |
 
 ## Переходы статусов
 
 ```
-pending → paid → partially_refunded → refunded
-    ↓        ↓
-cancelling   refunded
-    ↓
-cancelled
+processing → pending → paid → partially_refunded → refunded
+    ↓           ↓        ↓
+  error    cancelling   refunded
+                ↓
+            cancelled
 
 pending → expired
+processing → cancelled (через cancel)
 ```
 
 ## Примеры кода

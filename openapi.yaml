@@ -10,26 +10,6 @@ servers:
   - url: https://bpapi.bazarbay.site/api/v1
     description: Production API
 paths:
-  "/status":
-    get:
-      summary: Health check
-      description: Проверка доступности API. Не требует аутентификации.
-      operationId: healthCheck
-      security: []
-      responses:
-        200:
-          description: API доступен
-          content:
-            "application/json":
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
-                  timestamp:
-                    type: string
-                    format: date-time
   "/invoices":
     post:
       summary: Создание счёта
@@ -112,7 +92,12 @@ paths:
                   status:
                     type: string
                     enum:
-                      - pending
+                      - processing
+                    description: Статус при создании — processing (ожидает отправки в Kaspi)
+                  error_message:
+                    type: string
+                    nullable: true
+                    description: Описание ошибки (null при создании)
                   subtotal:
                     type: string
                     description: Сумма до скидок (появляется только при наличии скидки)
@@ -134,11 +119,46 @@ paths:
                     type: string
                     format: date-time
         400:
-          description: Организация не найдена или не верифицирована
+          description: Организация не найдена или сессия Kaspi не настроена
+          content:
+            "application/json":
+              schema:
+                oneOf:
+                  - description: Нет организации
+                    type: object
+                    properties:
+                      error:
+                        type: string
+                        example: "Organization not found or not verified"
+                      message:
+                        type: string
+                        example: "Please verify an organization before creating invoices."
+                  - description: Сессия Kaspi не настроена
+                    type: object
+                    properties:
+                      error:
+                        type: string
+                        example: kaspi_session_not_configured
+                      message:
+                        type: string
+                        example: "Kaspi session is not configured. Please contact support."
         401:
           description: Неверный API ключ
         422:
           description: Ошибка валидации
+        503:
+          description: Сессия Kaspi недействительна
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: kaspi_session_invalid
+                  message:
+                    type: string
+                    example: "Kaspi session is invalid or expired. Please contact support."
     get:
       summary: Список счетов
       description: Возвращает список счетов с пагинацией, фильтрацией и сортировкой
@@ -265,6 +285,10 @@ paths:
                           type: string
                           nullable: true
                           example: Иван Иванов
+                        error_message:
+                          type: string
+                          nullable: true
+                          description: Описание ошибки (для статуса error)
                         items:
                           type: array
                           description: Товары счёта (пустой массив для счетов без корзины)
@@ -325,11 +349,13 @@ paths:
                   status:
                     type: string
                     enum:
+                      - processing
                       - pending
                       - cancelling
                       - paid
                       - cancelled
                       - expired
+                      - error
                       - partially_refunded
                       - refunded
                     example: paid
@@ -352,6 +378,10 @@ paths:
                   kaspi_invoice_id:
                     type: string
                     example: "13234689513"
+                  error_message:
+                    type: string
+                    nullable: true
+                    description: Описание ошибки (для статуса error)
                   items:
                     type: array
                     description: Товары счёта (snapshot на момент создания). Пустой массив — организация без каталога или старый счёт.
@@ -415,7 +445,7 @@ paths:
   "/invoices/{id}/cancel":
     post:
       summary: Отменить счёт
-      description: Отменяет счёт со статусом pending. Sandbox → 200 (синхронно), Production → 202 (асинхронно через Kaspi).
+      description: Отменяет счёт со статусом pending или processing. Sandbox → 200 (синхронно), Production → 202 (асинхронно через Kaspi).
       operationId: cancelInvoice
       parameters:
         - name: id
@@ -457,7 +487,7 @@ paths:
                     type: integer
                     example: 42
         400:
-          description: Счёт нельзя отменить (не pending)
+          description: Счёт нельзя отменить (не pending и не processing)
         404:
           description: Счёт не найден
   "/invoices/{id}/refund":
@@ -689,20 +719,38 @@ paths:
                 - invoice_ids
       responses:
         200:
-          description: Задачи на обновление статусов поставлены в очередь
+          description: Результат проверки статусов
           content:
             "application/json":
               schema:
                 type: object
                 properties:
-                  message:
-                    type: string
-                    example: Status check jobs dispatched
-                    description: Подтверждение постановки задач в очередь
-                  count:
-                    type: integer
-                    description: Количество поставленных задач
-                    example: 3
+                  invoices:
+                    type: array
+                    description: Массив счетов с актуальными статусами
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 42
+                        status:
+                          type: string
+                          example: paid
+                        kaspi_invoice_id:
+                          type: string
+                          nullable: true
+                          example: "ABC123"
+                        amount:
+                          type: string
+                          example: "5000.00"
+                        error_message:
+                          type: string
+                          nullable: true
+                          description: Описание ошибки (для статуса error)
+                        updated_at:
+                          type: string
+                          format: date-time
         401:
           description: Неверный API ключ
         422:
@@ -868,120 +916,6 @@ paths:
                       total:
                         type: integer
                         example: 25
-  "/refunds/{id}":
-    get:
-      summary: Получить возврат
-      description: Получить детали конкретного возврата по ID
-      operationId: getRefund
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        200:
-          description: Детали возврата
-          content:
-            "application/json":
-              schema:
-                type: object
-                properties:
-                  id:
-                    type: integer
-                    example: 5
-                  invoice_id:
-                    type: integer
-                    example: 42
-                  amount:
-                    type: string
-                    example: "5000.00"
-                  kaspi_refund_id:
-                    type: string
-                    nullable: true
-                    description: ID возврата в Kaspi
-                    example: REF-123
-                  kaspi_status:
-                    type: string
-                    nullable: true
-                    description: Статус в Kaspi
-                    example: completed
-                  status:
-                    type: string
-                    example: completed
-                  reason:
-                    type: string
-                    nullable: true
-                    example: Возврат товара
-                  initiated_by:
-                    type: string
-                    description: Кем инициирован
-                    example: api
-                  error_message:
-                    type: string
-                    nullable: true
-                  created_at:
-                    type: string
-                    format: date-time
-                  invoice:
-                    type: object
-                    properties:
-                      id:
-                        type: integer
-                        example: 42
-                      external_order_id:
-                        type: string
-                        nullable: true
-                        example: order_123
-                      amount:
-                        type: string
-                        example: "15000.00"
-                      total_refunded:
-                        type: string
-                        example: "5000.00"
-                      is_fully_refunded:
-                        type: boolean
-                        example: false
-                      status:
-                        type: string
-                        example: paid
-                      kaspi_invoice_id:
-                        type: string
-                        nullable: true
-                        example: "13234689513"
-                  items:
-                    type: array
-                    description: Позиции возврата
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: integer
-                          example: 1
-                        refund_id:
-                          type: integer
-                          example: 5
-                        invoice_item_id:
-                          type: integer
-                          example: 10
-                        catalog_item_id:
-                          type: integer
-                          nullable: true
-                          example: 3
-                        name:
-                          type: string
-                          example: Coffee Latte
-                        price:
-                          type: string
-                          example: "1800.00"
-                        count:
-                          type: integer
-                          example: 1
-                        amount:
-                          type: string
-                          example: "1800.00"
-        404:
-          description: Возврат не найден
   "/catalog/units":
     get:
       summary: Единицы измерения

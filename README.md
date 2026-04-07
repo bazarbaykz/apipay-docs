@@ -51,7 +51,6 @@ Response:
 | `GET /invoices/{id}/refunds` | Invoice refunds |
 | `POST /invoices/status/check` | Check pending invoice statuses |
 | `GET /refunds` | List all refunds |
-| `GET /refunds/{id}` | Get refund details |
 | `GET /catalog` | List catalog items |
 | `POST /catalog/upload-image` | Upload catalog image |
 | `POST /catalog` | Create catalog items |
