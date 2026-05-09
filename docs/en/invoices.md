@@ -83,6 +83,153 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 
 > **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when a discount is applied (backward compatible).
 
+## Create QR Invoice (cashier display)
+
+**Endpoint:** `POST /invoices/qr`
+
+QR-code payment displayed on a cashier screen — without the customer's phone number. The cashier shows the QR; the customer scans it with the Kaspi app and pays. Built for offline points-of-sale, cash registers, and trade terminals.
+
+Differences from `POST /invoices`:
+- No `phone_number` required.
+- Synchronous response — the QR (`qr_token_url` + ready PNG) is returned immediately.
+- Kaspi TTL is **5 minutes** (vs 24h for regular invoices).
+- Cancel/refund are not supported — if no payment arrives, the invoice flips to `expired`.
+- Per-org rate limit: **60 QR requests per minute per organization** (separate from the general API limit).
+
+The request body depends on the organization's `has_catalog` setting:
+
+### Request (no catalog)
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "amount": 5000,
+    "description": "Order #123",
+    "external_order_id": "order-123"
+  }'
+```
+
+### Request (with catalog)
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Order #123",
+    "cart_items": [
+      {"catalog_item_id": 608400, "count": 2, "price": 1500}
+    ],
+    "discount_percentage": 10
+  }'
+```
+
+### Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `amount` | number | Yes* | Amount in KZT (only when has_catalog=false), 0.01 - 99,999,999.99 |
+| `description` | string | No | Description (max 500). Used as the item name on the Kaspi receipt |
+| `external_order_id` | string | No | Your order ID (max 255) |
+| `cart_items` | array | Yes* | Only when has_catalog=true. 1 to 100 items |
+| `discount_percentage` | number | No | Whole-cart discount, 1-99% |
+| `simulate` | string | No | Sandbox only: `paid` \| `cancelled` \| `expired`. See [Sandbox mode](#sandbox-mode) |
+
+\* depends on `has_catalog`: either `amount` or `cart_items`.
+
+### Response 201
+
+```json
+{
+  "id": 63474,
+  "amount": "100.00",
+  "status": "pending",
+  "paid_at": null,
+  "phone": null,
+  "created_at": "2026-05-09T07:27:37+00:00",
+  "is_qr_token": true,
+  "qr_token_url": "https://qr.kaspi.kz/5180629155669855245469327791577114170390",
+  "qr_image_url": "https://bpapi.bazarbay.site/storage/qr/3f41ee95-5fb1-41b6-8f90-d2ac7aebcb42.png",
+  "qr_expires_at": "2026-05-09T07:32:38+00:00"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `id` | Invoice ID in our system. Use it to fetch status (`GET /invoices/{id}`); webhooks reference it too. |
+| `is_qr_token` | QR-invoice flag. Also returned by `GET /invoices/{id}` and inside webhook payloads. |
+| `qr_token_url` | Direct Kaspi URL (`qr.kaspi.kz/...`). Same payload as encoded in the PNG. You can re-render the QR on your side if you want a different style/size. |
+| `qr_image_url` | Ready-made PNG 600×600 with the Kaspi logo in the center (ECC=High). Hosted on our CDN-storage, accessible without auth, lives until `qr_expires_at + 60s` (then returns 404). |
+| `qr_expires_at` | UTC timestamp when the QR expires on Kaspi side. Exactly 5 minutes from creation. |
+
+### Lifecycle and status handling
+
+1. Created in status `pending`. The server polls Kaspi every 2 sec for status sync.
+2. On terminal status (`paid`, `cancelled`, `expired`) we send the regular `invoice.status_changed` webhook — same format as for regular invoices, but `invoice` contains `is_qr_token: true` and the QR fields.
+3. Alternative poll: hit `GET /invoices/{id}` every 2-3 sec.
+4. After 5 min without payment the status becomes `expired`. The PNG is removed from storage within ~1 minute — `qr_image_url` will start returning 404 (by design).
+5. Cancel/refund for a QR invoice is not supported — to cancel, just wait for TTL.
+
+### Sandbox mode
+
+If the organization has `sandbox_mode=true`, the endpoint works WITHOUT calling Kaspi: it returns a synthetic `qr_token_url` (`https://qr.kaspi.kz/sandbox/<uuid>`) and a real rendered PNG. You can display it in the UI and test the entire frontend logic, but the real Kaspi app will not accept this QR — it does not exist on Kaspi's side.
+
+#### `simulate` parameter (sandbox only)
+
+To quickly test terminal scenarios, pass `simulate` right inside the create payload — in a single call you get a ready, terminal-status invoice (no need for a separate `/simulate-status` call):
+
+| `simulate` | Resulting `status` | `qr_expires_at` | `paid_at` | Webhook immediately? |
+|------------|-------------------|-----------------|-----------|----------------------|
+| (omitted) | `pending` | now + 5 min | `null` | no |
+| `expired` | `expired` | now − 1 min (in the past) | `null` | yes |
+| `paid` | `paid` | now + 5 min | now | yes |
+| `cancelled` | `cancelled` | now + 5 min | `null` | yes |
+
+- The parameter is silently ignored for non-sandbox organizations — production lifecycle is driven by Kaspi.
+- Valid values go through standard validation; unknown values → 422.
+
+##### Example: get an already-expired QR
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+  -H "X-API-Key: <sandbox_api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 250, "simulate": "expired"}'
+```
+
+Response (excerpt):
+
+```json
+{
+  "id": 63497,
+  "status": "expired",
+  "is_qr_token": true,
+  "qr_token_url": "https://qr.kaspi.kz/sandbox/b5d6ffe9-…",
+  "qr_image_url": "https://bpapi.bazarbay.site/storage/qr/b5d6ffe9-….png",
+  "qr_expires_at": "2026-05-09T07:52:08+00:00"
+}
+```
+
+`POST /api/invoices/{id}/simulate-status` separately also works with QR invoices (for dynamic scenarios: create `pending` → wait in UI → explicitly flip to `paid`/`cancelled`/`expired`).
+
+### Errors
+
+| Code | error | When |
+|------|-------|------|
+| 400 | `organization_required` | API key has no organization |
+| 400 | `kaspi_session_not_configured` | Organization has no `kaspi_user_id` |
+| 400 | `Organization not found or not verified` | Production organization not in `verified` status |
+| 400 | `sandbox_invoice_limit` | Sandbox invoice limit exceeded |
+| 422 | `Validation failed` | Invalid params (see body schema) |
+| 422 | `This organization requires cart items.` | `has_catalog=true` but `cart_items` not provided |
+| 422 | `This organization does not support catalog.` | `has_catalog=false` but `cart_items` provided |
+| 429 | `qr_rate_limit` | Per-org limit of 60 QR/min |
+| 500 | `qr_render_failed` | Failed to render PNG |
+| 502 | `kaspi_error` | Kaspi API returned an error |
+| 503 | `kaspi_session_invalid` | Kaspi session expired |
+
 ## List Invoices
 
 **Endpoint:** `GET /invoices`

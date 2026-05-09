@@ -83,6 +83,153 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 
 > **Примечание:** Поля `subtotal`, `discount_sum` и `discount_percentage` появляются только при наличии скидки (обратная совместимость).
 
+## Создание QR-счёта (на экране кассы)
+
+**Эндпоинт:** `POST /invoices/qr`
+
+Оплата по QR-коду на экране кассы — без номера телефона клиента. Касса показывает QR, покупатель сканирует приложением Kaspi и оплачивает. Подходит для оффлайн-точек, касс, торговых терминалов.
+
+В отличие от обычного `POST /invoices`:
+- Не нужен `phone_number`.
+- Ответ синхронный — возвращается готовый QR (`qr_token_url` + PNG-изображение).
+- TTL счёта в Kaspi — **5 минут** (vs 24 часа у обычного).
+- Отмена/возврат не поддерживаются — если оплата не пришла, счёт автоматически переходит в `expired`.
+- Per-org rate limit: **60 QR-запросов в минуту на организацию** (отдельно от общего лимита API).
+
+Тело запроса зависит от настройки организации (`has_catalog`):
+
+### Запрос (без каталога)
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "amount": 5000,
+    "description": "Заказ №123",
+    "external_order_id": "order-123"
+  }'
+```
+
+### Запрос (с каталогом)
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Заказ №123",
+    "cart_items": [
+      {"catalog_item_id": 608400, "count": 2, "price": 1500}
+    ],
+    "discount_percentage": 10
+  }'
+```
+
+### Параметры
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `amount` | number | Да* | Сумма (только если has_catalog=false), 0.01 - 99 999 999.99 ₸ |
+| `description` | string | Нет | Описание (макс. 500). Используется как наименование товара в чеке Kaspi |
+| `external_order_id` | string | Нет | Ваш ID заказа (макс. 255) |
+| `cart_items` | array | Да* | Только если has_catalog=true. От 1 до 100 позиций |
+| `discount_percentage` | number | Нет | Скидка на весь чек, 1-99% |
+| `simulate` | string | Нет | Только для sandbox: `paid` \| `cancelled` \| `expired`. См. [Sandbox-режим](#sandbox-режим) |
+
+\* зависит от `has_catalog`: либо `amount`, либо `cart_items`.
+
+### Ответ 201
+
+```json
+{
+  "id": 63474,
+  "amount": "100.00",
+  "status": "pending",
+  "paid_at": null,
+  "phone": null,
+  "created_at": "2026-05-09T07:27:37+00:00",
+  "is_qr_token": true,
+  "qr_token_url": "https://qr.kaspi.kz/5180629155669855245469327791577114170390",
+  "qr_image_url": "https://bpapi.bazarbay.site/storage/qr/3f41ee95-5fb1-41b6-8f90-d2ac7aebcb42.png",
+  "qr_expires_at": "2026-05-09T07:32:38+00:00"
+}
+```
+
+| Поле | Описание |
+|------|----------|
+| `id` | ID счёта в нашей системе. По нему получать статус (`GET /invoices/{id}`) и приходят webhook-уведомления. |
+| `is_qr_token` | Флаг QR-счёта. Также возвращается в `GET /invoices/{id}` и в webhook-теле. |
+| `qr_token_url` | Прямая ссылка от Kaspi (`qr.kaspi.kz/...`). Та же информация, что закодирована в PNG. Можно перерисовать QR на стороне клиента, если нужен другой стиль/размер. |
+| `qr_image_url` | Готовый PNG 600×600 с логотипом Kaspi в центре (ECC=High). На нашем CDN-storage, доступен без авторизации, живёт `qr_expires_at` + 60 сек (после этого 404). |
+| `qr_expires_at` | Время в UTC, когда QR истечёт у Kaspi. Ровно 5 минут от создания. |
+
+### Жизненный цикл и обработка статуса
+
+1. После создания счёт в статусе `pending`. Сервер сам поллит Kaspi каждые 2 сек.
+2. При смене статуса на терминальный (`paid`, `cancelled`, `expired`) прилетает обычный webhook `invoice.status_changed` — точно такой же по формату, как для обычных счетов, но в `invoice` есть `is_qr_token: true` и QR-поля.
+3. Альтернативный poll: клиент может опрашивать `GET /invoices/{id}` каждые 2-3 сек.
+4. Через 5 минут без оплаты статус становится `expired`. PNG исчезает из storage в течение минуты — `qr_image_url` начнёт возвращать 404.
+5. Отмена/возврат с QR не поддерживается — для отмены просто дождаться TTL.
+
+### Sandbox-режим
+
+Если у организации `sandbox_mode=true`, эндпоинт работает БЕЗ обращения к Kaspi: возвращается фиктивный `qr_token_url` (`https://qr.kaspi.kz/sandbox/<uuid>`) и реально отрисованный PNG. Его можно отобразить в UI и протестировать всю фронтенд-логику, но реальное приложение Kaspi такой QR не примет — он не существует на стороне Kaspi.
+
+#### Параметр `simulate` (только sandbox)
+
+Для быстрого теста терминальных сценариев можно передать `simulate` прямо в теле создания — клиент в одном вызове получает уже готовый завершённый счёт нужного статуса (без необходимости отдельной ручки `/simulate-status`):
+
+| `simulate` | Результирующий `status` | `qr_expires_at` | `paid_at` | Webhook сразу? |
+|------------|------------------------|-----------------|-----------|----------------|
+| (не передан) | `pending` | now + 5 мин | `null` | нет |
+| `expired` | `expired` | now − 1 мин (в прошлом) | `null` | да |
+| `paid` | `paid` | now + 5 мин | now | да |
+| `cancelled` | `cancelled` | now + 5 мин | `null` | да |
+
+- Параметр игнорируется (молча) для не-sandbox организаций — для боевых организаций реальный жизненный цикл управляется Kaspi.
+- Допустимые значения проходят через стандартную validation, неизвестные → 422.
+
+##### Пример: получить уже истёкший QR
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+  -H "X-API-Key: <sandbox_api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 250, "simulate": "expired"}'
+```
+
+Ответ (фрагмент):
+
+```json
+{
+  "id": 63497,
+  "status": "expired",
+  "is_qr_token": true,
+  "qr_token_url": "https://qr.kaspi.kz/sandbox/b5d6ffe9-…",
+  "qr_image_url": "https://bpapi.bazarbay.site/storage/qr/b5d6ffe9-….png",
+  "qr_expires_at": "2026-05-09T07:52:08+00:00"
+}
+```
+
+Отдельно `POST /api/invoices/{id}/simulate-status` тоже работает с QR-инвойсами (для динамических сценариев: создал `pending` → подождал в UI → явно перевёл в `paid`/`cancelled`/`expired`).
+
+### Ошибки
+
+| Код | error | Когда |
+|-----|-------|-------|
+| 400 | `organization_required` | У api-key нет организации |
+| 400 | `kaspi_session_not_configured` | У организации нет `kaspi_user_id` |
+| 400 | `Organization not found or not verified` | Боевая организация в статусе ≠ `verified` |
+| 400 | `sandbox_invoice_limit` | Превышен лимит sandbox-счетов |
+| 422 | `Validation failed` | Невалидные параметры (см. body schema) |
+| 422 | `This organization requires cart items.` | `has_catalog=true`, но `cart_items` не передан |
+| 422 | `This organization does not support catalog.` | `has_catalog=false`, но передан `cart_items` |
+| 429 | `qr_rate_limit` | Per-org лимит 60 QR/мин |
+| 500 | `qr_render_failed` | Не удалось отрисовать PNG |
+| 502 | `kaspi_error` | Kaspi API вернул ошибку |
+| 503 | `kaspi_session_invalid` | Сессия Kaspi истекла |
+
 ## Список счетов
 
 **Эндпоинт:** `GET /invoices`

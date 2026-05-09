@@ -2,10 +2,11 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-Last updated: 2026-04-07
+Last updated: 2026-05-09
 
 ## IMPORTANT: Recent API Changes
 
+- **2026-05-09** [NEW] POST /api/v1/invoices/qr — оплата по QR-коду на экране кассы без номера телефона. В ответе `qr_token_url` (Kaspi-ссылка) и `qr_image_url` (PNG 600×600). TTL — 5 минут. Webhook прилетает с `is_qr_token: true`. Sandbox-параметр `simulate=paid|cancelled|expired` создаёт счёт сразу в терминальном статусе с мгновенной отправкой webhook.
 - **2026-04-07** [NEW] Статусы `processing` (ожидает отправки в Kaspi) и `error` (ошибка отправки) для счетов
 - **2026-04-07** [NEW] Поле `error_message` (string|null) в ответах счетов — описание ошибки
 - **2026-04-07** [NEW] Kaspi-ошибки при создании счёта: 400 `kaspi_session_not_configured`, 503 `kaspi_session_invalid`
@@ -72,6 +73,7 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 
 ### Invoices (Счета)
 - [POST /api/v1/invoices]: Создание счёта
+- [POST /api/v1/invoices/qr]: Создание QR-счёта (на экране кассы, без телефона; sandbox поддерживает `simulate`)
 - [GET /api/v1/invoices]: Список счетов
 - [GET /api/v1/invoices/{id}]: Получить счёт
 - [POST /api/v1/invoices/{id}/cancel]: Отменить счёт
