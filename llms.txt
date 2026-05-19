@@ -2,7 +2,7 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-Last updated: 2026-05-09
+Last updated: 2026-05-19
 
 ## IMPORTANT: Recent API Changes
 

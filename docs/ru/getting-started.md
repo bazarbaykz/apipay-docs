@@ -18,12 +18,6 @@
 | Content-Type | `application/json` |
 | Rate Limit | 200 запросов/минуту на API ключ |
 
-## Проверка доступности
-
-```bash
-curl https://bpapi.bazarbay.site/api/v1/status
-```
-
 ## Первый счёт
 
 ```bash

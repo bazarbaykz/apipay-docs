@@ -18,14 +18,6 @@ Before using the ApiPay.kz API, you need to:
 | Content-Type | `application/json` |
 | Rate Limit | 200 requests/minute per API key |
 
-## Health Check
-
-Verify the API is available (no authentication required):
-
-```bash
-curl https://bpapi.bazarbay.site/api/v1/status
-```
-
 ## Your First Invoice
 
 ```bash
