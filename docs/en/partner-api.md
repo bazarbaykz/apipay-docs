@@ -42,8 +42,9 @@ they receive from Kaspi.
 > **Important:** the authorization `process_id` is valid for 10 minutes.
 > Steps 3 and 4 must be completed within that window.
 
-A full runnable example is in [examples/](../../examples/) —
-`partner-onboarding.{js,py,php}` and `examples/curl/partner-onboarding.sh`.
+Runnable end-to-end examples are in [examples/](../../examples/):
+`javascript/partner-onboarding.js`, `python/partner_onboarding.py`,
+`php/partner-onboarding.php`, and `curl/partner-onboarding.sh`.
 
 ## Endpoints
 

@@ -42,8 +42,9 @@ X-Partner-Key: pk_your_partner_key_here
 > **Важно:** идентификатор авторизации `process_id` живёт 10 минут.
 > Шаги 3 и 4 нужно выполнить в этом окне.
 
-Полный рабочий пример — в [examples/](../../examples/):
-`partner-onboarding.{js,py,php}` и `examples/curl/partner-onboarding.sh`.
+Готовые примеры онбординга — в [examples/](../../examples/):
+`javascript/partner-onboarding.js`, `python/partner_onboarding.py`,
+`php/partner-onboarding.php`, `curl/partner-onboarding.sh`.
 
 ## Эндпоинты
 
