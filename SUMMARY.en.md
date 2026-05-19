@@ -23,3 +23,4 @@
 ## Reference
 
 * [OpenAPI Specification](openapi.yaml)
+* [Partner API OpenAPI Spec](openapi-partner.yaml)

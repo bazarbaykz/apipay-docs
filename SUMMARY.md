@@ -23,3 +23,4 @@
 ## Справка
 
 * [OpenAPI спецификация](openapi.yaml)
+* [OpenAPI спецификация Partner API](openapi-partner.yaml)

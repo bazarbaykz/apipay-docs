@@ -1,0 +1,487 @@
+openapi: "3.0.0"
+info:
+  title: ApiPay.kz Partner API
+  version: "1.0.0"
+  description: >-
+    Server-to-server API для партнёров-интеграторов (CRM-системы, платформы).
+    Позволяет программно подключать мерчантов в ApiPay и выставлять счета от
+    их имени. Аутентификация — по заголовку X-Partner-Key. После онбординга
+    используйте X-API-Key мерчанта с обычным API (/api/v1).
+  contact:
+    name: ApiPay.kz Support
+    url: https://wa.me/77085167489
+servers:
+  - url: https://bpapi.bazarbay.site
+    description: Production API
+security:
+  - PartnerKey: []
+tags:
+  - name: Organizations
+    description: Управление организациями мерчантов
+  - name: Kaspi Auth
+    description: Авторизация кассира Kaspi (онбординг)
+  - name: API Keys
+    description: Выдача API-ключей мерчантов
+paths:
+  /api/partner/organizations:
+    post:
+      tags: [Organizations]
+      summary: Создать организацию мерчанта
+      description: >-
+        Создаёт организацию мерчанта. Идемпотентно по external_id — повторный
+        запрос вернёт существующую организацию.
+      operationId: createPartnerOrganization
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                has_catalog:
+                  type: boolean
+                  description: Создать организацию с каталогом товаров
+                  example: false
+                external_id:
+                  type: string
+                  description: Ваш идентификатор клиента в CRM
+                  example: crm-client-42
+      responses:
+        "201":
+          description: Организация создана (200 при идемпотентном повторе)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      tags: [Organizations]
+      summary: Список организаций
+      description: Возвращает организации партнёра с пагинацией.
+      operationId: listPartnerOrganizations
+      parameters:
+        - name: per_page
+          in: query
+          required: false
+          description: "Размер страницы: 1–100"
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: page
+          in: query
+          required: false
+          description: Номер страницы
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+      responses:
+        "200":
+          description: Список организаций
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  organizations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Organization"
+                  current_page:
+                    type: integer
+                    example: 1
+                  per_page:
+                    type: integer
+                    example: 25
+                  total:
+                    type: integer
+                    example: 42
+                  last_page:
+                    type: integer
+                    example: 2
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/partner/organizations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      tags: [Organizations]
+      summary: Получить организацию
+      operationId: getPartnerOrganization
+      responses:
+        "200":
+          description: Карточка организации
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Organizations]
+      summary: Отвязать организацию
+      description: Деактивирует API-ключи организации и помечает её как удалённую.
+      operationId: deletePartnerOrganization
+      responses:
+        "200":
+          description: Организация отвязана
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/partner/organizations/{id}/kaspi-auth/init:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Kaspi Auth]
+      summary: Шаг 1 — начать авторизацию кассира
+      operationId: partnerKaspiAuthInit
+      responses:
+        "200":
+          description: Авторизация начата
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  process_id:
+                    type: string
+                    description: Идентификатор процесса авторизации. Живёт 10 минут.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/partner/organizations/{id}/kaspi-auth/send-phone:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Kaspi Auth]
+      summary: Шаг 2 — отправить номер кассира
+      description: Kaspi отправляет SMS-код на телефон кассира.
+      operationId: partnerKaspiAuthSendPhone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cashier_phone]
+              properties:
+                cashier_phone:
+                  type: string
+                  description: Номер кассира в формате 7XXXXXXXXXX
+                  pattern: ^7[0-9]{10}$
+                  example: "77001234567"
+      responses:
+        "200":
+          description: SMS отправлено
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/KaspiUnavailable"
+  /api/partner/organizations/{id}/kaspi-auth/verify-otp:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Kaspi Auth]
+      summary: Шаг 3 — подтвердить код из SMS
+      operationId: partnerKaspiAuthVerifyOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp]
+              properties:
+                otp:
+                  type: string
+                  description: Код из SMS, 4–6 цифр
+                  example: "1234"
+      responses:
+        "200":
+          description: >-
+            Результат проверки. При успехе success=true с карточкой
+            организации; при неверном коде success=false и error=invalid_otp.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  mode:
+                    type: string
+                    example: self
+                  organization:
+                    $ref: "#/components/schemas/Organization"
+                  error:
+                    type: string
+                    description: Код ошибки при неуспехе (например, invalid_otp)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /api/partner/organizations/{id}/kaspi-auth/status:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      tags: [Kaspi Auth]
+      summary: Статус авторизации кассира
+      operationId: partnerKaspiAuthStatus
+      responses:
+        "200":
+          description: Статус авторизации
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  status:
+                    type: string
+                    example: pending
+                  kaspi_connected:
+                    type: boolean
+                    example: false
+                  expires_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/partner/organizations/{id}/api-key:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [API Keys]
+      summary: Выдать X-API-Key мерчанта
+      description: >-
+        Создаёт или перевыпускает X-API-Key и webhook для организации.
+        Идемпотентно. Ключ и секрет возвращаются в открытом виде один раз.
+      operationId: createPartnerApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [webhook_url]
+              properties:
+                name:
+                  type: string
+                  description: Название ключа
+                  example: CRM key
+                webhook_url:
+                  type: string
+                  format: uri
+                  description: >-
+                    URL для webhook-уведомлений. Приватные и внутренние адреса
+                    отклоняются.
+                  example: https://your-crm.example.com/webhooks/kaspi
+                webhook_secret:
+                  type: string
+                  description: >-
+                    Секрет для подписи webhook. Генерируется автоматически,
+                    если не указан.
+      responses:
+        "200":
+          description: Ключ выдан
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  key:
+                    type: string
+                    description: X-API-Key мерчанта в открытом виде. Показывается один раз.
+                  key_id:
+                    type: integer
+                    example: 200
+                  webhook_url:
+                    type: string
+                    format: uri
+                  webhook_secret:
+                    type: string
+                    description: Секрет webhook в открытом виде. Показывается один раз.
+                  is_org_default:
+                    type: boolean
+                    example: true
+                  regenerated:
+                    type: boolean
+                    example: false
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+components:
+  securitySchemes:
+    PartnerKey:
+      type: apiKey
+      in: header
+      name: X-Partner-Key
+      description: Партнёрский ключ, выдаётся командой ApiPay при одобрении заявки.
+  parameters:
+    OrganizationId:
+      name: id
+      in: path
+      required: true
+      description: ID организации мерчанта
+      schema:
+        type: integer
+  schemas:
+    Organization:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 50
+        name:
+          type: string
+          example: "ТОО Example"
+        idn:
+          type: string
+          description: БИН/ИИН организации
+          example: "123456789012"
+        status:
+          type: string
+          enum: [pending, verified, suspended]
+          example: pending
+        sandbox_mode:
+          type: boolean
+          example: false
+        has_catalog:
+          type: boolean
+          example: false
+        kaspi_connected:
+          type: boolean
+          example: true
+        session_mode:
+          type: string
+          example: self
+        external_id:
+          type: string
+          nullable: true
+          example: crm-client-42
+        payment_status:
+          type: string
+          enum: [none, active, expired]
+          example: none
+        payment_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        has_active_payment:
+          type: boolean
+          example: false
+        created_at:
+          type: string
+          format: date-time
+    OrganizationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        organization:
+          $ref: "#/components/schemas/Organization"
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Машиночитаемый код ошибки
+        message:
+          type: string
+          description: Человекочитаемое описание
+  responses:
+    Unauthorized:
+      description: Неверный или отсутствующий X-Partner-Key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Нет доступа к запрошенному ресурсу
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Организация не найдена
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: "Конфликт: no_process (авторизация не начата или истекла), already_exists"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: "Ошибка валидации: invalid_phone, not_cashier, недопустимый webhook_url"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    KaspiUnavailable:
+      description: "Kaspi API недоступен: sms_failed"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

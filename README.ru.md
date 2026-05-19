@@ -100,6 +100,8 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 
 Вы можете импортировать её в [Swagger Editor](https://editor.swagger.io/), [Postman](https://www.postman.com/) или любой другой OpenAPI-совместимый инструмент.
 
+У [Partner API](docs/ru/partner-api.md) отдельная спецификация: [openapi-partner.yaml](openapi-partner.yaml).
+
 ## Поддержка
 
 - **WhatsApp**: [+7 708 516 7489](https://wa.me/77085167489)

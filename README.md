@@ -100,6 +100,8 @@ Full OpenAPI 3.0 specification is available at [openapi.yaml](openapi.yaml).
 
 You can import it into [Swagger Editor](https://editor.swagger.io/), [Postman](https://www.postman.com/), or any other OpenAPI-compatible tool.
 
+The [Partner API](docs/en/partner-api.md) has a separate spec: [openapi-partner.yaml](openapi-partner.yaml).
+
 ## Support
 
 - **WhatsApp**: [+7 708 516 7489](https://wa.me/77085167489)
