@@ -28,16 +28,19 @@ Webhooks доставляют уведомления в реальном вре�
     "discount_percentage": "10",
     "status": "paid",
     "description": "Оплата заказа",
+    "kaspi_invoice_id": "13234689513",
     "client_name": "Иван Иванов",
+    "client_phone": "87071234567",
     "is_sandbox": false,
-    "paid_at": "2025-12-25T14:35:00Z"
+    "is_qr_token": false,
+    "paid_at": "2026-02-12T14:35:00+05:00"
   },
-  "source": "api",
-  "timestamp": "2025-12-25T14:35:01Z"
+  "source": "My API Key",
+  "timestamp": "2026-02-12T14:35:01+05:00"
 }
 ```
 
-> **Примечание:** Поля `subtotal`, `discount_sum` и `discount_percentage` появляются только при наличии скидки в счёте. Поле `is_sandbox` показывает, был ли ресурс создан в sandbox-режиме.
+> **Примечание:** Поля `subtotal`, `discount_sum` и `discount_percentage` появляются только при наличии скидки в счёте. Поле `is_sandbox` показывает, был ли ресурс создан в sandbox-режиме. Поле `is_qr_token` равно `true`, если счёт создан через QR-эндпоинт (`POST /invoices/qr`).
 
 ### invoice.refunded
 
@@ -46,18 +49,28 @@ Webhooks доставляют уведомления в реальном вре�
 ```json
 {
   "event": "invoice.refunded",
+  "refund": {
+    "id": 5,
+    "amount": "2000.00",
+    "status": "completed",
+    "reason": "Возврат товара",
+    "created_at": "2026-02-12T10:00:00+05:00"
+  },
   "invoice": {
     "id": 42,
-    "amount": "15000.00",
-    "subtotal": "16500.00",
-    "discount_sum": "1500.00",
-    "status": "partially_refunded",
-    "total_refunded": "5000.00",
+    "external_order_id": "order_123",
+    "amount": "5000.00",
+    "subtotal": "5500.00",
+    "discount_sum": "500.00",
+    "total_refunded": "2000.00",
+    "available_for_refund": "3000.00",
+    "is_fully_refunded": false,
     "is_sandbox": false,
-    "external_order_id": "order_123"
+    "status": "paid",
+    "kaspi_invoice_id": "13234689513"
   },
-  "source": "api",
-  "timestamp": "2025-12-25T15:00:00Z"
+  "source": "My API Key",
+  "timestamp": "2026-02-12T10:00:01+05:00"
 }
 ```
 
@@ -208,12 +221,15 @@ function verifyWebhook($payload, $signature, $secret) {
 
 ## Политика повторов
 
-- **Webhooks счетов** — Не повторяются
-- **Webhooks подписок** — Повторяются до 3 раз с интервалами 1, 5 и 15 минут
+Все события вебхуков — и по счетам, и по подпискам — повторяются при неудачной доставке.
+
+- **До 11 попыток доставки:** 1 первая доставка + 10 повторов
+- **Экспоненциальные интервалы:** 10с, 30с, 1м, 1.5м, 2м, 5м, 10м, 15м, 30м, 1ч — всего около 2 часов
+- **Успех:** доставка считается успешной только при HTTP-ответе 2xx; любой другой статус (или таймаут) запускает повтор
 
 ## Требования к ответу
 
-1. Возвращайте **2xx статус** в течение 30 секунд
+1. Возвращайте статус **2xx** в течение **5 секунд** (таймаут доставки: 5с на ответ плюс до 3с на установление соединения)
 2. Будьте **идемпотентны** — корректно обрабатывайте повторные доставки
 
 ## Лучшие практики безопасности

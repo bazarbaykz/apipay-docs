@@ -28,16 +28,19 @@ Sent when an invoice status changes (paid, cancelled, expired).
     "discount_percentage": "10",
     "status": "paid",
     "description": "Order payment",
+    "kaspi_invoice_id": "13234689513",
     "client_name": "John Doe",
+    "client_phone": "87071234567",
     "is_sandbox": false,
-    "paid_at": "2025-12-25T14:35:00Z"
+    "is_qr_token": false,
+    "paid_at": "2026-02-12T14:35:00+05:00"
   },
-  "source": "api",
-  "timestamp": "2025-12-25T14:35:01Z"
+  "source": "My API Key",
+  "timestamp": "2026-02-12T14:35:01+05:00"
 }
 ```
 
-> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied. The `is_sandbox` field indicates whether the resource was created in sandbox mode.
+> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied. The `is_sandbox` field indicates whether the resource was created in sandbox mode. The `is_qr_token` field is `true` when the invoice was created via the QR endpoint (`POST /invoices/qr`).
 
 ### invoice.refunded
 
@@ -46,18 +49,28 @@ Sent when an invoice is refunded (fully or partially).
 ```json
 {
   "event": "invoice.refunded",
+  "refund": {
+    "id": 5,
+    "amount": "2000.00",
+    "status": "completed",
+    "reason": "Product return",
+    "created_at": "2026-02-12T10:00:00+05:00"
+  },
   "invoice": {
     "id": 42,
-    "amount": "15000.00",
-    "subtotal": "16500.00",
-    "discount_sum": "1500.00",
-    "status": "partially_refunded",
-    "total_refunded": "5000.00",
+    "external_order_id": "order_123",
+    "amount": "5000.00",
+    "subtotal": "5500.00",
+    "discount_sum": "500.00",
+    "total_refunded": "2000.00",
+    "available_for_refund": "3000.00",
+    "is_fully_refunded": false,
     "is_sandbox": false,
-    "external_order_id": "order_123"
+    "status": "paid",
+    "kaspi_invoice_id": "13234689513"
   },
-  "source": "api",
-  "timestamp": "2025-12-25T15:00:00Z"
+  "source": "My API Key",
+  "timestamp": "2026-02-12T10:00:01+05:00"
 }
 ```
 
@@ -208,12 +221,15 @@ function verifyWebhook($payload, $signature, $secret) {
 
 ## Retry Policy
 
-- **Invoice webhooks** — Not retried
-- **Subscription webhooks** — Retried up to 3 times at 1, 5, and 15 minute intervals
+All webhook events — both invoice and subscription — are retried on delivery failure.
+
+- **Up to 11 delivery attempts:** 1 initial delivery + 10 retries
+- **Exponential backoff intervals:** 10s, 30s, 1m, 1.5m, 2m, 5m, 10m, 15m, 30m, 1h — about 2 hours total
+- **Success:** a delivery counts as successful only on an HTTP 2xx response; any other status (or a timeout) triggers a retry
 
 ## Response Requirements
 
-1. Return **2xx status** within 30 seconds
+1. Return a **2xx status** within **5 seconds** (delivery timeout: 5s for the response plus up to 3s to establish the connection)
 2. Be **idempotent** — handle duplicate deliveries
 
 ## Security Best Practices
