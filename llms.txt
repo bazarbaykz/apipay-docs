@@ -173,6 +173,28 @@ Webhook delivery retries: up to 11 attempts (1 initial + 10 retries) with expone
 }
 ```
 
+## Error Codes
+
+HTTP status codes: 400 Bad Request, 401 Unauthorized (API key missing/invalid/expired/unlinked, or account deactivated), 403 Forbidden (organization suspended or not verified), 404 Not Found, 422 Validation Error (details in `errors`), 429 Too Many Requests (see `retry_after`), 500 Server Error, 502 Bad Gateway (Kaspi side), 503 Service Unavailable (Kaspi session invalid/expired).
+
+Application error codes (returned in the `error` field of the response):
+- `organization_required` (400) — organization not connected
+- `Organization not found or not verified` (400) — organization not verified in production mode
+- `kaspi_session_not_configured` (400) — Kaspi cashier not connected
+- `kaspi_session_invalid` (503) — Kaspi cashier session expired
+- `connection_ambiguous` (422) — multiple cashier connections; pass `kaspi_connection_id`
+- `sandbox_invoice_limit` (400) — sandbox invoice limit reached (25 per organization)
+- `sandbox_subscription_limit` (400) — sandbox subscription limit reached (10 per organization)
+- `qr_rate_limit` (429) — QR request limit reached (60/min per organization)
+- `qr_render_failed` (500) — failed to render the QR image
+- `kaspi_error` (502) — Kaspi API error while creating the QR token
+- `Invoice cannot be cancelled` (400) — only `pending`/`processing` invoices can be cancelled
+- `Invoice is not refundable` (400) — only a paid, not fully refunded invoice can be refunded
+- `Refund amount exceeds available amount` (400) — see `available_for_refund`
+- `Organization not verified` (403) — production subscriptions require a verified organization
+
+Asynchronous Kaspi errors: POST /invoices and POST /invoices/qr return 201 with status `processing`. If Kaspi cannot process the invoice, the status becomes `error` and the reason is in `error_message` (plain text, no fixed codes) — fetch it via GET /invoices/{id}.
+
 ## Invoice Statuses
 - `processing` — awaiting delivery to Kaspi (can be cancelled)
 - `pending` — awaiting payment (can be cancelled)
