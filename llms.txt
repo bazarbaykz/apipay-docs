@@ -146,6 +146,21 @@ Webhook delivery retries: up to 11 attempts (1 initial + 10 retries) with expone
 }
 ```
 
+## Partner API
+
+For CRM and platform integrators. A server-to-server API to onboard merchants and issue invoices on their behalf, without manual account setup. Auth: header `X-Partner-Key`. Base URL: `https://bpapi.bazarbay.site`. Full reference: docs/en/partner-api.md and openapi-partner.yaml.
+
+Merchant onboarding flow (5 steps):
+1. POST /api/partner/organizations — create the merchant organization
+2. POST /api/partner/organizations/{id}/kaspi-auth/init — start cashier authorization (process_id valid 10 min)
+3. POST /api/partner/organizations/{id}/kaspi-auth/send-phone — Kaspi sends an SMS to the cashier
+4. POST /api/partner/organizations/{id}/kaspi-auth/verify-otp — confirm the SMS code
+5. POST /api/partner/organizations/{id}/api-key — issue the merchant's X-API-Key + webhook
+
+Other endpoints: GET /api/partner/organizations (list, paginated), GET /api/partner/organizations/{id}, DELETE /api/partner/organizations/{id}, GET /api/partner/organizations/{id}/kaspi-auth/status.
+
+Rate limits: 120 req/min per partner; kaspi-auth (send-phone, verify-otp) 10 req/min per partner + organization. After onboarding, use the merchant's X-API-Key with the regular /api/v1 API.
+
 ## Error Response Format
 
 ### validation (422)

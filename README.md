@@ -83,6 +83,7 @@ Response:
 - [Refunds](docs/en/refunds.md) — Full and partial refunds
 - [Webhooks](docs/en/webhooks.md) — Real-time payment notifications
 - [Error Codes](docs/en/errors.md) — HTTP status codes and error handling
+- [Partner API](docs/en/partner-api.md) — For CRM/platform integrators: onboard merchants and issue invoices on their behalf
 
 ## Code Examples
 

@@ -11,6 +11,7 @@
 * [Refunds](docs/en/refunds.md)
 * [Webhooks](docs/en/webhooks.md)
 * [Errors](docs/en/errors.md)
+* [Partner API](docs/en/partner-api.md)
 
 ## Code Examples
 

@@ -83,6 +83,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 - [Возвраты](docs/ru/refunds.md) — Полные и частичные возвраты
 - [Webhooks](docs/ru/webhooks.md) — Уведомления о платежах в реальном времени
 - [Коды ошибок](docs/ru/errors.md) — HTTP коды и обработка ошибок
+- [Partner API](docs/ru/partner-api.md) — Для CRM-интеграторов: подключайте мерчантов и выставляйте счета от их имени
 
 ## Примеры кода
 

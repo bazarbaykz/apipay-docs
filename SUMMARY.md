@@ -11,6 +11,7 @@
 * [Возвраты](docs/ru/refunds.md)
 * [Вебхуки](docs/ru/webhooks.md)
 * [Ошибки](docs/ru/errors.md)
+* [Partner API](docs/ru/partner-api.md)
 
 ## Примеры кода
 
