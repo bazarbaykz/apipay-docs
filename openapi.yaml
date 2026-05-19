@@ -311,6 +311,185 @@ paths:
                       total:
                         type: integer
                         example: 48
+  "/invoices/qr":
+    post:
+      summary: Создать QR-счёт
+      description: "Создаёт счёт для оплаты по QR-коду на экране кассы — без номера телефона клиента. Покупатель сканирует QR приложением Kaspi и оплачивает. TTL счёта — 5 минут; отмена и возврат не поддерживаются (счёт сам переходит в expired). Тело запроса зависит от организации: amount (без каталога) или cart_items (с каталогом)."
+      operationId: createQrInvoice
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: object
+              description: "Тело зависит от has_catalog: amount (без каталога) либо cart_items (с каталогом)."
+              properties:
+                amount:
+                  type: number
+                  description: "Сумма в тенге (0.01 - 99999999.99). Только при has_catalog=false. Игнорируется при наличии cart_items."
+                  minimum: 0.01
+                  maximum: 99999999.99
+                  example: 5000
+                description:
+                  type: string
+                  description: Описание (наименование товара в чеке Kaspi, макс 500 символов)
+                  maxLength: 500
+                  nullable: true
+                  example: "Заказ №123"
+                external_order_id:
+                  type: string
+                  description: Внешний ID заказа для сопоставления (макс 255 символов)
+                  maxLength: 255
+                  nullable: true
+                  example: order-123
+                cart_items:
+                  type: array
+                  description: Товары корзины (только для организаций с каталогом, has_catalog=true). От 1 до 100 позиций.
+                  items:
+                    type: object
+                    properties:
+                      catalog_item_id:
+                        type: integer
+                        description: ID товара из каталога (поле id из GET /catalog)
+                      count:
+                        type: integer
+                        description: Количество
+                        minimum: 1
+                      price:
+                        type: number
+                        nullable: true
+                        description: Кастомная цена позиции (0.01 - 99999999.99). Заменяет каталожную цену.
+                        minimum: 0.01
+                        maximum: 99999999.99
+                    required:
+                      - catalog_item_id
+                      - count
+                discount_percentage:
+                  type: number
+                  nullable: true
+                  description: Скидка на весь чек, 1-99% (только с cart_items)
+                  example: 10
+                simulate:
+                  type: string
+                  nullable: true
+                  enum:
+                    - paid
+                    - cancelled
+                    - expired
+                  description: "Только для sandbox-организаций: создать счёт сразу в терминальном статусе с мгновенной отправкой webhook. В рабочем режиме игнорируется."
+      responses:
+        201:
+          description: QR-счёт создан — сервер вернул готовую ссылку и PNG-изображение
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    description: ID счёта. Используется в GET /invoices/{id} и в webhook-уведомлениях.
+                    example: 63474
+                  amount:
+                    type: string
+                    example: "100.00"
+                  status:
+                    type: string
+                    example: pending
+                  phone:
+                    type: string
+                    nullable: true
+                    description: Всегда null для QR-счетов
+                  paid_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  created_at:
+                    type: string
+                    format: date-time
+                  is_qr_token:
+                    type: boolean
+                    description: Признак QR-счёта. Также возвращается в GET /invoices/{id} и в webhook-теле.
+                    example: true
+                  qr_token_url:
+                    type: string
+                    format: uri
+                    description: Прямая ссылка от Kaspi (qr.kaspi.kz/...). Та же информация, что закодирована в PNG.
+                    example: "https://qr.kaspi.kz/5180629155669855245469327791577114170390"
+                  qr_image_url:
+                    type: string
+                    format: uri
+                    description: Готовый PNG 600×600 с логотипом Kaspi. Доступен без авторизации, живёт qr_expires_at + 60 сек, затем 404.
+                    example: "https://bpapi.bazarbay.site/storage/qr/3f41ee95-5fb1-41b6-8f90-d2ac7aebcb42.png"
+                  qr_expires_at:
+                    type: string
+                    format: date-time
+                    description: Время в UTC, когда QR истечёт у Kaspi. Ровно 5 минут от создания.
+                    example: "2026-05-09T07:32:38+00:00"
+        400:
+          description: "organization_required, kaspi_session_not_configured, sandbox_invoice_limit или организация не верифицирована"
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: organization_required
+                  message:
+                    type: string
+        401:
+          description: Неверный API ключ
+        422:
+          description: Ошибка валидации полей
+        429:
+          description: qr_rate_limit — превышен лимит 60 QR-запросов в минуту на организацию
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: qr_rate_limit
+                  message:
+                    type: string
+                    example: "QR rate limit exceeded. Try again in a minute."
+        500:
+          description: qr_render_failed — не удалось отрисовать PNG
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: qr_render_failed
+                  message:
+                    type: string
+        502:
+          description: kaspi_error — Kaspi API вернул ошибку
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: kaspi_error
+                  message:
+                    type: string
+        503:
+          description: kaspi_session_invalid — сессия Kaspi недействительна или истекла
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: kaspi_session_invalid
+                  message:
+                    type: string
   "/invoices/{id}":
     get:
       summary: Получить счёт

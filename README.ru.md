@@ -44,6 +44,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 | Эндпоинт | Описание |
 |----------|----------|
 | `POST /invoices` | Создание счёта на оплату |
+| `POST /invoices/qr` | Создание QR-счёта (на экране кассы) |
 | `GET /invoices` | Список счетов |
 | `GET /invoices/{id}` | Получение счёта |
 | `POST /invoices/{id}/cancel` | Отмена счёта |

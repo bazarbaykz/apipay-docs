@@ -44,6 +44,7 @@ Response:
 | Endpoint | Description |
 |----------|-------------|
 | `POST /invoices` | Create payment invoice |
+| `POST /invoices/qr` | Create QR invoice (cashier display) |
 | `GET /invoices` | List invoices |
 | `GET /invoices/{id}` | Get invoice details |
 | `POST /invoices/{id}/cancel` | Cancel pending invoice |

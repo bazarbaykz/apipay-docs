@@ -69,7 +69,7 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 - Content-Type: `application/json`
 - Rate Limit: 200 req/min per API key (QR invoices: separate 60 req/min per organization)
 
-## Endpoints (22 шт.)
+## Endpoints (23 шт.)
 
 ### Invoices (Счета)
 - [POST /api/v1/invoices]: Создание счёта
