@@ -67,7 +67,7 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 - Base URL: `https://bpapi.bazarbay.site/api/v1`
 - Auth: Header `X-API-Key: your_key`
 - Content-Type: `application/json`
-- Rate Limit: 60 req/min
+- Rate Limit: 200 req/min per API key (QR invoices: separate 60 req/min per organization)
 
 ## Endpoints (22 шт.)
 

@@ -72,7 +72,7 @@ Response:
 |-----------|-------|
 | Base URL | `https://bpapi.bazarbay.site/api/v1` |
 | Authentication | Header `X-API-Key: your_api_key` |
-| Rate Limit | 60 requests/minute |
+| Rate Limit | 200 requests/minute per API key |
 
 ## Documentation
 

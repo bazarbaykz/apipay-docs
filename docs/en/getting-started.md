@@ -16,7 +16,7 @@ Before using the ApiPay.kz API, you need to:
 | Base URL | `https://bpapi.bazarbay.site/api/v1` |
 | Authentication | Header `X-API-Key: your_api_key` |
 | Content-Type | `application/json` |
-| Rate Limit | 60 requests/minute |
+| Rate Limit | 200 requests/minute per API key |
 
 ## Health Check
 

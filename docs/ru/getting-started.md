@@ -16,7 +16,7 @@
 | Base URL | `https://bpapi.bazarbay.site/api/v1` |
 | Аутентификация | Заголовок `X-API-Key: your_api_key` |
 | Content-Type | `application/json` |
-| Rate Limit | 60 запросов/минуту |
+| Rate Limit | 200 запросов/минуту на API ключ |
 
 ## Проверка доступности
 
