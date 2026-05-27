@@ -314,7 +314,7 @@ paths:
   "/invoices/qr":
     post:
       summary: Создать QR-счёт
-      description: "Создаёт счёт для оплаты по QR-коду на экране кассы — без номера телефона клиента. Покупатель сканирует QR приложением Kaspi и оплачивает. TTL счёта — 5 минут; отмена и возврат не поддерживаются (счёт сам переходит в expired). Тело запроса зависит от организации: amount (без каталога) или cart_items (с каталогом)."
+      description: "Создаёт счёт для оплаты по QR-коду на экране кассы — без номера телефона клиента. Покупатель сканирует QR приложением Kaspi и оплачивает. TTL счёта — 5 минут; отмена и возврат не поддерживаются (счёт сам переходит в expired). Тело запроса зависит от организации: amount (без каталога) или cart_items (с каталогом).\n\nТолько 1 активный QR на организацию. Создание нового QR-счёта мгновенно делает предыдущий qr_token_url невалидным — старый QR на экране кассы перестанет приниматься Kaspi. Сам предыдущий счёт остаётся в pending до истечения TTL или оплаты нового. Не создавайте следующий QR, пока касса показывает текущий."
       operationId: createQrInvoice
       requestBody:
         required: true
@@ -2076,6 +2076,84 @@ paths:
                         example: 20
         404:
           description: Подписка не найдена
+  "/clients/check":
+    post:
+      summary: Проверить номер клиента в Kaspi
+      description: "Точечно проверяет, зарегистрирован ли номер в Kaspi, и возвращает имя клиента (если есть). Удобно перед созданием счёта/подписки.\n\nНомер нормализуется: первая цифра 7 или +7 заменяется на 8; пробелы, дефисы и плюсы удаляются. Поддерживаются форматы 77XXXXXXXXX, 87XXXXXXXXX, +77XXXXXXXXX, с пробелами/дефисами — на выходе всегда 8XXXXXXXXXX (11 цифр).\n\nЗапрещено использовать эндпоинт для массового перебора номеров (enumeration). Допустимо только разовое подтверждение в контексте уже известного клиента (перед созданием счёта/подписки или возвратом). На стороне сервера работает многослойная система детекции аномалий (учитываются распределение запросов, шаблоны номеров, поведенческие сигналы и совокупность других факторов — конкретные пороги намеренно не публикуем). При срабатывании детектора API-ключ деактивируется без предупреждения, организация блокируется до ручной проверки, данные передаются в Kaspi. Эта защита введена в интересах пользователей Kaspi — используйте эндпоинт по назначению."
+      operationId: checkClient
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: object
+              required:
+                - phone
+              properties:
+                phone:
+                  type: string
+                  description: "Телефон клиента. Принимает 77XXXXXXXXX, 87XXXXXXXXX, +77XXXXXXXXX, с пробелами/дефисами. После нормализации должен дать 11 цифр."
+                  example: "77001234567"
+      responses:
+        200:
+          description: "Номер проверен. Поле has_kaspi показывает, есть ли клиент в Kaspi."
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  phone:
+                    type: string
+                    description: Номер в нормализованном виде (8XXXXXXXXXX, 11 цифр).
+                    example: "87001234567"
+                  has_kaspi:
+                    type: boolean
+                    description: "true — у клиента установлен Kaspi и он зарегистрирован. false — клиент не найден или у него нет Kaspi (создавать счёт на этот номер нельзя — он упадёт в error)."
+                    example: true
+                  client_name:
+                    type: string
+                    nullable: true
+                    description: Имя клиента из Kaspi в формате «Имя Ф.». null если has_kaspi=false.
+                    example: "Иван И."
+        401:
+          description: Unauthorized — API-ключ отсутствует или невалиден.
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid API key"
+                  message:
+                    type: string
+                    example: "The provided API key is invalid or inactive"
+        422:
+          description: "Validation failed — phone пустой, отсутствует или не нормализуется к 11 цифрам."
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Validation failed"
+                  field:
+                    type: string
+                    example: phone
+                  message:
+                    type: string
+                    example: "Phone must be normalizable to 8XXXXXXXXXX (11 digits)."
+        429:
+          description: "Too Many Requests — превышен per-key лимит (60/мин или 10 000/сутки). Смотрите заголовок Retry-After."
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Too Many Requests"
 components:
   securitySchemes:
     ApiKeyAuth:

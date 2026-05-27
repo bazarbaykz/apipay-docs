@@ -6,6 +6,7 @@
 
 * [Начало работы](docs/ru/getting-started.md)
 * [Счета](docs/ru/invoices.md)
+* [Клиенты](docs/ru/clients.md)
 * [Подписки](docs/ru/subscriptions.md)
 * [Каталог](docs/ru/catalog.md)
 * [Возвраты](docs/ru/refunds.md)

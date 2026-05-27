@@ -2,10 +2,13 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-Last updated: 2026-05-19
+Last updated: 2026-05-27
 
 ## IMPORTANT: Recent API Changes
 
+- **2026-05-27** [NEW] POST /api/v1/clients/check — точечная проверка номера на наличие в Kaspi перед созданием счёта/подписки. Возвращает `{ phone (нормализованный), has_kaspi, client_name }`. Нормализует +7/7/8 и пробелы/дефисы. Не предназначен для массового перебора — на стороне сервера работает детекция аномалий, при срабатывании API-ключ деактивируется и организация блокируется.
+- **2026-05-27** [CHANGED] POST /api/v1/invoices/qr — у организации может быть только 1 активный QR; создание нового мгновенно перезаписывает предыдущий `qr_token_url` (старый QR перестаёт приниматься Kaspi). Сам предыдущий счёт остаётся в `pending` до истечения TTL.
+- **2026-05-27** [CHANGED] Общие per-key rate limits уточнены: 60 запросов/мин и 10 000 запросов/сутки на API-ключ; при 429 смотрите заголовок `Retry-After`. QR-эндпоинт сохраняет дополнительный per-org лимит 60/мин.
 - **2026-05-09** [NEW] POST /api/v1/invoices/qr — оплата по QR-коду на экране кассы без номера телефона. В ответе `qr_token_url` (Kaspi-ссылка) и `qr_image_url` (PNG 600×600). TTL — 5 минут. Webhook прилетает с `is_qr_token: true`. Sandbox-параметр `simulate=paid|cancelled|expired` создаёт счёт сразу в терминальном статусе с мгновенной отправкой webhook.
 - **2026-04-07** [NEW] Статусы `processing` (ожидает отправки в Kaspi) и `error` (ошибка отправки) для счетов
 - **2026-04-07** [NEW] Поле `error_message` (string|null) в ответах счетов — описание ошибки
@@ -67,17 +70,20 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 - Base URL: `https://bpapi.bazarbay.site/api/v1`
 - Auth: Header `X-API-Key: your_key`
 - Content-Type: `application/json`
-- Rate Limit: 200 req/min per API key (QR invoices: separate 60 req/min per organization)
+- Rate Limit: 60 req/min and 10 000 req/day per API key (QR invoices: separate 60 req/min per organization). On 429 see `Retry-After` header.
 
-## Endpoints (23 шт.)
+## Endpoints (24 шт.)
 
 ### Invoices (Счета)
 - [POST /api/v1/invoices]: Создание счёта
-- [POST /api/v1/invoices/qr]: Создание QR-счёта (на экране кассы, без телефона; sandbox поддерживает `simulate`)
+- [POST /api/v1/invoices/qr]: Создание QR-счёта (на экране кассы, без телефона; sandbox поддерживает `simulate`; только 1 активный QR на организацию — новый перезаписывает предыдущий)
 - [GET /api/v1/invoices]: Список счетов
 - [GET /api/v1/invoices/{id}]: Получить счёт
 - [POST /api/v1/invoices/{id}/cancel]: Отменить счёт
 - [POST /api/v1/invoices/status/check]: Массовая проверка статусов
+
+### Clients (Клиенты)
+- [POST /api/v1/clients/check]: Точечная проверка номера на наличие в Kaspi (возвращает `has_kaspi`, `client_name`). Только для разовой проверки перед созданием счёта/подписки — массовый перебор приведёт к блокировке.
 
 ### Refunds (Возвраты)
 - [POST /api/v1/invoices/{id}/refund]: Создать возврат

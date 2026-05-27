@@ -96,6 +96,8 @@ Differences from `POST /invoices`:
 - Cancel/refund are not supported — if no payment arrives, the invoice flips to `expired`.
 - Per-org rate limit: **60 QR requests per minute per organization** (separate from the general API limit).
 
+> ⚠️ **Only 1 active QR per organization.** Creating a new QR invoice instantly invalidates the previous `qr_token_url` — the old QR on the cashier screen will no longer be accepted by Kaspi. The previous invoice itself stays in `pending` until its TTL expires or the new one is paid. If the cashier is currently displaying a QR, do not create the next one until you receive a webhook for the previous invoice or its TTL (5 minutes) lapses.
+
 The request body depends on the organization's `has_catalog` setting:
 
 ### Request (no catalog)

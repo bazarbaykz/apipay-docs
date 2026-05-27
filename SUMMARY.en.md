@@ -6,6 +6,7 @@
 
 * [Getting Started](docs/en/getting-started.md)
 * [Invoices](docs/en/invoices.md)
+* [Clients](docs/en/clients.md)
 * [Subscriptions](docs/en/subscriptions.md)
 * [Catalog](docs/en/catalog.md)
 * [Refunds](docs/en/refunds.md)

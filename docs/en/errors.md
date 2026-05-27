@@ -150,7 +150,8 @@ async function apiRequest(url, options) {
 
 ## Rate Limiting
 
-- **General limit:** 200 requests per minute per API key
+- **Per-key minute:** 60 requests per minute per API key
+- **Per-key day:** 10 000 requests per day per API key
 - **QR invoices:** a separate limit of 60 requests per minute per organization (`POST /invoices/qr`)
-- **Header:** `X-RateLimit-Remaining` shows the number of remaining requests
-- **Response:** a 429 status includes `retry_after` in seconds
+- **Header:** `Retry-After` shows the number of seconds to wait before retrying
+- **Response:** HTTP 429 with body `{"message": "Too Many Requests"}` — do not hammer the endpoint, wait for the indicated time
