@@ -1160,6 +1160,14 @@ paths:
           schema:
             type: string
           description: Фильтр по первой букве
+        - name: statuses[]
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [active, pending, deleting, failed]
+          description: Фильтр по статусам товара (можно несколько значений). Фильтрация на сервере до пагинации.
       responses:
         200:
           description: Список товаров каталога

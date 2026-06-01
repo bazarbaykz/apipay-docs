@@ -19,7 +19,7 @@ curl https://bpapi.bazarbay.site/api/v1/catalog/units \
 
 **Эндпоинт:** `GET /catalog`
 
-Фильтры: `search`, `barcode`, `first_char`. Пагинация: `page`, `per_page` (1-200).
+Фильтры: `search`, `barcode`, `first_char`, `statuses[]` (можно несколько значений: `active`, `pending`, `deleting`, `failed`). Пагинация: `page`, `per_page` (1-200).
 
 Каждый товар в ответе содержит поле `created_at` — дата создания в системе (ISO 8601). Доступно сразу после создания, даже если Kaspi ещё не вернул `date_added`.
 
