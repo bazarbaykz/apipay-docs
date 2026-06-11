@@ -89,24 +89,38 @@ ApiPay.kz uses standard HTTP status codes with detailed error messages.
 ## Application Error Codes
 
 When an invoice, refund, or subscription operation fails, the response body
-contains an `error` field with one of the codes below.
+contains an `error` field with one of the codes below. The stable snake_case
+code is also delivered in the `error_code` field — build your logic on it, not
+on the `message` text.
 
-| Code | HTTP | Meaning & resolution |
-|------|------|----------------------|
-| `organization_required` | 400 | Organization is not connected. Create a sandbox organization for testing, or connect a Kaspi cashier. |
-| `Organization not found or not verified` | 400 | Production mode: the organization is not verified. Wait for verification or test in the sandbox. |
-| `kaspi_session_not_configured` | 400 | The Kaspi cashier is not connected. Connect it in the dashboard (Settings → Kaspi Authorization) or via support. |
-| `kaspi_session_invalid` | 503 | The Kaspi cashier session expired or was reset. Reconnect the cashier and request a new SMS code. |
-| `connection_ambiguous` | 422 | The organization has several active cashier connections and no primary one. Pass `kaspi_connection_id`. |
-| `sandbox_invoice_limit` | 400 | Sandbox invoice limit reached (25 per organization). Clear the sandbox in the dashboard. |
-| `sandbox_subscription_limit` | 400 | Sandbox subscription limit reached (10 per organization). Clear the sandbox. |
-| `qr_rate_limit` | 429 | Too many QR requests for the organization (limit 60/min). Wait one minute. |
-| `qr_render_failed` | 500 | Failed to render the QR code image. Retry later. |
-| `kaspi_error` | 502 | Kaspi API returned an error while creating the QR token. Retry later. |
-| `Invoice cannot be cancelled` | 400 | Only invoices in `pending` or `processing` status can be cancelled. |
-| `Invoice is not refundable` | 400 | Refunds are possible only for a paid invoice that is not yet fully refunded. |
-| `Refund amount exceeds available amount` | 400 | The refund amount is larger than available. See `available_for_refund` in `GET /invoices/{id}`. |
-| `Organization not verified` | 403 | Subscriptions in production mode are available only to a verified organization. |
+The **Delivery** column shows how a code reaches you: synchronously (sync — in
+the HTTP response with the given status) and/or asynchronously (async — in a
+webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
+`failed` with `refund.error_code`).
+
+| Code | HTTP | Delivery | Meaning & resolution |
+|------|------|----------|----------------------|
+| `organization_required` | 400 | sync | Organization is not connected. Create a sandbox organization for testing, or connect a Kaspi cashier. |
+| `Organization not found or not verified` | 400 | sync | Production mode: the organization is not verified. Wait for verification or test in the sandbox. |
+| `kaspi_session_not_configured` | 400 | sync | The Kaspi cashier is not connected. Connect it in the dashboard (Settings → Kaspi Authorization) or via support. |
+| `kaspi_session_invalid` | 503 | sync + async (`invoice.status_changed`, `status=error`) | The Kaspi cashier session expired or was reset. Reconnect the cashier and request a new SMS code. |
+| `connection_ambiguous` | 422 | sync | The organization has several active cashier connections and no primary one. Pass `kaspi_connection_id`. |
+| `sandbox_invoice_limit` | 400 | sync | Sandbox invoice limit reached per organization. Clear the sandbox in the dashboard. |
+| `sandbox_subscription_limit` | 400 | sync | Sandbox subscription limit reached per organization. Clear the sandbox. |
+| `qr_rate_limit` | 429 | sync | Too many QR requests for the organization (limit 60/min). Wait one minute. |
+| `qr_render_failed` | 500 | sync + async (`invoice.status_changed`, `status=error`) | Failed to render the QR code image. Retry later. |
+| `kaspi_error` | 502 | sync + async for QR invoices (`invoice.status_changed`, `status=error`) | Kaspi API returned an error. The reason text is in `message`/`error_message`. Retry later. |
+| `client_not_found` | — | async (`invoice.status_changed`, `status=error`) | The phone number is not registered in Kaspi. Don't retry the same number — ask for another. |
+| `network_unavailable` | — | async (`invoice.status_changed`, `status=error`) | The network/Kaspi was unavailable; retries are exhausted. Create a new invoice in 1–2 minutes. |
+| `kaspi_throttled` | — | async (`invoice.status_changed`, `status=error`) | Kaspi rate-limited the till's requests. Create a new invoice in 2–3 minutes; reduce your rate. |
+| `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | The refund window expired (~14 days) or the refund was already made. Don't retry. |
+| `Invoice cannot be cancelled` | 400 | sync | Only invoices in `pending` or `processing` status can be cancelled. |
+| `Invoice is not refundable` | 400 | sync | Refunds are possible only for a paid invoice that is not yet fully refunded. |
+| `Refund amount exceeds available amount` | 400 | sync | The refund amount is larger than available. See `available_for_refund` in `GET /invoices/{id}`. |
+| `Organization not verified` | 403 | sync | Subscriptions in production mode are available only to a verified organization. |
+
+> A detailed "what the system does and what you should do" matrix for each
+> asynchronous code lives in [Webhooks → Response scenarios](webhooks.md).
 
 ## Asynchronous Errors (Kaspi)
 

@@ -2,10 +2,12 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-Last updated: 2026-06-01
+Last updated: 2026-06-11
 
 ## IMPORTANT: Recent API Changes
 
+- **2026-06-11** [NEW] Вебхуки: добавлены уведомления о неудачных возвратах (`invoice.refunded` со `status=failed` и `refund.error_code`), об ошибках QR-счетов (`invoice.status_changed` со `status=error` и `error_code`: `kaspi_session_invalid` / `kaspi_error` / `qr_render_failed` — дублирует синхронный 5xx-ответ) и о первом частичном возврате (`invoice.status_changed` со `status=partially_refunded`). Изменения аддитивные, HMAC-подпись не менялась.
+- **2026-06-11** [NEW] Документация вебхуков актуализирована: добавлены события `subscription.created` / `paused` / `resumed` / `cancelled` (всего 11 событий), примеры payload для статусов `error` / `cancelled` / `failed`, разделы «Когда приходит вебхук», «Переходы статусов» (включая легитимные `cancelled→paid` и `error→pending`), «Сценарии реагирования» (что система делает автоматически и что делать по каждому `error_code`), описание circuit breaker, ретраев (включая sandbox: 3 попытки для invoice) и дедупликации. Исправлено: даты в вебхуках — UTC (`+00:00`); статуса `refunded` у счёта не существует (полный возврат оставляет `paid` + `is_fully_refunded`); `kaspi_invoice_id` появляется уже при `pending`.
 - **2026-06-01** [NEW] GET /api/v1/catalog — добавлен опциональный параметр `statuses[]` (несколько значений: `active`, `pending`, `deleting`, `failed`). Фильтрация по статусу выполняется на сервере до пагинации, поэтому `meta.total` и `last_page` отражают отфильтрованную выборку. Без параметра поведение прежнее.
 - **2026-05-29** [CHANGED] Уточнение лимитов: общий лимит Public API — 200 запросов/мин на API-ключ (при 429 — заголовок `Retry-After`); лимиты 60/мин и 10 000/сутки относятся только к POST /clients/check; POST /invoices/qr — отдельный счётчик 60 QR/мин на организацию (без `Retry-After`). Лимит тестовых счетов в sandbox — 500 на организацию. В каталоге `error_code` размечен по синхронности доставки: async (приходит в webhook) или sync (HTTP-ответ).
 - **2026-05-28** [NEW] Унификация ошибок: во все JSON-ответы об ошибках и в webhook-объекты invoice (`status=error`) и refund (`status=failed`) добавлено поле `error_code` — стабильный snake_case-код из фиксированного каталога (например `client_not_found`, `kaspi_error`, `qr_render_failed`). Изменение аддитивное: `message` и `error` не изменились — определяйте тип ошибки по `error_code`. HMAC-подпись webhook не менялась.
@@ -118,19 +120,34 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 Webhooks настраиваются через личный кабинет ApiPay.kz (Настройки > Подключение).
 При создании webhook вы получите secret для верификации подписи (HMAC-SHA256).
 
-Webhook events:
+Webhook events (11 total):
 - `invoice.status_changed`
-- `invoice.refunded`
+- `invoice.refunded` — arrives on both `completed` and `failed` refunds (`refund.error_code` on failure)
+- `subscription.created`
 - `subscription.payment_succeeded`
 - `subscription.payment_failed`
 - `subscription.grace_period_started`
 - `subscription.expired`
+- `subscription.paused`
+- `subscription.resumed`
+- `subscription.cancelled`
 - `webhook.test`
 
 All webhook payloads include a `source` field — the name of the API key that created the resource (invoice or subscription). May be `null`.
 All webhook payloads include `is_sandbox: boolean` — indicates whether the resource was created in sandbox mode.
+All dates in webhooks are ISO 8601 in UTC (`+00:00`).
 
-Webhook delivery retries: up to 11 attempts (1 initial + 10 retries) with exponential backoff (10s, 30s, 1m, 1.5m, 2m, 5m, 10m, 15m, 30m, 1h — ~2h total), for all event types. A delivery succeeds only on an HTTP 2xx response; your endpoint must respond within 5 seconds.
+When a webhook arrives (status in parentheses): `invoice.status_changed` for `pending` (created in Kaspi; not sent for QR invoices — that status is synchronous), `paid` (may arrive after `cancelled`/`expired` — a last-second payment wins the race), `cancelled` (by you, the cashier, or auto-supersede of a QR by a new QR — `error_message` "Superseded by new QR invoice #N"), `expired` (24h, or ~5 min for QR), `error` (technical failure, finalized — reason in `error_code`/`error_message`), `partially_refunded` (first partial refund). `invoice.refunded` for `completed`/`failed`. Subscription lifecycle events as listed above. The technical statuses `processing`/`cancelling` produce no webhook.
+
+Allowed status transitions include `cancelled|expired → paid` (last-second payment — handle as "money received") and `error → pending` (reconciliation — follow the latest status). `paid → error` and `error → paid` never happen. A 202 cancellation moves the invoice to `cancelling` without a webhook; if Kaspi refuses (usually already paid), it quietly returns to `pending` and sync delivers the real status.
+
+When a webhook brings `status=error` (invoice) or `status=failed` (refund) the operation is finalized — the system has exhausted its own retries; "retry" means "create a new operation". While in `processing` the system retries on its own.
+
+Webhook delivery retries: up to 11 attempts (1 initial + 10 retries) with exponential backoff (10s, 30s, 1m, 1.5m, 2m, 5m, 10m, 15m, 30m, 1h — ~2h total). In sandbox, invoice webhooks use just 3 attempts (5s, 15s); refund and subscription webhooks always use the full 11. A delivery succeeds only on an HTTP 2xx response; your endpoint must respond within 5 seconds. Only HTTP ≥500, exactly 429, and network errors are retried — 3xx/4xx (except 429) are recorded as delivered, with manual retry available from the dashboard Webhook logs.
+
+Circuit breaker (per key): 5 consecutive failures → pause 5 min, 10 → 30 min, 20 → 2h, 50 → full shutdown until manual intervention. Webhooks during a pause are not re-sent — reconcile via GET methods. Any successful delivery resets the counter. `subscription.*` events are not written to the dashboard Webhook logs (no manual retry or circuit breaker for them).
+
+Client-side deduplication is mandatory (a retry after a partial delivery re-sends to all receivers). Dedup keys: `(invoice.id, invoice.status)`, `(refund.id, refund.status)`, `(event, subscription.id, invoice_id)`.
 
 ### Webhook Payload Example: invoice.status_changed
 ```json
@@ -149,11 +166,41 @@ Webhook delivery retries: up to 11 attempts (1 initial + 10 retries) with expone
     "client_name": "Иван Иванов",
     "client_phone": "87071234567",
     "is_sandbox": false,
-    "is_qr_token": false,
-    "paid_at": "2026-02-12T14:35:00+05:00"
+    "kaspi_source_type": "GOLD",
+    "kaspi_sale_type": "Remote",
+    "paid_at": "2026-02-12T14:35:00+00:00"
   },
   "source": "My API Key",
-  "timestamp": "2026-02-12T14:35:01+05:00"
+  "timestamp": "2026-02-12T14:35:01+00:00"
+}
+```
+
+### Webhook Payload Example: invoice.refunded (failed)
+```json
+{
+  "event": "invoice.refunded",
+  "refund": {
+    "id": 6,
+    "amount": "2000.00",
+    "status": "failed",
+    "kaspi_refund_id": null,
+    "reason": "Возврат товара",
+    "created_at": "2026-02-12T10:00:00+00:00",
+    "error_code": "refund_window_expired"
+  },
+  "invoice": {
+    "id": 42,
+    "external_order_id": "order_123",
+    "amount": "5000.00",
+    "total_refunded": "0.00",
+    "available_for_refund": "5000.00",
+    "is_fully_refunded": false,
+    "is_sandbox": false,
+    "status": "paid",
+    "kaspi_invoice_id": "13234689513"
+  },
+  "source": "My API Key",
+  "timestamp": "2026-02-12T10:00:01+00:00"
 }
 ```
 
@@ -219,7 +266,7 @@ Application error codes (returned in the `error` field of the response):
 - `Refund amount exceeds available amount` (400) — see `available_for_refund`
 - `Organization not verified` (403) — production subscriptions require a verified organization
 
-Asynchronous Kaspi errors: POST /invoices and POST /invoices/qr return 201 with status `processing`. If Kaspi cannot process the invoice, the status becomes `error` and the reason is in `error_message` (plain text, no fixed codes) — fetch it via GET /invoices/{id}.
+Asynchronous Kaspi errors: POST /invoices and POST /invoices/qr return 201 with status `processing`. If Kaspi cannot process the invoice, the status becomes `error` — the human-readable reason is in `error_message` and the stable snake_case code in `error_code` (e.g. `client_not_found`, `network_unavailable`, `kaspi_throttled`). Fetch via GET /invoices/{id}, or receive it in the `invoice.status_changed` webhook (`status=error`).
 
 ## Invoice Statuses
 - `processing` — awaiting delivery to Kaspi (can be cancelled)
@@ -228,9 +275,10 @@ Asynchronous Kaspi errors: POST /invoices and POST /invoices/qr return 201 with 
 - `paid` — payment completed (can be refunded)
 - `cancelled` — manually cancelled
 - `expired` — payment timeout
-- `error` — delivery to Kaspi failed (see `error_message`)
+- `error` — delivery to Kaspi failed (see `error_message`/`error_code`)
 - `partially_refunded` — partially refunded (remaining amount can still be refunded)
-- `refunded` — fully refunded
+
+There is no `refunded` status — a full refund keeps the invoice `paid` with `is_fully_refunded=true`.
 
 ## Quick Start
 

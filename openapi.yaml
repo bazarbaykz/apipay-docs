@@ -289,6 +289,11 @@ paths:
                           type: string
                           nullable: true
                           description: Описание ошибки (для статуса error)
+                        error_code:
+                          type: string
+                          nullable: true
+                          description: Стабильный snake_case-код ошибки из каталога (раздел «Коды ошибок»). null, если ошибок нет.
+                          example: null
                         items:
                           type: array
                           description: Товары счёта (пустой массив для счетов без корзины)
@@ -536,7 +541,7 @@ paths:
                       - expired
                       - error
                       - partially_refunded
-                      - refunded
+                    description: "Статус счёта. Статуса refunded не существует — полный возврат оставляет paid + is_fully_refunded=true."
                     example: paid
                   client_name:
                     type: string
@@ -561,6 +566,11 @@ paths:
                     type: string
                     nullable: true
                     description: Описание ошибки (для статуса error)
+                  error_code:
+                    type: string
+                    nullable: true
+                    description: Стабильный snake_case-код ошибки из каталога (раздел «Коды ошибок»). null, если ошибок нет. Стройте логику по этому коду, а не по тексту error_message.
+                    example: client_not_found
                   items:
                     type: array
                     description: Товары счёта (snapshot на момент создания). Пустой массив — организация без каталога или старый счёт.
@@ -624,7 +634,7 @@ paths:
   "/invoices/{id}/cancel":
     post:
       summary: Отменить счёт
-      description: Отменяет счёт со статусом pending или processing. Sandbox → 200 (синхронно), Production → 202 (асинхронно через Kaspi).
+      description: "Отменяет счёт со статусом pending или processing. Sandbox → 200 (синхронно), Production → 202 (асинхронно через Kaspi). После ответа 202 счёт переходит в cancelling — НЕ считайте его отменённым сразу. Итог придёт вебхуком invoice.status_changed (cancelled — отмена прошла, либо error — отменить не удалось). Если Kaspi отказал в отмене (обычно счёт уже оплачен), счёт тихо вернётся в pending, а реальный статус (обычно paid) доставит синхронизация в течение нескольких минут."
       operationId: cancelInvoice
       parameters:
         - name: id
@@ -672,7 +682,7 @@ paths:
   "/invoices/{id}/refund":
     post:
       summary: Создать возврат
-      description: Создаёт полный или частичный возврат по оплаченному счёту. Без amount — полный возврат.
+      description: "Создаёт полный или частичный возврат по оплаченному счёту. Без amount — полный возврат. Ответ 201 означает, что возврат принят и поставлен в очередь (статус pending). Итог придёт вебхуком invoice.refunded (completed — возврат проведён, либо failed — возврат не удался, причина в refund.error_code). Дождитесь вебхука или опросите GET /invoices/{id}/refunds."
       operationId: createRefund
       parameters:
         - name: id
@@ -841,6 +851,19 @@ paths:
                           type: string
                           nullable: true
                           example: Возврат товара
+                        kaspi_refund_id:
+                          type: string
+                          nullable: true
+                          description: ID возврата в Kaspi. null при неудаче или пока возврат не проведён.
+                          example: "1126827352"
+                        error_message:
+                          type: string
+                          nullable: true
+                          description: Человекочитаемая причина неудачи (для статуса failed). В отличие от вебхука invoice.refunded, здесь текст ошибки присутствует.
+                        error_code:
+                          type: string
+                          nullable: true
+                          description: Стабильный snake_case-код ошибки возврата из каталога (раздел «Коды ошибок»). Заполнен только при status=failed (например refund_window_expired); иначе null.
                         items:
                           type: array
                           description: Позиции возврата
@@ -1026,6 +1049,10 @@ paths:
                           type: string
                           nullable: true
                           description: Сообщение об ошибке (для failed)
+                        error_code:
+                          type: string
+                          nullable: true
+                          description: Стабильный snake_case-код ошибки возврата из каталога (раздел «Коды ошибок»). Заполнен только при status=failed (например refund_window_expired); иначе null.
                         created_at:
                           type: string
                           format: date-time
