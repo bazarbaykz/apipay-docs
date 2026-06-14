@@ -14,11 +14,12 @@ Configure webhooks in [ApiPay.kz Dashboard](https://apipay.kz) → Settings → 
 
 ## Events
 
-ApiPay sends 11 event types:
+ApiPay sends 12 event types:
 
 | Event | Description |
 |-------|-------------|
 | `invoice.status_changed` | An invoice status changed |
+| `invoice.qr_scanned` | The customer scanned the QR (status stays `pending`, `qr_substate=scanned`) |
 | `invoice.refunded` | A refund on an invoice succeeded (or failed) |
 | `subscription.created` | A subscription was created |
 | `subscription.payment_succeeded` | A subscription invoice was paid |
@@ -107,7 +108,7 @@ Sent when an invoice status changes.
 }
 ```
 
-#### QR invoice superseded (status: cancelled)
+#### QR invoice cancelled by the client (status: cancelled)
 
 ```json
 {
@@ -120,10 +121,9 @@ Sent when an invoice status changes.
     "description": "QR at the till",
     "kaspi_invoice_id": "13234689514",
     "client_name": null,
-    "client_phone": "87071234567",
+    "client_phone": null,
     "is_sandbox": false,
-    "cancelled_at": "2026-02-12T14:45:00+00:00",
-    "error_message": "Superseded by new QR invoice #45"
+    "cancelled_at": "2026-02-12T14:45:00+00:00"
   },
   "source": "My API Key",
   "timestamp": "2026-02-12T14:45:01+00:00"
@@ -138,11 +138,46 @@ Sent when an invoice status changes.
 | `invoice.kaspi_invoice_id` | string \| null | Invoice ID in Kaspi. Appears already at `pending` (once the invoice is created in Kaspi); `null` until the invoice reaches Kaspi. |
 | `invoice.paid_at` | string \| null | Payment time (ISO 8601). The field is **absent** in every status except `paid` (not `null` before payment). |
 | `invoice.cancelled_at` / `expired_at` / `errored_at` | string \| null | Time of the transition into the matching status (ISO 8601). Present only for that status. |
-| `invoice.error_message` | string \| null | Human-readable reason. Always present at `status=error`; at `status=cancelled` only when filled (e.g. "Superseded by new QR invoice #N"). Absent in `paid`/`pending`/`expired`. |
+| `invoice.error_message` | string \| null | Human-readable reason. Always present at `status=error`; at `status=cancelled` only when filled (usually absent for a client cancellation or an API cancellation). Absent in `paid`/`pending`/`expired`. |
 | `invoice.error_code` | string \| null | Stable snake_case code from the catalog (see [Error Codes](errors.md)). Present only when not `null` and only at `status=error`/`cancelled`. Build your logic on it, not on the text. |
 | `invoice.subtotal` / `discount_sum` / `discount_percentage` | string \| null | Only for invoices with a cart/discount (`subtotal` and `discount_sum` come together). |
 | `invoice.kaspi_source_type` | string \| null | Customer funding source: `GOLD`, `RED`, `LOAN`, `BUSINESSACCOUNT`, `BANKINTEGRATIONACCOUNT`. Gated by Kaspi returning a value; the list may grow. |
 | `invoice.kaspi_sale_type` | string \| null | How the invoice was accepted: `Remote`, `QR`, `Restaurant`, `Static`. Gated by Kaspi returning a value; the list may grow. |
+
+### invoice.qr_scanned
+
+QR invoices only. Sent when the customer has scanned the QR and reached the payment screen in the Kaspi app. This is a **sub-state**: the invoice status stays `pending`, while the marker `qr_substate: "scanned"` shows the customer is already on the payment step. Sent exactly **once** per QR and transiently — a terminal webhook (`paid` or `cancelled`) follows. The event is additive; the HMAC signature is unchanged.
+
+```json
+{
+  "event": "invoice.qr_scanned",
+  "invoice": {
+    "id": 63474,
+    "external_order_id": "order-123",
+    "amount": "5000.00",
+    "status": "pending",
+    "qr_substate": "scanned",
+    "description": "Order #123",
+    "kaspi_invoice_id": "13234689514",
+    "client_name": null,
+    "client_phone": null,
+    "is_sandbox": false
+  },
+  "source": "My API Key",
+  "timestamp": "2026-06-14T10:00:00+00:00"
+}
+```
+
+**Payload fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `invoice.status` | string | Always `pending` — this is a sub-state, not a status change. The terminal status arrives as a separate `invoice.status_changed`. |
+| `invoice.qr_substate` | string | `scanned` — the customer scanned the QR and is on the payment screen. |
+| `invoice.kaspi_invoice_id` | string \| null | Invoice ID in Kaspi. |
+| `invoice.client_name` / `client_phone` | null | At the scan stage the customer details are not yet known. |
+
+> Use the event as a "customer started paying" signal (e.g. update the till UI). Do not treat the invoice as paid — wait for `paid`. The event is transient and may not arrive if the customer pays instantly.
 
 ### invoice.refunded
 
@@ -453,9 +488,10 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 | Event | Status | When it arrives |
 |-------|--------|-----------------|
 | `invoice.status_changed` | `pending` | The invoice was created in Kaspi and awaits payment. For phone invoices (`POST /invoices`) this is the first webhook after the 201 response with `status=processing`. For QR invoices (`POST /invoices/qr`) the `pending` webhook is **not** sent — the status is returned synchronously in the 201 response; the first webhook for a QR invoice is payment, cancellation, expiry, or error. |
+| `invoice.qr_scanned` | `pending` | QR only: the customer scanned the QR (`qr_substate=scanned`). The status stays `pending`, a sub-state. Once, transiently — then `paid` or `cancelled`. |
 | `invoice.status_changed` | `paid` | The invoice was paid. May arrive even **after** `cancelled`/`expired` — a last-second payment wins the race (see "Status transitions"). |
-| `invoice.status_changed` | `cancelled` | The invoice was cancelled: by you via the API, by the cashier, or automatically — when the same till creates a new QR (`error_message`: "Superseded by new QR invoice #N"). |
-| `invoice.status_changed` | `expired` | The invoice expired: 24 hours in Kaspi, or ~5 minutes for a QR token. |
+| `invoice.status_changed` | `cancelled` | The invoice was cancelled: by the client (minimized/closed the app), by you via the API, or by the cashier. A new QR on the same till does **not** cancel the old one. |
+| `invoice.status_changed` | `expired` | The invoice expired: phone invoices — 24 hours in Kaspi; QR — minutes, only once Kaspi returns the terminal (not on a local timer). |
 | `invoice.status_changed` | `error` | A technical error — the invoice is finalized, the system no longer retries it. The reason is in `error_code`/`error_message` (see "Response scenarios"). |
 | `invoice.status_changed` | `partially_refunded` | The first partial refund on the invoice (in addition to `invoice.refunded`). Subsequent partial refunds don't change the status. |
 | `invoice.refunded` | `completed` | The refund went through. Includes refunds made by the cashier in the Kaspi app (imported automatically). |
@@ -515,8 +551,10 @@ When a webhook brings `status=error` (invoice) or `status=failed` (refund), the 
 
 **Scenarios without an `error_code`:**
 
-- **QR superseded** — a `cancelled` webhook with `error_message` "Superseded by new QR invoice #N" (no `error_code`). Kaspi keeps one active QR per till — this is expected. Use the new QR.
-- **Invoice expired** — an `expired` webhook (24h, QR ~5 min). Create a new invoice if needed.
+- **A new QR on the same till** — QR invoices coexist: creating a new QR does **not** cancel the previous ones, and the supersede webhook (`cancelled` with "Superseded by new QR invoice #N") no longer exists. Two parallel `POST /invoices/qr` both get `201` + `pending`. React per `invoice.id` separately — if several QRs are paid, you'll get several `paid` webhooks. (`409 superseded` is a defensive branch, unreachable in practice — don't build logic on it.)
+- **The client cancelled the QR** — a `cancelled` webhook = a real client cancellation (they minimized/closed the app: `NotConfirmedByUser` / `CancelledByUser`), not a system supersede. Create a new invoice if needed.
+- **The client scanned the QR** — an `invoice.qr_scanned` webhook (`qr_substate=scanned`, status stays `pending`): the customer is on the payment screen. A "payment started" signal — do not treat the invoice as paid, wait for `paid`.
+- **Invoice expired** — an `expired` webhook (phone invoices — 24h; QR — minutes, on the terminal from Kaspi). Create a new invoice if needed.
 - **Payment after cancellation/expiry** — a `paid` webhook after `cancelled`/`expired`: the money is received — ship the order or issue a refund.
 - **Back to `pending` after `error`** — a corrective `pending` webhook (reconciliation). Follow the latest status.
 

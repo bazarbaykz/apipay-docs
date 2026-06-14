@@ -2,10 +2,12 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-Last updated: 2026-06-11
+Last updated: 2026-06-14
 
 ## IMPORTANT: Recent API Changes
 
+- **2026-06-14** [NEW] Вебхуки: добавлено событие `invoice.qr_scanned` (только для QR-счетов) — клиент отсканировал QR и находится на экране оплаты. Это суб-состояние: статус остаётся `pending`, payload-маркер `qr_substate: "scanned"`. Шлётся ровно один раз на QR и транзиентно (далее `paid` или `cancelled`). Изменение аддитивное, HMAC-подпись не менялась.
+- **2026-06-14** [CHANGED] Модель QR-счетов: QR-счета **сосуществуют** — создание нового QR на той же кассе не отменяет прежние (старый остаётся `pending` до своего терминала). Вебхука-замены (`cancelled` с «Заменён новым QR-счётом #N») больше нет — `cancelled` по QR теперь означает реальную отмену клиентом (свернул/закрыл приложение). `expired` по QR приходит только когда Kaspi отдал терминал, а не по локальному таймеру. Жизненный цикл QR — минуты (счёт по номеру — по-прежнему 24 часа), `qr_expires_at` — справочно. Реагируйте на `paid`/`cancelled`/`expired` по каждому `invoice.id` отдельно (при оплате нескольких QR придёт несколько `paid`). Два параллельных `POST /invoices/qr` оба получают `201` + `pending`; `409 superseded` — defensive-ветка, на практике недостижима.
 - **2026-06-11** [NEW] Вебхуки: добавлены уведомления о неудачных возвратах (`invoice.refunded` со `status=failed` и `refund.error_code`), об ошибках QR-счетов (`invoice.status_changed` со `status=error` и `error_code`: `kaspi_session_invalid` / `kaspi_error` / `qr_render_failed` — дублирует синхронный 5xx-ответ) и о первом частичном возврате (`invoice.status_changed` со `status=partially_refunded`). Изменения аддитивные, HMAC-подпись не менялась.
 - **2026-06-11** [NEW] Документация вебхуков актуализирована: добавлены события `subscription.created` / `paused` / `resumed` / `cancelled` (всего 11 событий), примеры payload для статусов `error` / `cancelled` / `failed`, разделы «Когда приходит вебхук», «Переходы статусов» (включая легитимные `cancelled→paid` и `error→pending`), «Сценарии реагирования» (что система делает автоматически и что делать по каждому `error_code`), описание circuit breaker, ретраев (включая sandbox: 3 попытки для invoice) и дедупликации. Исправлено: даты в вебхуках — UTC (`+00:00`); статуса `refunded` у счёта не существует (полный возврат оставляет `paid` + `is_fully_refunded`); `kaspi_invoice_id` появляется уже при `pending`.
 - **2026-06-01** [NEW] GET /api/v1/catalog — добавлен опциональный параметр `statuses[]` (несколько значений: `active`, `pending`, `deleting`, `failed`). Фильтрация по статусу выполняется на сервере до пагинации, поэтому `meta.total` и `last_page` отражают отфильтрованную выборку. Без параметра поведение прежнее.
@@ -83,7 +85,7 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 
 ### Invoices (Счета)
 - [POST /api/v1/invoices]: Создание счёта
-- [POST /api/v1/invoices/qr]: Создание QR-счёта (на экране кассы, без телефона; sandbox поддерживает `simulate`; только 1 активный QR на организацию — новый перезаписывает предыдущий)
+- [POST /api/v1/invoices/qr]: Создание QR-счёта (на экране кассы, без телефона; sandbox поддерживает `simulate`; QR-счета сосуществуют — новый QR не отменяет прежние, реагируйте по каждому invoice.id; событие invoice.qr_scanned при сканировании)
 - [GET /api/v1/invoices]: Список счетов
 - [GET /api/v1/invoices/{id}]: Получить счёт
 - [POST /api/v1/invoices/{id}/cancel]: Отменить счёт
@@ -120,8 +122,9 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 Webhooks настраиваются через личный кабинет ApiPay.kz (Настройки > Подключение).
 При создании webhook вы получите secret для верификации подписи (HMAC-SHA256).
 
-Webhook events (11 total):
+Webhook events (12 total):
 - `invoice.status_changed`
+- `invoice.qr_scanned` — QR only; the customer scanned the QR and is on the payment screen (sub-state `qr_substate=scanned`, status stays `pending`; once, transient)
 - `invoice.refunded` — arrives on both `completed` and `failed` refunds (`refund.error_code` on failure)
 - `subscription.created`
 - `subscription.payment_succeeded`
@@ -137,7 +140,7 @@ All webhook payloads include a `source` field — the name of the API key that c
 All webhook payloads include `is_sandbox: boolean` — indicates whether the resource was created in sandbox mode.
 All dates in webhooks are ISO 8601 in UTC (`+00:00`).
 
-When a webhook arrives (status in parentheses): `invoice.status_changed` for `pending` (created in Kaspi; not sent for QR invoices — that status is synchronous), `paid` (may arrive after `cancelled`/`expired` — a last-second payment wins the race), `cancelled` (by you, the cashier, or auto-supersede of a QR by a new QR — `error_message` "Superseded by new QR invoice #N"), `expired` (24h, or ~5 min for QR), `error` (technical failure, finalized — reason in `error_code`/`error_message`), `partially_refunded` (first partial refund). `invoice.refunded` for `completed`/`failed`. Subscription lifecycle events as listed above. The technical statuses `processing`/`cancelling` produce no webhook.
+When a webhook arrives (status in parentheses): `invoice.status_changed` for `pending` (created in Kaspi; not sent for QR invoices — that status is synchronous), `paid` (may arrive after `cancelled`/`expired` — a last-second payment wins the race), `cancelled` (by the client, who minimized/closed the app — a real client cancellation, by you, or by the cashier; a new QR on the same till does NOT cancel the old one — there is no supersede webhook), `expired` (24h for phone invoices, or minutes for QR — only when Kaspi returns the terminal, not on a local timer), `error` (technical failure, finalized — reason in `error_code`/`error_message`), `partially_refunded` (first partial refund). `invoice.qr_scanned` for `pending` (QR only — the customer scanned the QR and is on the payment screen; sub-state with `qr_substate=scanned`, status stays `pending`; sent once, transiently — then `paid` or `cancelled`). `invoice.refunded` for `completed`/`failed`. Subscription lifecycle events as listed above. The technical statuses `processing`/`cancelling` produce no webhook. QR invoices coexist — react per `invoice.id` separately (several paid QRs produce several `paid` webhooks).
 
 Allowed status transitions include `cancelled|expired → paid` (last-second payment — handle as "money received") and `error → pending` (reconciliation — follow the latest status). `paid → error` and `error → paid` never happen. A 202 cancellation moves the invoice to `cancelling` without a webhook; if Kaspi refuses (usually already paid), it quietly returns to `pending` and sync delivers the real status.
 

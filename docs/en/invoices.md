@@ -92,11 +92,11 @@ QR-code payment displayed on a cashier screen — without the customer's phone n
 Differences from `POST /invoices`:
 - No `phone_number` required.
 - Synchronous response — the QR (`qr_token_url` + ready PNG) is returned immediately.
-- Kaspi TTL is **5 minutes** (vs 24h for regular invoices).
-- Cancel/refund are not supported — if no payment arrives, the invoice flips to `expired`.
+- A QR invoice's lifecycle is measured in **minutes** (vs 24h for regular phone invoices). Kaspi dictates the exact expiry moment; the terminal status (`paid`/`cancelled`/`expired`) arrives via webhook. The `qr_expires_at` field is informational, not for local termination.
+- Cancel/refund are not supported — if no payment arrives, the invoice flips to `expired` after a few minutes (on the terminal from Kaspi).
 - Per-org rate limit: **60 QR requests per minute per organization** (separate from the general API limit).
 
-> ⚠️ **Only 1 active QR per organization.** Creating a new QR invoice instantly invalidates the previous `qr_token_url` — the old QR on the cashier screen will no longer be accepted by Kaspi. The previous invoice itself stays in `pending` until its TTL expires or the new one is paid. If the cashier is currently displaying a QR, do not create the next one until you receive a webhook for the previous invoice or its TTL (5 minutes) lapses.
+> ℹ️ **QR invoices coexist.** Creating a new QR on the same till does **not** cancel the previous ones — the old QR stays in `pending` and is monitored until its own terminal. React to `paid`/`cancelled`/`expired` per `invoice.id` separately (if several QRs are paid, you'll get several `paid` webhooks). The supersede webhook (`cancelled` with text "Superseded by new QR invoice #N") no longer exists. Phone invoices live for 24h in Kaspi.
 
 The request body depends on the organization's `has_catalog` setting:
 
@@ -164,15 +164,15 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
 | `is_qr_token` | QR-invoice flag. Also returned by `GET /invoices/{id}` and inside webhook payloads. |
 | `qr_token_url` | Direct Kaspi URL (`qr.kaspi.kz/...`). Same payload as encoded in the PNG. You can re-render the QR on your side if you want a different style/size. |
 | `qr_image_url` | Ready-made PNG 600×600 with the Kaspi logo in the center (ECC=High). Hosted on our CDN-storage, accessible without auth, lives until `qr_expires_at + 60s` (then returns 404). |
-| `qr_expires_at` | UTC timestamp when the QR expires on Kaspi side. Exactly 5 minutes from creation. |
+| `qr_expires_at` | UTC timestamp, informational. Minutes from creation. Not for local termination — the terminal arrives via webhook. |
 
 ### Lifecycle and status handling
 
 1. Created in status `pending`. The server polls Kaspi every 2 sec for status sync.
 2. On terminal status (`paid`, `cancelled`, `expired`) we send the regular `invoice.status_changed` webhook — same format as for regular invoices, but `invoice` contains `is_qr_token: true` and the QR fields.
 3. Alternative poll: hit `GET /invoices/{id}` every 2-3 sec.
-4. After 5 min without payment the status becomes `expired`. The PNG is removed from storage within ~1 minute — `qr_image_url` will start returning 404 (by design).
-5. Cancel/refund for a QR invoice is not supported — to cancel, just wait for TTL.
+4. After a few minutes without payment the status becomes `expired` — but only once Kaspi returns the terminal (via webhook), not on a local timer. The PNG is removed from storage within ~1 minute — `qr_image_url` will start returning 404 (by design).
+5. Cancel/refund for a QR invoice is not supported — to cancel, just wait for it to expire (a few minutes).
 
 ### Sandbox mode
 
