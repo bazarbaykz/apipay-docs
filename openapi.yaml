@@ -337,8 +337,8 @@ paths:
                   example: 5000
                 description:
                   type: string
-                  description: Описание (наименование товара в чеке Kaspi, макс 500 символов)
-                  maxLength: 500
+                  description: Описание (наименование позиции в QR-чеке Kaspi, макс 100 символов)
+                  maxLength: 100
                   nullable: true
                   example: "Заказ №123"
                 external_order_id:

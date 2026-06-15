@@ -133,7 +133,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
 | Поле | Тип | Обязательно | Описание |
 |------|-----|-------------|----------|
 | `amount` | number | Да* | Сумма (только если has_catalog=false), 0.01 - 99 999 999.99 ₸ |
-| `description` | string | Нет | Описание (макс. 500). Используется как наименование товара в чеке Kaspi |
+| `description` | string | Нет | Описание (макс. 100). Используется как наименование позиции в QR-чеке Kaspi |
 | `external_order_id` | string | Нет | Ваш ID заказа (макс. 255) |
 | `cart_items` | array | Да* | Только если has_catalog=true. От 1 до 100 позиций |
 | `discount_percentage` | number | Нет | Скидка на весь чек, 1-99% |

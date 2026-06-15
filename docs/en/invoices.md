@@ -133,7 +133,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `amount` | number | Yes* | Amount in KZT (only when has_catalog=false), 0.01 - 99,999,999.99 |
-| `description` | string | No | Description (max 500). Used as the item name on the Kaspi receipt |
+| `description` | string | No | Description (max 100). Used as the line item name on the Kaspi QR receipt |
 | `external_order_id` | string | No | Your order ID (max 255) |
 | `cart_items` | array | Yes* | Only when has_catalog=true. 1 to 100 items |
 | `discount_percentage` | number | No | Whole-cart discount, 1-99% |
