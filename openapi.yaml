@@ -710,7 +710,7 @@ paths:
                   example: Возврат товара
                 return_items:
                   type: array
-                  description: "Конкретные позиции для возврата (для счетов с корзиной товаров). Формат: { catalog_item_id, count }"
+                  description: "Конкретные позиции для возврата (для счетов с корзиной товаров). На каждую позицию укажите РОВНО одно из полей: count (целые штуки) ЛИБО amount (произвольная сумма по позиции). Указание обоих или ни одного — ошибка 422."
                   items:
                     type: object
                     properties:
@@ -719,11 +719,16 @@ paths:
                         description: ID товара из каталога
                       count:
                         type: integer
-                        description: Количество
+                        description: "Количество для возврата целыми штуками (сумма = price × count). Взаимоисключимо с amount."
                         minimum: 1
+                      amount:
+                        type: number
+                        description: "Произвольная сумма возврата по позиции (0.01-9999999.99), не больше остатка по позиции. Взаимоисключимо с count."
+                        minimum: 0.01
+                        maximum: 9999999.99
+                        example: 19750
                     required:
                       - catalog_item_id
-                      - count
       responses:
         201:
           description: Возврат создан и поставлен в очередь

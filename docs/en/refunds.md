@@ -30,9 +30,11 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 |-------|------|----------|-------------|
 | `amount` | number | No | Partial refund amount (0.01-99999999.99). Omit for full refund. |
 | `reason` | string | No | Reason for refund (max 500 chars) |
-| `return_items` | array | No | Array of items for item-level refund from cart. Each element: `{ catalog_item_id, count }` |
+| `return_items` | array | No | Array of items for item-level refund from cart. For each position provide EXACTLY one of: `count` (whole units) OR `amount` (arbitrary sum per position). Supplying both or neither is a 422 error. |
 
 ### Item-Level Refund (Cart)
+
+For each position provide either `count` (refund whole units, amount = `price × count`) or `amount` (refund an arbitrary part of the position's value, e.g. for an indivisible service with `count: 1`). You can mix positions in a single request.
 
 ```bash
 curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
@@ -41,11 +43,13 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
   -d '{
     "return_items": [
       { "catalog_item_id": 101, "count": 2 },
-      { "catalog_item_id": 205, "count": 1 }
+      { "catalog_item_id": 612506, "amount": 19750 }
     ],
-    "reason": "Partial item return"
+    "reason": "Partial order return"
   }'
 ```
+
+> For a position refunded by `amount`, the response and the `invoice.refunded` webhook will have `refund.items[].count = 0`, with the money in `amount`. This is expected.
 
 ### Response
 
