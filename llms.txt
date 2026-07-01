@@ -2,10 +2,11 @@
 
 > Kaspi Pay REST API для интернет-эквайринга. REST API для приёма платежей по номеру телефона в Казахстане. Без договора с банком, без комиссий.
 
-Last updated: 2026-06-15
+Last updated: 2026-07-01
 
 ## IMPORTANT: Recent API Changes
 
+- **2026-07-01** [NEW] `POST /api/v1/catalog/scan` — резолв штрихкода в Нацкаталоге Kaspi: возвращает кандидатов (`id`, `name`, `ntin`, `gtin`, `barcode`, `unit_id`, `image_link`), выбор делает мерчант. Пустой `data[]` = товар не из Нацкаталога (не ошибка, HTTP 200). Добавлены опциональные поля `ntin`/`gtin`/`from_catalog` в `POST /catalog` и `ntin`/`gtin` в `PATCH /catalog/{id}`; в ответах каталога у товара появилось поле `gtin`. Всё аддитивно. Важно: при обычном `PATCH` не передавайте `ntin`/`gtin` — иначе `null` затрёт идентичность Нацкаталога в Kaspi. Ошибки scan: `400 kaspi_session_expired`, `429 kaspi_throttled` (`Retry-After`), `503 kaspi_scan_unavailable`. Лимиты: 30 запросов/мин и 2000/сутки.
 - **2026-06-15** [CHANGED] `POST /invoices/qr` — поле `description` ограничено **100 символами** (это наименование позиции в QR-чеке Kaspi, длину ограничивает сам Kaspi); при превышении — `422` (`Validation failed`) с `errors.description`. На счета по номеру (`POST /invoices`) ограничение не распространяется — там `description` по-прежнему до 500 символов. Для QR держите описание кратким: номер заказа + имя.
 - **2026-06-14** [NEW] Вебхуки: добавлено событие `invoice.qr_scanned` (только для QR-счетов) — клиент отсканировал QR и находится на экране оплаты. Это суб-состояние: статус остаётся `pending`, payload-маркер `qr_substate: "scanned"`. Шлётся ровно один раз на QR и транзиентно (далее `paid` или `cancelled`). Изменение аддитивное, HMAC-подпись не менялась.
 - **2026-06-14** [CHANGED] Модель QR-счетов: QR-счета **сосуществуют** — создание нового QR на той же кассе не отменяет прежние (старый остаётся `pending` до своего терминала). Вебхука-замены (`cancelled` с «Заменён новым QR-счётом #N») больше нет — `cancelled` по QR теперь означает реальную отмену клиентом (свернул/закрыл приложение). `expired` по QR приходит только когда Kaspi отдал терминал, а не по локальному таймеру. Жизненный цикл QR — минуты (счёт по номеру — по-прежнему 24 часа), `qr_expires_at` — справочно. Реагируйте на `paid`/`cancelled`/`expired` по каждому `invoice.id` отдельно (при оплате нескольких QR придёт несколько `paid`). Два параллельных `POST /invoices/qr` оба получают `201` + `pending`; `409 superseded` — defensive-ветка, на практике недостижима.
@@ -102,8 +103,9 @@ Both options include ALL features: invoices, subscriptions, catalog, refunds, we
 
 ### Catalog (Каталог)
 - [GET /api/v1/catalog/units]: Единицы измерения
-- [GET /api/v1/catalog]: Список товаров каталога
-- [POST /api/v1/catalog]: Создать товары каталога
+- [POST /api/v1/catalog/scan]: Поиск товара в Нацкаталоге по штрихкоду (кандидаты с ntin/gtin; пустой data[] = не найдено, не ошибка)
+- [GET /api/v1/catalog]: Список товаров каталога (у товара есть поле gtin)
+- [POST /api/v1/catalog]: Создать товары каталога (опц. поля ntin/gtin/from_catalog)
 - [POST /api/v1/catalog/upload-image]: Загрузить изображение товара
 - [PATCH /api/v1/catalog/{id}]: Обновить товар каталога
 - [DELETE /api/v1/catalog/{id}]: Удалить товар каталога

@@ -112,7 +112,9 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `kaspi_error` | 502 | sync + async for QR invoices (`invoice.status_changed`, `status=error`) | Kaspi API returned an error. The reason text is in `message`/`error_message`. Retry later. |
 | `client_not_found` | — | async (`invoice.status_changed`, `status=error`) | The phone number is not registered in Kaspi. Don't retry the same number — ask for another. |
 | `network_unavailable` | — | async (`invoice.status_changed`, `status=error`) | The network/Kaspi was unavailable; retries are exhausted. Create a new invoice in 1–2 minutes. |
-| `kaspi_throttled` | — | async (`invoice.status_changed`, `status=error`) | Kaspi rate-limited the till's requests. Create a new invoice in 2–3 minutes; reduce your rate. |
+| `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync on `POST /catalog/scan` | Kaspi rate-limited requests. For invoices, create a new one in 2–3 minutes. On `POST /catalog/scan` it is returned synchronously (HTTP 429): `retry_after_seconds` in the body, `Retry-After` header; circuit-breaker ~90s. Wait the given time and retry. |
+| `kaspi_session_expired` | 400 | sync | The merchant's Kaspi session expired on `POST /catalog/scan`. Reconnect the Kaspi cashier and retry. |
+| `kaspi_scan_unavailable` | 503 | sync | Kaspi's National Catalog is temporarily unavailable on `POST /catalog/scan`. Retry later. |
 | `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | The refund window expired (~14 days) or the refund was already made. Don't retry. |
 | `Invoice cannot be cancelled` | 400 | sync | Only invoices in `pending` or `processing` status can be cancelled. |
 | `Invoice is not refundable` | 400 | sync | Refunds are possible only for a paid invoice that is not yet fully refunded. |

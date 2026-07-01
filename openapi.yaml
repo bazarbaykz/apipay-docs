@@ -1229,6 +1229,11 @@ paths:
                           type: string
                           nullable: true
                           example: "4901234567890"
+                        gtin:
+                          type: string
+                          nullable: true
+                          description: GTIN из Нацкаталога (если товар создан с ним). Листинг Kaspi gtin не возвращает, поэтому синхронизация его не затирает.
+                          example: "4607015232646"
                         image_url:
                           type: string
                           nullable: true
@@ -1302,6 +1307,20 @@ paths:
                         nullable: true
                         description: Штрихкод товара (макс 50 символов)
                         maxLength: 50
+                      ntin:
+                        type: string
+                        description: НТИН выбранного кандидата Нацкаталога (из POST /catalog/scan)
+                        maxLength: 50
+                        example: "0200009461097"
+                      gtin:
+                        type: string
+                        description: GTIN из Нацкаталога, только для кандидатов GS1 (из POST /catalog/scan)
+                        maxLength: 50
+                        example: "4607015232646"
+                      from_catalog:
+                        type: boolean
+                        default: false
+                        description: Признак, что товар создан из Нацкаталога
                     required:
                       - name
                       - selling_price
@@ -1337,6 +1356,11 @@ paths:
                         barcode:
                           type: string
                           nullable: true
+                        gtin:
+                          type: string
+                          nullable: true
+                          description: GTIN из Нацкаталога, если был передан при создании
+                          example: "4607015232646"
                         status:
                           type: string
                           enum:
@@ -1383,6 +1407,94 @@ paths:
                     type: string
                     format: uuid
                     description: ID изображения для использования при создании/обновлении товара
+  "/catalog/scan":
+    post:
+      summary: Поиск товара в Нацкаталоге по штрихкоду
+      description: >-
+        Резолвит штрихкод в Нацкаталоге Kaspi (синхронно, на сессии мерчанта). Один
+        штрихкод может вернуть несколько кандидатов (общий gtin, разные ntin) — выбор
+        делает мерчант. Пустой data[] и/или scan_result.code != "ok" означает, что товар
+        не найден в Нацкаталоге (это НЕ ошибка, HTTP 200 — создавайте товар обычным путём
+        без ntin/gtin). Поля выбранного кандидата (name, unit_id, barcode, ntin, gtin)
+        передаются в POST /catalog вместе с from_catalog: true. Лимиты: 30 запросов/мин
+        и 2000/сутки на API-ключ. Circuit-breaker: если Kaspi затроттлил сессию, ~90 секунд
+        сразу возвращается 429 kaspi_throttled без обращения к Kaspi.
+      operationId: scanCatalogBarcode
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: object
+              required:
+                - input
+              properties:
+                input:
+                  type: string
+                  maxLength: 64
+                  description: Штрихкод (ручной ввод или сканер)
+                  example: "4607015232646"
+      responses:
+        200:
+          description: Результат резолва. Пустой data[] = товар не найден в Нацкаталоге (не ошибка).
+          content:
+            "application/json":
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    description: Кандидаты Нацкаталога (может быть пустым)
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1118196
+                        name:
+                          type: string
+                          example: ВАФЛИ ЯШКИНО ОРЕХОВЫЕ 300Г
+                        ntin:
+                          type: string
+                          nullable: true
+                          example: "0200009461097"
+                        gtin:
+                          type: string
+                          nullable: true
+                          example: "4607015232646"
+                        barcode:
+                          type: string
+                          nullable: true
+                          example: "4607015232646"
+                        unit_id:
+                          type: integer
+                          nullable: true
+                          example: null
+                        image_link:
+                          type: string
+                          nullable: true
+                          example: null
+                  normalized_barcode:
+                    type: string
+                    example: "4607015232646"
+                  scan_result:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        example: ok
+                      message:
+                        type: string
+                        nullable: true
+                        example: null
+        400:
+          description: kaspi_session_expired — сессия Kaspi мерчанта истекла, нужна переавторизация кассира Kaspi
+        422:
+          description: Ошибка валидации (input пустой или длиннее 64 символов)
+        429:
+          description: kaspi_throttled — Kaspi троттлит сессию. В теле retry_after_seconds, в заголовке Retry-After. Повторите после паузы.
+        503:
+          description: kaspi_scan_unavailable — Нацкаталог Kaspi временно недоступен, повторите позже
   "/catalog/{id}":
     patch:
       summary: Обновить товар каталога
@@ -1424,6 +1536,20 @@ paths:
                   nullable: true
                   description: Штрихкод товара (макс 50 символов)
                   maxLength: 50
+                ntin:
+                  type: string
+                  maxLength: 50
+                  description: >-
+                    НТИН Нацкаталога. Внимание: отправляйте только когда реально хотите
+                    изменить идентичность. Пропуск поля сохраняет текущее значение; передача
+                    затирающего значения безвозвратно удалит идентичность Нацкаталога в Kaspi
+                    (её нельзя восстановить синком — gtin не отдаётся в листинге).
+                gtin:
+                  type: string
+                  maxLength: 50
+                  description: >-
+                    GTIN Нацкаталога. То же предупреждение, что и для ntin — передавайте
+                    только при реальном изменении.
       responses:
         200:
           description: Обновление товара (sandbox — синхронно)

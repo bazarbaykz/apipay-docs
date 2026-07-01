@@ -37,6 +37,8 @@ curl "https://bpapi.bazarbay.site/api/v1/catalog?search=coffee&page=1&per_page=2
 
 Each item in the response includes `created_at` — the creation timestamp in the system (ISO 8601). Available immediately after creation, even before Kaspi returns `date_added`.
 
+Each item also includes `gtin` (string or `null`) — the GTIN from the National Catalog, if the item was created with one. The Kaspi listing does not return `gtin`, so catalog synchronization never overwrites it.
+
 ## Upload Image
 
 **Endpoint:** `POST /catalog/upload-image`
@@ -56,6 +58,58 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/upload-image \
   "image_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
+
+## Scan Barcode (National Catalog)
+
+**Endpoint:** `POST /catalog/scan`
+
+Resolves a barcode against Kaspi's National Catalog and returns candidate product cards. Use it before creating an item to pull the official name, NTIN, and GTIN. Runs synchronously.
+
+```bash
+curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/scan \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": "4607015232646"}'
+```
+
+Field: `input` (required, string, max 64) — the barcode, entered manually or read from a scanner.
+
+Response `200 OK`:
+
+```json
+{
+  "data": [
+    {
+      "id": 1118196,
+      "name": "ВАФЛИ ЯШКИНО ОРЕХОВЫЕ 300Г",
+      "ntin": "0200009461097",
+      "gtin": "4607015232646",
+      "barcode": "4607015232646",
+      "unit_id": null,
+      "image_link": null
+    }
+  ],
+  "normalized_barcode": "4607015232646",
+  "scan_result": { "code": "ok", "message": null }
+}
+```
+
+A single barcode may return several candidates (shared `gtin`, different `ntin`) — the merchant makes the final choice. The candidate fields (`id`, `name`, `ntin`, `gtin`, `barcode`, `unit_id`, `image_link`) are then passed into item creation.
+
+If nothing is found, you get `data: []` and/or a `scan_result.code` other than `"ok"`. This is **not an error**: the HTTP status is still `200`. In that case, create the item the regular way, without `ntin`/`gtin`.
+
+### Errors
+
+| Code | Meaning | What to do |
+|------|---------|------------|
+| `422` | `input` is empty or longer than 64 characters | Fix the input |
+| `400` `kaspi_session_expired` | The Kaspi session expired | Reconnect the Kaspi cashier, then retry |
+| `429` `kaspi_throttled` | Too frequent (body has `retry_after_seconds`, header has `Retry-After`) | Wait the indicated time, then retry |
+| `503` `kaspi_scan_unavailable` | The National Catalog is temporarily unavailable | Retry later |
+
+**Rate limits:** 30 requests/min and 2000/day per API key. Circuit breaker: if Kaspi throttles the till, the endpoint returns `429 kaspi_throttled` immediately for about 90 seconds — pause for that period.
+
+**Typical flow:** scan the barcode → `POST /catalog/scan` → show `data[]` (if empty, create the item without `ntin`/`gtin`) → the merchant picks a candidate → `POST /catalog` with `ntin`/`gtin`/`from_catalog: true` → the item is created with status `pending` → it is pushed to Kaspi asynchronously → `active`.
 
 ## Create Catalog Items
 
@@ -84,8 +138,13 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog \
 | `unit_id` | integer | Yes | Unit of measurement ID |
 | `image_id` | string | No | Image UUID from upload-image |
 | `barcode` | string | No | Barcode (max 50 chars) |
+| `ntin` | string | No | NTIN of the selected National Catalog candidate (max 50) |
+| `gtin` | string | No | GTIN, only for GS1 candidates (max 50) |
+| `from_catalog` | boolean | No | Marks the item as created from the National Catalog (default `false`) |
 
-**Response code:** `202 Accepted` (async processing).
+The National Catalog fields are filled from the candidate chosen via `POST /catalog/scan`. Example item with catalog data: `{"name": "ВАФЛИ ЯШКИНО ОРЕХОВЫЕ 300Г", "selling_price": 450, "unit_id": 1, "barcode": "4607015232646", "ntin": "0200009461097", "gtin": "4607015232646", "from_catalog": true}`.
+
+**Response code:** `202 Accepted` (async processing). The response item includes the `gtin` field.
 
 ## Update Catalog Item
 
@@ -98,7 +157,9 @@ curl -X PATCH https://bpapi.bazarbay.site/api/v1/catalog/101 \
   -d '{"name": "Coffee Latte Grande", "selling_price": 1800}'
 ```
 
-Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode`.
+Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode`, `ntin` (optional, string, max 50), `gtin` (optional, string, max 50).
+
+> ⚠️ **Important about `ntin`/`gtin`.** Send these fields only when you actually want to change the National Catalog identity. For a regular edit (for example, price only), **do not send** `ntin`/`gtin` — otherwise `null` overwrites the National Catalog identity in Kaspi. It cannot be restored by synchronization: the Kaspi listing does not return `gtin`.
 
 **Response code:** `200 OK` (sandbox) / `202 Accepted` (production).
 

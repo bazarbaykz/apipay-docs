@@ -111,7 +111,9 @@ ApiPay.kz использует стандартные HTTP коды статус
 | `kaspi_error` | 502 | sync + async для QR-счетов (`invoice.status_changed`, `status=error`) | Kaspi API вернул ошибку. Текст причины — в `message`/`error_message`. Повторите позже. |
 | `client_not_found` | — | async (`invoice.status_changed`, `status=error`) | Номер телефона не зарегистрирован в Kaspi. Не повторяйте с тем же номером — попросите другой. |
 | `network_unavailable` | — | async (`invoice.status_changed`, `status=error`) | Сеть/Kaspi были недоступны; ретраи исчерпаны. Создайте новый счёт через 1–2 минуты. |
-| `kaspi_throttled` | — | async (`invoice.status_changed`, `status=error`) | Kaspi ограничил частоту запросов кассы. Создайте новый счёт через 2–3 минуты, снизьте темп. |
+| `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync при `POST /catalog/scan` | Kaspi ограничил частоту запросов. По счетам — создайте новый через 2–3 минуты. При `POST /catalog/scan` приходит синхронно (HTTP 429): `retry_after_seconds` в теле, заголовок `Retry-After`; circuit-breaker ~90 c. Подождите указанное время и повторите. |
+| `kaspi_session_expired` | 400 | sync | Сессия Kaspi мерчанта истекла при `POST /catalog/scan`. Переподключите кассира Kaspi и повторите. |
+| `kaspi_scan_unavailable` | 503 | sync | Нацкаталог Kaspi временно недоступен при `POST /catalog/scan`. Повторите позже. |
 | `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | Истёк срок возврата (~14 дней) или возврат уже сделан. Не повторяйте. |
 | `Invoice cannot be cancelled` | 400 | sync | Отменить можно только счёт в статусе `pending` или `processing`. |
 | `Invoice is not refundable` | 400 | sync | Возврат возможен только по оплаченному счёту, ещё не возвращённому полностью. |
