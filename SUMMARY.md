@@ -1,4 +1,4 @@
-# Содержание
+# Table of contents
 
 * [Введение](README.ru.md)
 
@@ -16,12 +16,12 @@
 
 ## Примеры кода
 
-* [JavaScript](examples/javascript/create-invoice.js)
-* [Python](examples/python/create_invoice.py)
-* [PHP](examples/php/create-invoice.php)
-* [cURL](examples/curl/examples.sh)
+* [JavaScript](primery-koda/javascript.md)
+* [Python](primery-koda/python.md)
+* [PHP](primery-koda/php.md)
+* [cURL](primery-koda/curl.md)
 
 ## Справка
 
-* [OpenAPI спецификация](openapi.yaml)
-* [OpenAPI спецификация Partner API](openapi-partner.yaml)
+* [OpenAPI спецификация](spravka/openapi-specifikaciya.md)
+* [OpenAPI спецификация Partner API](spravka/openapi-specifikaciya-partner-api.md)
