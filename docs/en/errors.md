@@ -120,6 +120,10 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `Invoice is not refundable` | 400 | sync | Refunds are possible only for a paid invoice that is not yet fully refunded. |
 | `Refund amount exceeds available amount` | 400 | sync | The refund amount is larger than available. See `available_for_refund` in `GET /invoices/{id}`. |
 | `Organization not verified` | 403 | sync | Subscriptions in production mode are available only to a verified organization. |
+| `kyc_daily_limit_reached` | 429 | sync | A young organization: until the business profile is approved, only 1 real invoice per day is allowed (Asia/Almaty window; sandbox invoices are not counted). `meta.reset_at` tells when the limit resets. Fill the short form in the dashboard (`/business-profile`); approval usually within 1 business day lifts the limit. |
+| `kyc_rejected` | 403 | sync | Payment acceptance is closed following the business review. Not retryable — contact support if you believe this is a mistake. |
+| `webhook_url_requires_domain` | 422 | sync | The webhook URL must be on your own domain — IP addresses are not accepted (for not-yet-approved organizations in production; the rule is softer in the sandbox). |
+| `webhook_url_tunnel_forbidden` | 422 | sync | Tunnels (ngrok and similar) cannot be used for production webhooks — they are temporary and will go offline. Use an address on your own domain. A tunnel is allowed in the sandbox for testing. |
 
 > A detailed "what the system does and what you should do" matrix for each
 > asynchronous code lives in [Webhooks → Response scenarios](webhooks.md).

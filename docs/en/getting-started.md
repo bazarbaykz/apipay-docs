@@ -40,6 +40,14 @@ Response:
 
 The customer will receive a payment notification in Kaspi app and can pay there.
 
+## Business verification
+
+When you go live in production, we ask you once to fill a short "Tell us about your business" form (~5 minutes in the dashboard, `/business-profile`): what you sell, where you sell, an approximate average check. This is not distrust — it protects your own Kaspi cashier by reducing the risk of a legitimate seller being blocked by anti-fraud, and lets us tune limits to your turnover.
+
+Until the form is approved, a cautious start applies: **1 real invoice per day** (the **sandbox is unlimited** — test as much as you need). Over that, the API returns `429 kyc_daily_limit_reached` (`meta.reset_at` tells when the limit resets). Approval usually takes **1 business day**, after which the limit is lifted automatically.
+
+Also: for not-yet-approved organizations a production webhook must be on a real domain — IPs and tunnels (ngrok) are rejected (see [Webhooks](webhooks.md)).
+
 ## What's Next?
 
 - [Invoices](invoices.md) — Create, list, cancel invoices, use cart items

@@ -10,6 +10,8 @@ Configure webhooks in [ApiPay.kz Dashboard](https://apipay.kz) → Settings → 
 2. Enter your webhook URL
 3. Save and copy the **secret** (shown only once!)
 
+**URL requirements:** a public HTTPS address without your own authentication; private IPs and localhost are rejected (422). For not-yet-approved organizations in production the address must be on a **real domain**: IP → `422 webhook_url_requires_domain`, tunnels (ngrok and similar) → `422 webhook_url_tunnel_forbidden` (a tunnel is temporary and will go offline — notifications stop arriving). A tunnel is allowed in the sandbox for local testing. The restriction is lifted after the business profile is approved (see [Getting Started → Business verification](getting-started.md)).
+
 > **All dates in webhooks are in UTC** (ISO 8601, `+00:00`).
 
 ## Events
