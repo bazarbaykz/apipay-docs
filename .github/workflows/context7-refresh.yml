@@ -19,7 +19,14 @@ jobs:
     steps:
       - name: Trigger Context7 refresh
         run: |
-          curl -sS -X POST https://context7.com/api/v1/refresh \
+          response=$(curl -sS -X POST https://context7.com/api/v1/refresh \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ secrets.CONTEXT7_API_KEY }}" \
-            -d '{"libraryName": "/${{ github.repository }}"}'
+            -d '{"libraryName": "/${{ github.repository }}"}')
+          echo "$response"
+
+          # too-early — не ошибка: Context7 держит минимальный интервал между обновлениями
+          if echo "$response" | grep -q '"error"' && ! echo "$response" | grep -q '"too-early"'; then
+            echo "::error::Context7 отклонил refresh"
+            exit 1
+          fi
