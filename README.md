@@ -14,11 +14,13 @@ ApiPay.kz is an independent service that provides a REST API for Kaspi Pay. Auto
 
 ### 1. Prerequisites
 
-Before creating invoices, you must connect your organization:
+Before creating invoices, you must connect your Kaspi cashier:
 
-1. Get your API key from [ApiPay.kz Dashboard](https://apipay.kz/login)
-2. Contact support via [WhatsApp (+7 708 516 74 89)](https://wa.me/77085167489) to connect your Kaspi Business as **"Cashier"**
-3. Wait for organization to be connected (usually 5-30 minutes)
+1. Register at [ApiPay.kz](https://apipay.kz/login)
+2. [Connect your Kaspi cashier](https://apipay.kz/connect-cashier) yourself in the dashboard (Settings → Kaspi Authorization) — a 2–3 minute wizard: add an employee with the **"Cashier"** role in the Kaspi Pay app, enter that number, confirm the SMS code. The connection is instant.
+3. Get your API key from Settings → Connection
+
+> Do not sign in to the Kaspi Pay app with the cashier's number afterwards — it breaks the connection. If the wizard does not work for you, [WhatsApp support](https://wa.me/77085167489) can connect it manually.
 
 ### 2. Create Invoice
 

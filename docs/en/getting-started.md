@@ -5,9 +5,12 @@
 Before using the ApiPay.kz API, you need to:
 
 1. **Register** at [apipay.kz/login](https://apipay.kz/login)
-2. **Connect your organization** — contact support via [WhatsApp (+7 708 516 74 89)](https://wa.me/77085167489) to connect your Kaspi Business as **"Cashier"**
-3. **Wait for connection** (usually 5-30 minutes)
-4. **Get your API key** from Dashboard → Settings → Connection
+2. **Connect your Kaspi cashier yourself** — use the wizard in the dashboard: [apipay.kz/connect-cashier](https://apipay.kz/connect-cashier) (Settings → Kaspi Authorization). It takes 2–3 minutes: add an employee number with the **"Cashier"** role in the Kaspi Pay app (Settings → Employees), enter that number in the wizard, and confirm the SMS code. The connection is instant. See the [step-by-step guide](https://apipay.kz/guides/podklyuchenie-kassira-kaspi) (in Russian).
+3. **Get your API key** from Dashboard → Settings → Connection
+
+> **Important:** after linking, do not sign in to the Kaspi Pay app with the cashier's number — the session will break and you will have to connect the cashier again.
+>
+> If the wizard does not work for you, we can connect it manually: [WhatsApp support (+7 708 516 74 89)](https://wa.me/77085167489).
 
 ## Configuration
 
