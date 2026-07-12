@@ -1,66 +1,116 @@
 openapi: "3.0.0"
 info:
-  title: ApiPay.kz Partner API
-  version: "1.0.0"
+  title: ApiPay.kz Partner API (S2S)
+  version: "1.1.0"
   description: >-
     Server-to-server API для партнёров-интеграторов (CRM-системы, платформы).
-    Позволяет программно подключать мерчантов в ApiPay и выставлять счета от
-    их имени. Аутентификация — по заголовку X-Partner-Key. После онбординга
-    используйте X-API-Key мерчанта с обычным API (/api/v1).
+    Позволяет программно подключать мерчантов в ApiPay, авторизовать кассира
+    Kaspi, выдавать per-org X-API-Key + webhook, а также оплачивать и
+    мониторить тариф мерчанта. После онбординга платёжные операции выполняются
+    выданным X-API-Key через публичный API (`/api/v1`, отдельная спецификация).
+
+
+    ## Аутентификация
+
+    Все запросы — заголовок `X-Partner-Key: <ключ>`. Ключ выдаётся один раз и
+    хранится только хешем (sha256). Партнёр привязан к `User`; все его
+    организации принадлежат этому User — это граница авторизации. Ключ доступен
+    только **operating**-партнёру (двух-типовая модель `referral | operating`):
+    `referral`-партнёр или неактивный ключ → `403 forbidden`.
+
+
+    ## Границы этой спецификации
+
+    Здесь описана **только** S2S-поверхность X-Partner-Key (`routes/partner.php`,
+    15 эндпоинтов). Партнёрский **кабинет** под Sanctum-сессией
+    (`api-key/rotate`, `PUT /mode`, `webhook-logs`, `claim-requests`,
+    `sandbox/toggle`, `production-request`, `managed-organizations` и т.д.) —
+    отдельная поверхность в `routes/api.php` и в этот машинный канон НЕ входит.
+
+
+    ## Поток онбординга
+
+    ```
+
+    POST /organizations                           → создать организацию
+
+    POST /organizations/{id}/kaspi-auth/init       → начать авторизацию кассира
+
+    POST /organizations/{id}/kaspi-auth/send-phone → Kaspi шлёт SMS кассиру
+
+    POST /organizations/{id}/kaspi-auth/verify-otp → подтвердить кодом из SMS
+
+    POST /organizations/{id}/api-key               → получить X-API-Key + webhook
+
+    ```
+
+    `process_id` живёт ~10 минут — `send-phone` + `verify-otp` нужно уложить в это окно.
+
+
+    ## Конверт ответов
+
+    Успех: `{ "success": true, ... }`. Ошибка контроллера/сервиса:
+    `{ "success": false, "error": "<code>", "error_code": "<code>", "message":
+    "<ru>", "errors"?: {...} }` — legacy-ключ `error` дублирует `error_code` для
+    back-compat; `errors` присутствует только на 422 из контроллерной проверки.
+    Ошибки middleware-слоя (аутентификация/владение/production-гейт) отдают
+    сокращённую форму — см. схемы `AuthError` и раздел `responses`. Ошибки
+    валидации FormRequest/inline-`validate` отдают стандартную Laravel-форму
+    `{ "message", "errors" }` (см. схему `LaravelValidationError`).
+
+
+    ## Сквозные правила
+
+    - **Даты** — ISO-8601 в зоне Asia/Almaty (суффикс `+05:00`). Исключение —
+      timestamp'ы внутри webhook-payload, которые приходят в UTC (`+00:00`).
+
+    - **Пагинация** — плоская: `{ data, current_page, per_page, total, last_page }`.
+
+    - **One-time secret** — `key` и `webhook_secret` возвращаются в открытом виде
+      только в момент выдачи/ротации.
+
+    - **429** — заголовок `Retry-After`; для тарифных лимитов дополнительно поле
+      тела `retry_after_seconds`. Общие rate-limit'ы (throttle) отдают
+      стандартную Laravel-форму `{ "message": "Too Many Attempts." }`.
+
+
+    ## Rate limits
+
+    - `partner-api` — 120 req/min на партнёра (вся группа).
+
+    - `partner-org-create` — 10 req/min на партнёра (`POST /organizations`).
+
+    - `partner-kaspi-auth` — 10 req/min на партнёра+организацию для боевой орг
+      (60 req/min для тестовой — мок не шлёт SMS): `send-phone`, `verify-otp`.
   contact:
     name: ApiPay.kz Support
-    url: https://wa.me/77085167489
+    url: https://apipay.kz
 servers:
-  - url: https://bpapi.bazarbay.site
-    description: Production API
+  - url: https://bpapi.bazarbay.site/api/partner
+    description: Production (базовый URL Partner API; все пути ниже — относительно него)
 security:
   - PartnerKey: []
 tags:
   - name: Organizations
-    description: Управление организациями мерчантов
+    description: Жизненный цикл организаций мерчантов
   - name: Kaspi Auth
-    description: Авторизация кассира Kaspi (онбординг)
+    description: Авторизация кассира Kaspi (3-шаговый SMS-флоу онбординга)
   - name: API Keys
-    description: Выдача API-ключей мерчантов
+    description: Выдача per-org X-API-Key мерчанта
+  - name: Tariff
+    description: Тариф мерчанта — каталог, статус/мониторинг, оплата, история платежей
+  - name: Health
+    description: Агрегированный health аккаунта партнёра
 paths:
-  /api/partner/organizations:
-    post:
-      tags: [Organizations]
-      summary: Создать организацию мерчанта
-      description: >-
-        Создаёт организацию мерчанта. Идемпотентно по external_id — повторный
-        запрос вернёт существующую организацию.
-      operationId: createPartnerOrganization
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                has_catalog:
-                  type: boolean
-                  description: Создать организацию с каталогом товаров
-                  example: false
-                external_id:
-                  type: string
-                  description: Ваш идентификатор клиента в CRM
-                  example: crm-client-42
-      responses:
-        "201":
-          description: Организация создана (200 при идемпотентном повторе)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OrganizationResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "422":
-          $ref: "#/components/responses/ValidationError"
+  /organizations:
     get:
       tags: [Organizations]
       summary: Список организаций
-      description: Возвращает организации партнёра с пагинацией.
+      description: >-
+        Возвращает организации партнёра (scope по `partner_id`: created ∪
+        referral ∪ claimed) с плоской пагинацией. Опциональные фильтры
+        применяются ДО пагинации. Back-compat: ключ `organizations` сохранён
+        рядом с `data` (тот же массив).
       operationId: listPartnerOrganizations
       parameters:
         - name: per_page
@@ -75,46 +125,157 @@ paths:
         - name: page
           in: query
           required: false
-          description: Номер страницы
+          description: Номер страницы (>= 1)
           schema:
             type: integer
             minimum: 1
             default: 1
+        - name: status
+          in: query
+          required: false
+          description: Фильтр по статусу организации
+          schema:
+            type: string
+            enum: [pending, verified, suspended]
+        - name: sandbox_mode
+          in: query
+          required: false
+          description: Фильтр по sandbox-режиму (принимает true/false/1/0)
+          schema:
+            type: boolean
+        - name: search
+          in: query
+          required: false
+          description: LIKE-поиск по name / external_id / idn
+          schema:
+            type: string
+            maxLength: 255
       responses:
         "200":
-          description: Список организаций
+          description: Список организаций (пагинированный)
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  organizations:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Organization"
-                  current_page:
-                    type: integer
-                    example: 1
-                  per_page:
-                    type: integer
-                    example: 25
-                  total:
-                    type: integer
-                    example: 42
-                  last_page:
-                    type: integer
-                    example: 2
+                allOf:
+                  - $ref: "#/components/schemas/Pagination"
+                  - type: object
+                    properties:
+                      success:
+                        type: boolean
+                        example: true
+                      organizations:
+                        type: array
+                        description: Back-compat алиас `data` (тот же массив).
+                        items:
+                          $ref: "#/components/schemas/Organization"
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Organization"
+              example:
+                success: true
+                organizations:
+                  - id: 50
+                    name: ТОО Example
+                    idn: "123456789012"
+                    status: verified
+                    sandbox_mode: false
+                    has_catalog: false
+                    kaspi_connected: true
+                    session_mode: self
+                    external_id: crm-client-42
+                    origin: created
+                    payment_status: active
+                    payment_expires_at: "2026-09-20T10:00:00+05:00"
+                    has_active_payment: true
+                    created_at: "2026-05-16T10:00:00+05:00"
+                data:
+                  - id: 50
+                    name: ТОО Example
+                    origin: created
+                current_page: 1
+                per_page: 25
+                total: 42
+                last_page: 2
         "401":
           $ref: "#/components/responses/Unauthorized"
-  /api/partner/organizations/{id}:
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "422":
+          $ref: "#/components/responses/LaravelValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [Organizations]
+      summary: Создать организацию мерчанта
+      description: >-
+        Создаёт организацию мерчанта. **Идемпотентно по `external_id`** —
+        повторный запрос с тем же `external_id` возвращает существующую
+        организацию (HTTP 200), новая не создаётся.
+      operationId: createPartnerOrganization
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                has_catalog:
+                  type: boolean
+                  description: Создать организацию с каталогом товаров
+                  default: false
+                  example: false
+                external_id:
+                  type: string
+                  maxLength: 255
+                  description: Ваш идентификатор клиента в CRM (ключ идемпотентности)
+                  example: crm-client-42
+                name:
+                  type: string
+                  maxLength: 255
+                  description: >-
+                    Имя организации. При пустом/непереданном — сервис
+                    автогенерит `PARTNER_<id>_<ts>` (финальное имя может
+                    прийти позже на verify-otp).
+                  example: ТОО Example
+      responses:
+        "201":
+          description: Организация создана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "200":
+          description: Идемпотентный повтор — возвращена существующая организация
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "422":
+          $ref: "#/components/responses/LaravelValidationError"
+        "429":
+          description: >-
+            Достигнут лимит тестовых организаций на партнёра
+            (`test_org_limit`) либо общий rate-limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: test_org_limit
+                error_code: test_org_limit
+                message: Достигнут лимит тестовых организаций.
+  /organizations/{organization}:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
     get:
       tags: [Organizations]
-      summary: Получить организацию
+      summary: Карточка организации
       operationId: getPartnerOrganization
       responses:
         "200":
@@ -126,13 +287,15 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Forbidden"
+          $ref: "#/components/responses/ForbiddenNotOperating"
         "404":
-          $ref: "#/components/responses/NotFound"
+          $ref: "#/components/responses/OrganizationNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Organizations]
       summary: Отвязать организацию
-      description: Деактивирует API-ключи организации и помечает её как удалённую.
+      description: Деактивирует все API-ключи организации и делает soft-delete.
       operationId: deletePartnerOrganization
       responses:
         "200":
@@ -140,24 +303,43 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
+                $ref: "#/components/schemas/SuccessFlag"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Forbidden"
+          $ref: "#/components/responses/ForbiddenNotOperating"
         "404":
-          $ref: "#/components/responses/NotFound"
-  /api/partner/organizations/{id}/kaspi-auth/init:
+          $ref: "#/components/responses/OrganizationNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/kaspi-auth/init:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
     post:
       tags: [Kaspi Auth]
       summary: Шаг 1 — начать авторизацию кассира
+      description: >-
+        Инициализирует процесс авторизации кассира. Опциональный `force` —
+        переавторизация поверх уже активной сессии (смена кассира). Без `force`
+        по уже подключённой организации возвращается `409 already_connected`,
+        чтобы случайный retry не уничтожил рабочую Kaspi-связку.
+
+
+        Боевая организация проходит только для production-партнёра (иначе
+        `403 production_access_required`); тестовая организация идёт мок-путём
+        всегда.
       operationId: partnerKaspiAuthInit
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: Переавторизация поверх активной сессии (смена кассира)
       responses:
         "200":
           description: Авторизация начата
@@ -171,20 +353,45 @@ paths:
                     example: true
                   process_id:
                     type: string
-                    description: Идентификатор процесса авторизации. Живёт 10 минут.
+                    description: Идентификатор процесса авторизации. Живёт ~10 минут.
+                    example: "3f8c1e2a-..."
+                  process_status:
+                    $ref: "#/components/schemas/ProcessStatus"
+              example:
+                success: true
+                process_id: "3f8c1e2a-..."
+                process_status: phone_required
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Forbidden"
+          $ref: "#/components/responses/ProductionRequired"
         "404":
-          $ref: "#/components/responses/NotFound"
-  /api/partner/organizations/{id}/kaspi-auth/send-phone:
+          $ref: "#/components/responses/OrganizationNotFound"
+        "409":
+          description: Организация уже подключена (без `force`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: already_connected
+                error_code: already_connected
+                message: Произошла ошибка.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/kaspi-auth/send-phone:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
     post:
       tags: [Kaspi Auth]
       summary: Шаг 2 — отправить номер кассира
-      description: Kaspi отправляет SMS-код на телефон кассира.
+      description: >-
+        Kaspi отправляет SMS-код на телефон кассира. Лимит
+        `partner-kaspi-auth` — 10 req/min (боевая) / 60 req/min (тестовая) на
+        партнёра+организацию. В sandbox используются магические тестовые номера
+        кассира (детерминированные ветки успеха/ошибок) — см. раздел Sandbox в
+        `docs/partner-api.md`.
       operationId: partnerKaspiAuthSendPhone
       requestBody:
         required: true
@@ -196,9 +403,11 @@ paths:
               properties:
                 cashier_phone:
                   type: string
-                  description: Номер кассира в формате 7XXXXXXXXXX
-                  pattern: ^7[0-9]{10}$
-                  example: "77001234567"
+                  description: >-
+                    Номер кассира в формате `7XXXXXXXXXX` (11 цифр, ведущая 7).
+                    Это телефон кассира Kaspi, НЕ телефон плательщика.
+                  pattern: ^7\d{10}$
+                  example: "7XXXXXXXXXX"
       responses:
         "200":
           description: SMS отправлено
@@ -210,20 +419,93 @@ paths:
                   success:
                     type: boolean
                     example: true
+                  process_status:
+                    $ref: "#/components/schemas/ProcessStatus"
+              example:
+                success: true
+                process_status: otp_required
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ProductionRequired"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: >-
+            Конфликт процесса: `no_process` (авторизация не начата — вызовите
+            `init`), `context_expired` (Kaspi-контекст протух, ~10 мин — вызовите
+            `init` заново), `org_claim_conflict` (номер уже привязан к
+            организации другого владельца).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: context_expired
+                error_code: context_expired
+                message: Сессия авторизации истекла, начните заново.
         "422":
-          $ref: "#/components/responses/ValidationError"
+          description: >-
+            `invalid_phone` (неверный формат — также возможна стандартная
+            Laravel-форма валидации), `not_cashier` (номер не «чистый кассир»),
+            `not_registered` (номер не зарегистрирован кассиром в Kaspi).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/LaravelValidationError"
+              example:
+                success: false
+                error: not_cashier
+                error_code: not_cashier
+                message: Номер не является кассиром Kaspi.
         "502":
-          $ref: "#/components/responses/KaspiUnavailable"
-  /api/partner/organizations/{id}/kaspi-auth/verify-otp:
+          description: "`sms_failed` — Kaspi не вернул экран ввода OTP."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: sms_failed
+                error_code: sms_failed
+                message: Не удалось отправить SMS.
+        # TODO(verify): опорная дока (docs/partner-api.md) обещает для kaspi_busy
+        # заголовок `Retry-After: 60`, но PartnerKaspiAuthController::error()
+        # (через safely) его НЕ ставит — единственный код-путь с Retry-After это
+        # тарифные лимиты (PartnerTariffController). Проверить, добавляет ли
+        # Retry-After для kaspi_busy глобальный обработчик; заголовок здесь не
+        # объявляю, чтобы не выдумывать.
+        "503":
+          description: >-
+            `kaspi_busy` — Kaspi временно недоступен/троттлит. Согласно опорной
+            доке возвращается с заголовком `Retry-After: 60` (см. TODO(verify)
+            в исходнике YAML — код-путь не подтверждён).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: kaspi_busy
+                error_code: kaspi_busy
+                message: Kaspi временно недоступен, повторите позже.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/kaspi-auth/verify-otp:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
     post:
       tags: [Kaspi Auth]
       summary: Шаг 3 — подтвердить код из SMS
+      description: >-
+        Подтверждает код из SMS. При успехе организация финализируется
+        (`status: verified`). **Неверный код возвращается с HTTP 200** и телом
+        `{ success:false, error:"invalid_otp", process_status:"otp_required" }` —
+        это повторяемо, сессия не сбрасывается. Лимит `partner-kaspi-auth`
+        (см. send-phone).
       operationId: partnerKaspiAuthVerifyOtp
       requestBody:
         required: true
@@ -236,35 +518,94 @@ paths:
                 otp:
                   type: string
                   description: Код из SMS, 4–6 цифр
+                  pattern: ^\d{4,6}$
                   example: "1234"
       responses:
         "200":
           description: >-
-            Результат проверки. При успехе success=true с карточкой
-            организации; при неверном коде success=false и error=invalid_otp.
+            Результат проверки. Успех — `success:true` с карточкой организации
+            и `process_status:"active"`. Неверный код — `success:false`,
+            `error:"invalid_otp"`, `process_status:"otp_required"` (повторяемо).
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  mode:
-                    type: string
-                    example: self
-                  organization:
-                    $ref: "#/components/schemas/Organization"
-                  error:
-                    type: string
-                    description: Код ошибки при неуспехе (например, invalid_otp)
+                oneOf:
+                  - type: object
+                    properties:
+                      success:
+                        type: boolean
+                        example: true
+                      mode:
+                        type: string
+                        example: self
+                      organization:
+                        $ref: "#/components/schemas/Organization"
+                      process_status:
+                        $ref: "#/components/schemas/ProcessStatus"
+                  - allOf:
+                      - $ref: "#/components/schemas/ErrorEnvelope"
+                      - type: object
+                        properties:
+                          process_status:
+                            $ref: "#/components/schemas/ProcessStatus"
+              examples:
+                success:
+                  summary: Успешная верификация
+                  value:
+                    success: true
+                    mode: self
+                    organization:
+                      id: 501
+                      name: ТОО Синие птицы
+                      status: verified
+                      sandbox_mode: false
+                      kaspi_connected: true
+                    process_status: active
+                invalid_otp:
+                  summary: Неверный код (повторяемо)
+                  value:
+                    success: false
+                    error: invalid_otp
+                    error_code: invalid_otp
+                    message: Некорректный код подтверждения.
+                    process_status: otp_required
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ProductionRequired"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: >-
+            `no_process` (авторизация не начата/истекла), `org_claim_conflict`
+            (конкурентная привязка кассира к чужой организации).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: no_process
+                error_code: no_process
+                message: Нет активного процесса авторизации.
         "422":
-          $ref: "#/components/responses/ValidationError"
-  /api/partner/organizations/{id}/kaspi-auth/status:
+          $ref: "#/components/responses/LaravelValidationError"
+        "502":
+          description: >-
+            Внутренняя ошибка финализации Kaspi-сессии: `finish_no_x509`,
+            `finish_no_token_sn`, `http_error`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: finish_no_x509
+                error_code: finish_no_x509
+                message: Произошла ошибка.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/kaspi-auth/status:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
     get:
@@ -284,7 +625,11 @@ paths:
                     example: true
                   status:
                     type: string
-                    example: pending
+                    description: Статус persisted-сессии (`none`, если сессии нет)
+                    enum: [none, pending, active, expired]
+                    example: none
+                  process_status:
+                    $ref: "#/components/schemas/ProcessStatus"
                   kaspi_connected:
                     type: boolean
                     example: false
@@ -292,19 +637,37 @@ paths:
                     type: string
                     format: date-time
                     nullable: true
+                    description: Истечение сессии (Asia/Almaty, +05:00) либо null
+              example:
+                success: true
+                status: none
+                process_status: idle
+                kaspi_connected: false
+                expires_at: null
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ProductionRequired"
         "404":
-          $ref: "#/components/responses/NotFound"
-  /api/partner/organizations/{id}/api-key:
+          $ref: "#/components/responses/OrganizationNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/api-key:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
     post:
       tags: [API Keys]
-      summary: Выдать X-API-Key мерчанта
+      summary: Выдать / перевыпустить X-API-Key мерчанта
       description: >-
-        Создаёт или перевыпускает X-API-Key и webhook для организации.
-        Идемпотентно. Ключ и секрет возвращаются в открытом виде один раз.
+        Создаёт или перегенерирует per-org X-API-Key + webhook. **Идемпотентно**:
+        повторный вызов перегенерирует ключ той же записи (`regenerated:true`).
+        `key` и `webhook_secret` возвращаются в открытом виде **один раз**.
+        `webhook_url` проходит SSRF-валидацию (приватные/внутренние адреса
+        отклоняются 422). До одобрения KYC на проде webhook обязан быть доменом
+        (не IP/туннель). «Risk»-адрес (nip.io, free-TLD, dynamic-DNS, перехватчик
+        типа webhook.site) в режиме enforce требует `webhook_justification` (≥20)
+        и уходит на ручную модерацию: `webhook_review_status:"pending_review"`,
+        доставка уведомлений НЕ идёт до одобрения админом.
       operationId: createPartnerApiKey
       requestBody:
         required: true
@@ -316,23 +679,31 @@ paths:
               properties:
                 name:
                   type: string
+                  maxLength: 100
                   description: Название ключа
                   example: CRM key
                 webhook_url:
                   type: string
                   format: uri
-                  description: >-
-                    URL для webhook-уведомлений. Приватные и внутренние адреса
-                    отклоняются.
+                  maxLength: 500
+                  description: URL для webhook-уведомлений (SSRF-валидируется)
                   example: https://your-crm.example.com/webhooks/kaspi
                 webhook_secret:
                   type: string
+                  maxLength: 255
                   description: >-
-                    Секрет для подписи webhook. Генерируется автоматически,
-                    если не указан.
+                    Секрет для HMAC-подписи webhook (printable ASCII).
+                    Генерируется автоматически, если не указан.
+                webhook_justification:
+                  type: string
+                  maxLength: 1000
+                  description: >-
+                    Объяснение (≥20 символов), почему уведомления идут на risk-адрес.
+                    Обязателен для risk-хостов в режиме enforce, иначе
+                    422 `webhook_justification_required`.
       responses:
         "200":
-          description: Ключ выдан
+          description: Ключ выдан / перевыпущен
           content:
             application/json:
               schema:
@@ -343,7 +714,7 @@ paths:
                     example: true
                   key:
                     type: string
-                    description: X-API-Key мерчанта в открытом виде. Показывается один раз.
+                    description: X-API-Key мерчанта в открытом виде (показывается один раз)
                   key_id:
                     type: integer
                     example: 200
@@ -352,29 +723,562 @@ paths:
                     format: uri
                   webhook_secret:
                     type: string
-                    description: Секрет webhook в открытом виде. Показывается один раз.
+                    description: Секрет webhook в открытом виде (показывается один раз)
+                  webhook_review_status:
+                    type: string
+                    enum: [approved, pending_review, rejected]
+                    description: >-
+                      Статус модерации webhook-адреса. `approved` — доставка идёт;
+                      `pending_review` — risk-адрес на ручной проверке (доставки нет
+                      до одобрения); `rejected` — отклонён.
+                    example: approved
                   is_org_default:
                     type: boolean
+                    description: true только если у организации ещё не было дефолтного ключа
                     example: true
                   regenerated:
                     type: boolean
                     example: false
+              example:
+                success: true
+                key: <plaintext, один раз>
+                key_id: 200
+                webhook_url: https://your-crm.example.com/webhooks/kaspi
+                webhook_secret: whsec_xxxx
+                webhook_review_status: approved
+                is_org_default: true
+                regenerated: false
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Forbidden"
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          description: >-
+            Ошибка валидации тела (`webhook_url` обязателен) — стандартная
+            Laravel-форма; либо отклонение webhook_url — конверт `ErrorEnvelope`
+            (`error_code`: SSRF-код валидатора, `webhook_url_requires_domain`,
+            `webhook_url_tunnel_forbidden`, `webhook_justification_required` или
+            `webhook_url_disallowed_host`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/LaravelValidationError"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /tariff-plans:
+    get:
+      tags: [Tariff]
+      summary: Каталог тарифов
+      description: >-
+        Общий каталог тарифов ApiPay (без привязки к организации): 3 тарифа
+        (start/business/pro) и 12 планов (3 тарифа × периоды 1/3/6/12 мес со
+        скидками).
+      operationId: partnerTariffPlans
+      responses:
+        "200":
+          description: Каталог тарифов и планов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  tiers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TariffTier"
+                  plans:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TariffPlan"
+              example:
+                success: true
+                tiers:
+                  - { id: start, label: Start, daily_limit: 30, base_price: 10000 }
+                  - { id: business, label: Business, daily_limit: 100, base_price: 25000 }
+                  - { id: pro, label: Pro, daily_limit: null, base_price: 60000 }
+                plans:
+                  - { tier_id: business, period_months: 3, price: 71250, discount_percent: 5, label: "Business — 3 месяца", price_per_month: 23750 }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/tariff:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      tags: [Tariff]
+      summary: Статус / мониторинг тарифа мерчанта
+      description: >-
+        Снимок подписки мерчанта на ApiPay. Отсутствие тарифа → `status:"none"`
+        (НЕ 404). `next_payment.amount` отдаётся всегда (фолбэк на 1-мес цену).
+      operationId: partnerTariffShow
+      responses:
+        "200":
+          description: Снимок тарифа
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  tariff:
+                    $ref: "#/components/schemas/TariffSnapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/tariff/pay:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Tariff]
+      summary: Оплатить тариф мерчанта
+      description: >-
+        Оплата тарифа мерчанта партнёром — счёт через Kaspi (dogfooding): телефон
+        плательщика в запросе, тариф активируется асинхронно после оплаты
+        (webhook `invoice.status_changed` → `paid`). Триал сохраняется —
+        оплата продлевает подписку от конца триала/текущего периода.
+
+
+        Боевая организация — только для **production**-партнёра (иначе
+        `403 production_access_required`). Тестовая (sandbox) организация →
+        мгновенная мок-активация: HTTP **201**, `payment.status:"completed"`,
+        `self_api_invoice_id:null`.
+      operationId: partnerTariffPay
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier_id, period_months, phone]
+              properties:
+                tier_id:
+                  type: string
+                  enum: [start, business, pro]
+                  example: business
+                period_months:
+                  type: integer
+                  enum: [1, 3, 6, 12]
+                  example: 3
+                phone:
+                  type: string
+                  description: >-
+                    Телефон плательщика; нормализуется к `8XXXXXXXXXX`
+                    (regex `^8\d{10}$`). Это телефон плательщика, НЕ кассира.
+                  pattern: ^8\d{10}$
+                  example: "8XXXXXXXXXX"
+                set_billing_phone:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Записать телефон плательщика как `billing_phone` организации.
+                    Авто-продление НЕ включается.
+      responses:
+        "201":
+          description: Платёж создан (боевая — pending; sandbox — completed)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  payment:
+                    $ref: "#/components/schemas/Payment"
+              example:
+                success: true
+                payment:
+                  id: 42
+                  amount: 71250
+                  status: pending
+                  tier: business
+                  period_months: 3
+                  self_api_invoice_id: 778899
+                  external_id: partner-tariff-501-1716900000
+                  paid_at: null
+                  expires_at: null
+                  created_at: "2026-06-20T10:00:00+05:00"
+                  failure_reason: null
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            `production_access_required` — боевая организация у sandbox-партнёра
+            (middleware `partner.production`); либо `forbidden` (не operating).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthError"
+              example:
+                success: false
+                error: production_access_required
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "409":
+          description: >-
+            `tariff_payment_pending` — у организации уже есть живой неоплаченный
+            счёт тарифа (в теле — объект `payment` существующего счёта).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      payment:
+                        $ref: "#/components/schemas/Payment"
+              example:
+                success: false
+                error: tariff_payment_pending
+                error_code: tariff_payment_pending
+                message: У этой организации есть неоплаченный счёт тарифа.
+                payment:
+                  id: 41
+                  amount: 71250
+                  status: pending
+        "422":
+          description: >-
+            `invalid_tariff_plan` — неизвестная пара tier_id/period_months
+            (конверт `ErrorEnvelope`); либо стандартная Laravel-форма при
+            нарушении правил FormRequest (tier_id/period_months/phone).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/LaravelValidationError"
+              example:
+                success: false
+                error: invalid_tariff_plan
+                error_code: invalid_tariff_plan
+                message: Некорректный тарифный план.
+        "429":
+          description: >-
+            `tariff_payment_cooldown` — слишком много отменённых платежей.
+            Заголовок `Retry-After` + поле `retry_after_seconds` (1800).
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Секунд до повторной попытки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitEnvelope"
+              example:
+                success: false
+                error: tariff_payment_cooldown
+                error_code: tariff_payment_cooldown
+                message: Слишком много отменённых платежей. Попробуйте позже.
+                retry_after_seconds: 1800
+        "503":
+          description: >-
+            `tariff_payment_unavailable` — self-API недоступен/троттлит (счёт не
+            создан, платёж отменён). Заголовок `Retry-After` + поле
+            `retry_after_seconds` (30). Партнёр ретраит позже.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitEnvelope"
+              example:
+                success: false
+                error: tariff_payment_unavailable
+                error_code: tariff_payment_unavailable
+                message: Не удалось создать счёт. Попробуйте позже.
+                retry_after_seconds: 30
+  /organizations/{organization}/tariff/invoice:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Tariff]
+      summary: Выписать счёт на оплату тарифа (INVOICE для юрлиц)
+      description: >-
+        Синхронно формирует PDF-«Счёт на оплату» тарифа с реквизитами покупателя
+        (юрлица) и возвращает публичную ссылку `download_url`. Оплата —
+        **банковским переводом**; тариф активируется ВРУЧНУЮ владельцем ApiPay
+        после поступления средств — **автоактивации НЕТ**. Счёт виден в истории
+        платежей (`GET .../tariff/payments`) как `payment_method=invoice` с
+        под-объектом `invoice`; переход статуса `pending`→`completed` = тариф
+        выдан (поллинг). Событие вебхука об активации — см. раздел вебхуков
+        `docs/partner-api.md` (`tariff.activated`).
+
+
+        Боевая организация — только для **production**-партнёра (иначе
+        `403 production_access_required`, middleware `partner.production`).
+      operationId: partnerTariffInvoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier_id, period_months, buyer_bin, buyer_name]
+              properties:
+                tier_id:
+                  type: string
+                  enum: [start, business, pro]
+                  example: business
+                period_months:
+                  type: integer
+                  enum: [1, 3, 6, 12]
+                  example: 1
+                buyer_bin:
+                  type: string
+                  description: БИН/ИИН покупателя (ровно 12 цифр).
+                  pattern: ^\d{12}$
+                  example: "123456789012"
+                buyer_name:
+                  type: string
+                  maxLength: 255
+                  example: ТОО "Ромашка"
+                buyer_address:
+                  type: string
+                  nullable: true
+                  maxLength: 500
+                  example: г. Алматы, ул. Абая, 1
+                contract:
+                  type: string
+                  nullable: true
+                  maxLength: 255
+                  example: Договор №42
+      responses:
+        "201":
+          description: Счёт выписан, PDF готов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  invoice:
+                    $ref: "#/components/schemas/TariffInvoiceIssued"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            `production_access_required` — боевая организация у sandbox-партнёра
+            (middleware `partner.production`); либо `forbidden` (не operating).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthError"
+              example:
+                success: false
+                error: production_access_required
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "409":
+          description: >-
+            `invoice_locked` — другая операция выписки счёта для этой организации
+            ещё в процессе (лок не взят за 3с). Повторите.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: invoice_locked
+                error_code: invoice_locked
+                message: Другая операция выписки счёта в процессе, повторите.
+        "422":
+          description: >-
+            `invalid_tariff_plan` — неизвестная пара tier_id/period_months
+            (конверт `ErrorEnvelope`); либо стандартная Laravel-форма при
+            нарушении правил FormRequest (tier_id/period_months/buyer_bin/
+            buyer_name/buyer_address/contract).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/LaravelValidationError"
+              example:
+                success: false
+                error: invalid_tariff_plan
+                error_code: invalid_tariff_plan
+                message: Некорректный тарифный план.
+        "429":
+          description: >-
+            `invoice_cooldown` — превышен антиабуз-лимит выписок за 24ч.
+            Заголовок `Retry-After` + поле `retry_after_seconds`.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Секунд до освобождения слота
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitEnvelope"
+              example:
+                success: false
+                error: invoice_cooldown
+                error_code: invoice_cooldown
+                message: Слишком много выписанных счетов. Попробуйте позже.
+                retry_after_seconds: 3600
+        "503":
+          description: >-
+            `invoice_pdf_failed` — не удалось отрендерить PDF счёта (счёт-строка
+            остаётся, можно повторить). Партнёр ретраит позже.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: invoice_pdf_failed
+                error_code: invoice_pdf_failed
+                message: Не удалось сформировать PDF счёта. Попробуйте позже.
+  /organizations/{organization}/tariff/payments:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      tags: [Tariff]
+      summary: История платежей тарифа
+      description: >-
+        Платежи тарифа организации (payment_method `self_api` или `invoice`) по
+        убыванию даты. Триальные журнальные записи (amount=0) намеренно исключены.
+        У платежей `payment_method=invoice` присутствует под-объект `invoice`
+        (`number`, `download_url`, `buyer_name`).
+      operationId: partnerTariffPaymentsIndex
+      responses:
+        "200":
+          description: История платежей
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/tariff/payments/{paymentId}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - name: paymentId
+        in: path
+        required: true
+        description: ID платежа тарифа
+        schema:
+          type: integer
+    get:
+      tags: [Tariff]
+      summary: Карточка платежа тарифа
+      operationId: partnerTariffPaymentShow
+      responses:
+        "200":
+          description: Один платёж
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  payment:
+                    $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "404":
+          description: >-
+            `organization_not_found` (чужая/несуществующая орг) либо
+            `tariff_payment_not_found` (платёж не принадлежит организации).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AuthError"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: tariff_payment_not_found
+                error_code: tariff_payment_not_found
+                message: Не найдено.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /health:
+    get:
+      tags: [Health]
+      summary: Health аккаунта партнёра
+      description: >-
+        Агрегат состояния аккаунта партнёра по всем его организациям (без
+        внутренних proxy-деталей). Кэшируется ~30с.
+      operationId: partnerHealth
+      responses:
+        "200":
+          description: Агрегированный health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerHealth"
+              example:
+                success: true
+                api: { status: ok }
+                organizations:
+                  total: 12
+                  kaspi_connected: 9
+                  needs_reauth: 1
+                  tariff_active: 7
+                  tariff_expired: 2
+                  on_trial: 3
+                webhooks: { delivered_24h: 340, failed_24h: 5, success_rate: 98.6 }
+                rate_limits: { partner_api_per_min: 120 }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     PartnerKey:
       type: apiKey
       in: header
       name: X-Partner-Key
-      description: Партнёрский ключ, выдаётся командой ApiPay при одобрении заявки.
+      description: >-
+        Партнёрский ключ (server-to-server). Выдаётся один раз, хранится sha256.
+        Доступен только operating-партнёру.
   parameters:
     OrganizationId:
-      name: id
+      name: organization
       in: path
       required: true
       description: ID организации мерчанта
@@ -383,15 +1287,17 @@ components:
   schemas:
     Organization:
       type: object
+      description: Карточка организации мерчанта (`<card>`).
       properties:
         id:
           type: integer
           example: 50
         name:
           type: string
-          example: "ТОО Example"
+          example: ТОО Example
         idn:
           type: string
+          nullable: true
           description: БИН/ИИН организации
           example: "123456789012"
         status:
@@ -409,25 +1315,36 @@ components:
           example: true
         session_mode:
           type: string
+          nullable: true
+          description: Режим Kaspi-сессии (например `self`)
           example: self
         external_id:
           type: string
           nullable: true
+          description: Референс клиента в CRM (колонка partner_external_id)
           example: crm-client-42
+        origin:
+          type: string
+          enum: [referral, created, claimed]
+          description: Происхождение орги (аддитив B4, НИКОГДА не null)
+          example: created
         payment_status:
           type: string
           enum: [none, active, expired]
+          description: Read-only, выводится из тарифа
           example: none
         payment_expires_at:
           type: string
           format: date-time
           nullable: true
+          description: Asia/Almaty (+05:00) либо null
         has_active_payment:
           type: boolean
           example: false
         created_at:
           type: string
           format: date-time
+          description: Asia/Almaty (+05:00)
     OrganizationResponse:
       type: object
       properties:
@@ -436,52 +1353,571 @@ components:
           example: true
         organization:
           $ref: "#/components/schemas/Organization"
-    Error:
+    Pagination:
       type: object
+      description: Плоская пагинация (без meta).
+      properties:
+        current_page:
+          type: integer
+          example: 1
+        per_page:
+          type: integer
+          example: 25
+        total:
+          type: integer
+          example: 42
+        last_page:
+          type: integer
+          example: 2
+    ProcessStatus:
+      type: string
+      description: Состояние процесса авторизации кассира (H1).
+      enum: [idle, phone_required, otp_required, active, failed]
+    Payment:
+      type: object
+      description: Платёж тарифа мерчанта.
+      properties:
+        id:
+          type: integer
+          example: 42
+        amount:
+          type: integer
+          description: Сумма в тенге
+          example: 71250
+        status:
+          type: string
+          description: >-
+            Статус платежа (например pending / completed / cancelled).
+          example: pending
+        tier:
+          type: string
+          example: business
+        period_months:
+          type: integer
+          example: 3
+        self_api_invoice_id:
+          type: integer
+          nullable: true
+          description: ID счёта self-API (null в sandbox/мок-пути)
+          example: 778899
+        external_id:
+          type: string
+          example: partner-tariff-501-1716900000
+        paid_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Asia/Almaty (+05:00) либо null
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        failure_reason:
+          type: string
+          nullable: true
+        invoice:
+          description: >-
+            Присутствует ТОЛЬКО у платежей `payment_method=invoice` (счёт на
+            организацию). Иначе поле отсутствует.
+          allOf:
+            - $ref: "#/components/schemas/PaymentInvoiceRef"
+    PaymentInvoiceRef:
+      type: object
+      description: Краткая ссылка на выписанный счёт в объекте платежа.
+      properties:
+        number:
+          type: integer
+          description: Сквозной номер счёта
+          example: 14
+        download_url:
+          type: string
+          format: uri
+          description: Публичная ссылка на PDF счёта
+          example: https://apipay.kz/invoices/xxxxxxxx/download
+        buyer_name:
+          type: string
+          example: ТОО "Ромашка"
+    TariffInvoiceIssued:
+      type: object
+      description: Выписанный «Счёт на оплату» тарифа (INVOICE).
+      properties:
+        payment_id:
+          type: integer
+          example: 42
+        number:
+          type: integer
+          description: Сквозной номер счёта
+          example: 14
+        amount:
+          type: integer
+          description: Сумма в тенге
+          example: 25000
+        tier:
+          type: string
+          example: business
+        period_months:
+          type: integer
+          example: 1
+        status:
+          type: string
+          description: Всегда `pending` при выписке (активация вручную).
+          example: pending
+        buyer:
+          type: object
+          properties:
+            bin:
+              type: string
+              example: "123456789012"
+            name:
+              type: string
+              example: ТОО "Ромашка"
+            address:
+              type: string
+              nullable: true
+              example: null
+            contract:
+              type: string
+              nullable: true
+              example: null
+        download_url:
+          type: string
+          format: uri
+          description: Публичная ссылка на PDF счёта
+          example: https://apipay.kz/invoices/xxxxxxxx/download
+        created_at:
+          type: string
+          format: date-time
+          description: Asia/Almaty (+05:00)
+          example: "2026-07-09T12:00:00+05:00"
+    TariffSnapshot:
+      type: object
+      description: Снимок подписки мерчанта на ApiPay.
+      properties:
+        status:
+          type: string
+          enum: [none, trial, active, expired]
+          example: active
+        tier:
+          type: string
+          nullable: true
+          example: business
+        is_trial:
+          type: boolean
+          example: false
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        days_remaining:
+          type: integer
+          example: 92
+        auto_renew:
+          type: boolean
+          example: false
+        last_payment:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/LastPayment"
+        next_payment:
+          $ref: "#/components/schemas/NextPayment"
+    LastPayment:
+      type: object
+      properties:
+        amount:
+          type: integer
+          example: 71250
+        paid_at:
+          type: string
+          format: date-time
+          nullable: true
+        period_months:
+          type: integer
+          example: 3
+        tier:
+          type: string
+          example: business
+        status:
+          type: string
+          example: completed
+    NextPayment:
+      type: object
+      description: Следующий платёж; `amount` отдаётся всегда (фолбэк 1 мес).
+      properties:
+        due_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Конец периода (активный/триал) либо null (истёкший)
+        amount:
+          type: integer
+          example: 71250
+        tier:
+          type: string
+          example: business
+    TariffPlan:
+      type: object
+      properties:
+        tier_id:
+          type: string
+          example: business
+        period_months:
+          type: integer
+          example: 3
+        price:
+          type: integer
+          example: 71250
+        discount_percent:
+          type: integer
+          example: 5
+        label:
+          type: string
+          example: Business — 3 месяца
+        price_per_month:
+          type: number
+          example: 23750
+    TariffTier:
+      type: object
+      properties:
+        id:
+          type: string
+          example: business
+        label:
+          type: string
+          example: Business
+        daily_limit:
+          type: integer
+          nullable: true
+          description: Дневной лимит счетов (null = безлимит, pro)
+          example: 100
+        base_price:
+          type: integer
+          example: 25000
+    PartnerHealth:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        api:
+          type: object
+          properties:
+            status:
+              type: string
+              example: ok
+        organizations:
+          type: object
+          properties:
+            total:
+              type: integer
+            kaspi_connected:
+              type: integer
+            needs_reauth:
+              type: integer
+            tariff_active:
+              type: integer
+            tariff_expired:
+              type: integer
+            on_trial:
+              type: integer
+        webhooks:
+          type: object
+          properties:
+            delivered_24h:
+              type: integer
+            failed_24h:
+              type: integer
+            success_rate:
+              type: number
+              nullable: true
+              description: null при 0 событий за 24ч
+        rate_limits:
+          type: object
+          properties:
+            partner_api_per_min:
+              type: integer
+              example: 120
+    SuccessFlag:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+    ErrorEnvelope:
+      type: object
+      description: >-
+        Конверт ошибки контроллера/сервиса Partner API. Legacy-ключ `error`
+        дублирует `error_code`. `errors` — только на 422 из контроллерной
+        проверки.
+      required: [success, error, error_code, message]
       properties:
         success:
           type: boolean
           example: false
         error:
           type: string
-          description: Машиночитаемый код ошибки
+          description: Legacy-алиас error_code
+          example: not_cashier
+        error_code:
+          type: string
+          example: not_cashier
         message:
           type: string
-          description: Человекочитаемое описание
+          description: Безопасное ru-сообщение (без утечки внутренних деталей)
+          example: Номер не является кассиром Kaspi.
+        errors:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    RateLimitEnvelope:
+      description: ErrorEnvelope + `retry_after_seconds` (тарифные лимиты 429/503).
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            retry_after_seconds:
+              type: integer
+              example: 1800
+    AuthError:
+      type: object
+      description: >-
+        Сокращённая форма ошибок middleware-слоя (partner.key / partner.org /
+        partner.production). Содержит только `success` и `error`; для
+        `forbidden` (не operating) дополнительно дублируется `error_code`.
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: organization_not_found
+        error_code:
+          type: string
+          description: Присутствует только для `forbidden` (VerifyPartnerKey)
+    LaravelValidationError:
+      type: object
+      description: >-
+        Стандартная Laravel-форма 422 из FormRequest / inline-`validate`
+        (org-index/store, cashier_phone, otp, webhook_url, tariff-pay-поля).
+        Без `success`/`error_code`.
+      properties:
+        message:
+          type: string
+          example: The given data was invalid.
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    RateLimited:
+      type: object
+      description: Стандартный ответ Laravel-троттла (429).
+      properties:
+        message:
+          type: string
+          example: Too Many Attempts.
   responses:
     Unauthorized:
-      description: Неверный или отсутствующий X-Partner-Key
+      description: >-
+        Неверный/отсутствующий X-Partner-Key: `partner_key_missing` (нет
+        заголовка), `invalid_partner_key` (не найден/неактивен),
+        `partner_user_missing` (у партнёра нет user). Тело — сокращённая форма
+        `{ success:false, error }`.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
-    Forbidden:
-      description: Нет доступа к запрошенному ресурсу
+            $ref: "#/components/schemas/AuthError"
+          example:
+            success: false
+            error: invalid_partner_key
+    ForbiddenNotOperating:
+      description: >-
+        Партнёр не operating (referral-тип или неактивный ключ). Тело
+        `{ success:false, error:"forbidden", error_code:"forbidden" }`.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
-    NotFound:
-      description: Организация не найдена
+            $ref: "#/components/schemas/AuthError"
+          example:
+            success: false
+            error: forbidden
+            error_code: forbidden
+    ProductionRequired:
+      description: >-
+        Боевая организация у sandbox-партнёра (middleware `partner.production`):
+        `production_access_required` (403). Также возможен `forbidden` при
+        не-operating ключе. Тело — сокращённая форма `{ success:false, error }`.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
-    Conflict:
-      description: "Конфликт: no_process (авторизация не начата или истекла), already_exists"
+            $ref: "#/components/schemas/AuthError"
+          example:
+            success: false
+            error: production_access_required
+    OrganizationNotFound:
+      description: >-
+        Организация не принадлежит партнёру или не существует
+        (`organization_not_found`, 404 — не раскрываем существование чужих орг).
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
-    ValidationError:
-      description: "Ошибка валидации: invalid_phone, not_cashier, недопустимый webhook_url"
+            $ref: "#/components/schemas/AuthError"
+          example:
+            success: false
+            error: organization_not_found
+    LaravelValidationError:
+      description: Ошибка валидации (стандартная Laravel-форма).
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
-    KaspiUnavailable:
-      description: "Kaspi API недоступен: sms_failed"
+            $ref: "#/components/schemas/LaravelValidationError"
+    RateLimited:
+      description: >-
+        Превышен rate-limit (`partner-api` 120/min, `partner-org-create`
+        10/min, `partner-kaspi-auth` 10|60/min). Заголовок `Retry-After`, тело —
+        стандартная Laravel-форма.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Секунд до следующей попытки
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/RateLimited"
+# ---------------------------------------------------------------------------
+# Партнёрские вебхуки (X-Webhook-Signature).
+#
+# OpenAPI 3.0 не имеет top-level `webhooks` (это ключ 3.1). Используем
+# расширение `x-webhooks` (совместимо с Redoc) с той же структурой, что
+# path-операции. Источник — docs/partner-api.md § Webhooks; формат payload
+# идентичен публичному API. Полный каталог событий/полей — docs/reference-
+# webhooks.md (не воспроизводим здесь целиком, чтобы не выдумывать).
+#
+# ⚠️ timestamp внутри payload приходит в UTC (+00:00), в отличие от дат
+# HTTP-ответов API (+05:00).
+# ---------------------------------------------------------------------------
+x-webhooks:
+  invoice.status_changed:
+    post:
+      summary: Изменение статуса счёта
+      description: >-
+        Отправляется на `webhook_url` per-org ключа при смене статуса счёта.
+        Подпись — заголовок `X-Webhook-Signature: sha256=<HMAC-SHA256(body,
+        webhook_secret)>`. Поле `error_code` внутри `invoice` — additive, только
+        если non-null (отсутствует, например, для статуса `paid`).
+        `kaspi_source_type` / `kaspi_sale_type` присутствуют, когда известны
+        после оплаты.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  example: invoice.status_changed
+                invoice:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                      example: 1234
+                    status:
+                      type: string
+                      example: paid
+                    amount:
+                      type: integer
+                      example: 5000
+                    error_message:
+                      type: string
+                      nullable: true
+                    error_code:
+                      type: string
+                      nullable: true
+                      description: Additive; присутствует только если non-null
+                    errored_at:
+                      type: string
+                      format: date-time
+                      nullable: true
+                    kaspi_source_type:
+                      type: string
+                      nullable: true
+                      example: GOLD
+                    kaspi_sale_type:
+                      type: string
+                      nullable: true
+                      example: QR
+                source:
+                  type: string
+                  description: Название ключа-источника
+                  example: CRM key
+                timestamp:
+                  type: string
+                  format: date-time
+                  description: UTC (+00:00)
+                  example: "2026-05-27T10:00:00+00:00"
+      responses:
+        "200":
+          description: Подтверждение приёма интегратором
+  invoice.refunded:
+    post:
+      summary: Возврат по счёту (в т.ч. failed-возврат)
+      description: >-
+        Отправляется при возврате. Для failed-возврата `refund.status:"failed"`
+        и `refund.error_code` (additive, только если non-null). Подпись — как у
+        `invoice.status_changed`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  example: invoice.refunded
+                refund:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                      example: 55
+                    status:
+                      type: string
+                      example: failed
+                    error_code:
+                      type: string
+                      nullable: true
+                      example: network_unavailable
+                invoice:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                      example: 1234
+                    amount:
+                      type: integer
+                      example: 5000
+                source:
+                  type: string
+                  example: CRM key
+                timestamp:
+                  type: string
+                  format: date-time
+                  description: UTC (+00:00)
+                  example: "2026-05-27T10:00:00+00:00"
+      responses:
+        "200":
+          description: Подтверждение приёма интегратором
