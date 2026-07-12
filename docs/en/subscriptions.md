@@ -7,7 +7,7 @@ Subscriptions allow automatic recurring billing on a schedule — ideal for memb
 **Endpoint:** `POST /subscriptions`
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
+curl -X POST https://api.apipay.kz/api/v1/subscriptions \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -73,7 +73,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
 **Endpoint:** `GET /subscriptions`
 
 ```bash
-curl "https://bpapi.bazarbay.site/api/v1/subscriptions?status=active&page=1&per_page=20" \
+curl "https://api.apipay.kz/api/v1/subscriptions?status=active&page=1&per_page=20" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -98,7 +98,7 @@ curl "https://bpapi.bazarbay.site/api/v1/subscriptions?status=active&page=1&per_
 Returns subscription with stats and last payment info.
 
 ```bash
-curl https://bpapi.bazarbay.site/api/v1/subscriptions/1 \
+curl https://api.apipay.kz/api/v1/subscriptions/1 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -134,7 +134,7 @@ curl https://bpapi.bazarbay.site/api/v1/subscriptions/1 \
 **Endpoint:** `PUT /subscriptions/{id}`
 
 ```bash
-curl -X PUT https://bpapi.bazarbay.site/api/v1/subscriptions/1 \
+curl -X PUT https://api.apipay.kz/api/v1/subscriptions/1 \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"amount": 7500, "description": "Premium monthly"}'
@@ -147,7 +147,7 @@ Updatable fields: `amount`, `billing_day`, `description`, `subscriber_name`, `ma
 **Endpoint:** `POST /subscriptions/{id}/pause`
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions/1/pause \
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/pause \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -156,7 +156,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions/1/pause \
 **Endpoint:** `POST /subscriptions/{id}/resume`
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions/1/resume \
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/resume \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -167,7 +167,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions/1/resume \
 Permanently cancels. Cannot be resumed.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions/1/cancel \
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/cancel \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -176,7 +176,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions/1/cancel \
 **Endpoint:** `GET /subscriptions/{id}/invoices`
 
 ```bash
-curl "https://bpapi.bazarbay.site/api/v1/subscriptions/1/invoices?page=1&per_page=20" \
+curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -224,7 +224,7 @@ Webhook events: `subscription.payment_failed`, `subscription.grace_period_starte
 ### JavaScript
 
 ```javascript
-const response = await fetch('https://bpapi.bazarbay.site/api/v1/subscriptions', {
+const response = await fetch('https://api.apipay.kz/api/v1/subscriptions', {
   method: 'POST',
   headers: {
     'X-API-Key': 'YOUR_API_KEY',
@@ -246,7 +246,7 @@ const subscription = await response.json()
 import requests
 
 response = requests.post(
-    'https://bpapi.bazarbay.site/api/v1/subscriptions',
+    'https://api.apipay.kz/api/v1/subscriptions',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'amount': 5000, 'phone_number': '87001234567', 'billing_period': 'monthly'}
 )
@@ -256,7 +256,7 @@ subscription = response.json()
 ### PHP
 
 ```php
-$ch = curl_init('https://bpapi.bazarbay.site/api/v1/subscriptions');
+$ch = curl_init('https://api.apipay.kz/api/v1/subscriptions');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],

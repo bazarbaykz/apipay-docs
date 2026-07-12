@@ -9,7 +9,7 @@ Process full or partial refunds for paid invoices.
 ### Full Refund
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"reason": "Customer request"}'
@@ -18,7 +18,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 ### Partial Refund
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"amount": 5000, "reason": "Partial return"}'
@@ -37,7 +37,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 For each position provide either `count` (refund whole units, amount = `price × count`) or `amount` (refund an arbitrary part of the position's value, e.g. for an indivisible service with `count: 1`). You can mix positions in a single request.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -81,7 +81,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 **Endpoint:** `GET /refunds`
 
 ```bash
-curl "https://bpapi.bazarbay.site/api/v1/refunds?page=1&per_page=20&status[]=completed" \
+curl "https://api.apipay.kz/api/v1/refunds?page=1&per_page=20&status[]=completed" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -149,7 +149,7 @@ curl "https://bpapi.bazarbay.site/api/v1/refunds?page=1&per_page=20&status[]=com
 **Endpoint:** `GET /invoices/{id}/refunds`
 
 ```bash
-curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
+curl https://api.apipay.kz/api/v1/invoices/42/refunds \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -174,14 +174,14 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
 
 ```javascript
 // Full refund
-await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
+await fetch('https://api.apipay.kz/api/v1/invoices/42/refund', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
   body: JSON.stringify({ reason: 'Customer cancellation' })
 })
 
 // Partial refund
-await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
+await fetch('https://api.apipay.kz/api/v1/invoices/42/refund', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
   body: JSON.stringify({ amount: 5000, reason: 'Partial return' })
@@ -189,7 +189,7 @@ await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
 
 // List refunds with filters
 const refunds = await fetch(
-  'https://bpapi.bazarbay.site/api/v1/refunds?status[]=completed&date_from=2025-01-01',
+  'https://api.apipay.kz/api/v1/refunds?status[]=completed&date_from=2025-01-01',
   { headers: { 'X-API-Key': 'YOUR_API_KEY' } }
 )
 ```
@@ -200,12 +200,12 @@ const refunds = await fetch(
 import requests
 
 # Full refund
-requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
+requests.post('https://api.apipay.kz/api/v1/invoices/42/refund',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'reason': 'Customer cancellation'})
 
 # Partial refund
-requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
+requests.post('https://api.apipay.kz/api/v1/invoices/42/refund',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'amount': 5000, 'reason': 'Partial return'})
 ```
@@ -214,7 +214,7 @@ requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
 
 ```php
 // Full refund
-$ch = curl_init('https://bpapi.bazarbay.site/api/v1/invoices/42/refund');
+$ch = curl_init('https://api.apipay.kz/api/v1/invoices/42/refund');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],

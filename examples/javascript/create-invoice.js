@@ -7,7 +7,7 @@
  */
 
 const API_KEY = process.env.API_KEY
-const API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1'
+const API_BASE_URL = 'https://api.apipay.kz/api/v1'
 
 async function createInvoice(amount, phoneNumber, description, externalOrderId) {
   const response = await fetch(`${API_BASE_URL}/invoices`, {

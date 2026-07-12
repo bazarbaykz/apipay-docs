@@ -78,7 +78,7 @@ info:
     name: ApiPay.kz Support
     url: https://wa.me/77085167489
 servers:
-  - url: https://bpapi.bazarbay.site/api/v1
+  - url: https://api.apipay.kz/api/v1
     description: Production API
 security:
   - ApiKeyAuth: []
@@ -89,6 +89,8 @@ tags:
     description: Счета на оплату — создание (по номеру / QR / пакетно), просмотр, отмена, статистика.
   - name: Refunds
     description: Возвраты по счетам.
+  - name: Receipts
+    description: Фискальные чеки в Kaspi OFD для оплат наличными / через POS другого банка (не прошедших через Kaspi QR). За kill-switch fiscal_receipts_enabled.
   - name: Tariff & Account
     description: Информация мерчанта о себе — тарифный каталог, статус подписки на ApiPay, health аккаунта.
   - name: Connections
@@ -781,6 +783,157 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  "/receipts/preview":
+    post:
+      tags: [Receipts]
+      summary: Превью фискального чека
+      description: |
+        Синхронное превью чека (pre-details) перед выбиванием — для UI. Возвращает
+        список строк `{Title, Subtitle, isBoldText}` (сумма, способ оплаты).
+
+        Для оплат, НЕ прошедших через Kaspi QR: `payment_type=3` (наличные),
+        `payment_type=5` (POS другого банка). За kill-switch — при отключённой фиче
+        `403 fiscal_receipts_disabled`. Sandbox отдаёт детерминированное превью без Kaspi.
+      operationId: previewReceipt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_type, total_price]
+              properties:
+                payment_type: {type: integer, enum: [3, 5], description: "3 — наличные, 5 — POS другого банка."}
+                total_price: {type: number, description: "Сумма чека.", example: 10}
+                kaspi_connection_id: {type: integer, nullable: true, description: "Конкретный кассир; по умолчанию — primary/единственный активный."}
+      responses:
+        '200':
+          description: Превью
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        Title: {type: string, example: "Способ оплаты"}
+                        Subtitle: {type: string, example: "Наличные"}
+                        isBoldText: {type: boolean, example: false}
+        '400':
+          description: Не определена организация (organization_required)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Фича отключена (fiscal_receipts_disabled)
+        '409':
+          description: Нет активного кассира (kaspi_session_not_configured)
+        '422':
+          description: Неоднозначность кассира (connection_ambiguous) или невалидный payment_type/total_price
+        '503':
+          description: Kaspi недоступен (receipt_preview_unavailable)
+  "/receipts":
+    post:
+      tags: [Receipts]
+      summary: Выбить фискальный чек
+      description: |
+        Асинхронно выбивает фискальный чек в Kaspi OFD для оплаты наличными
+        (`payment_type=3`) или через POS другого банка (`payment_type=5`). Позиции —
+        из синхронизированного каталога по `catalog_item_id` (как `/invoices` with-cart);
+        только фискально зарегистрированные (иначе `item_not_fiscal`).
+
+        Создаёт чек в статусе `pending` и ставит задачу выбивания. Клиент узнаёт итог
+        через `GET /receipts/{id}` или вебхук `receipt.issued`/`receipt.failed`.
+
+        **Идемпотентность:** `client_operation_id` уникален на организацию — повтор с тем
+        же ключом не выбивает второй чек (`409 duplicate_client_operation_id`); повтор
+        после `failed` разрешён. За kill-switch (`403 fiscal_receipts_disabled`).
+      operationId: createReceipt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_type, client_operation_id, cart_items]
+              properties:
+                payment_type: {type: integer, enum: [3, 5]}
+                client_operation_id: {type: string, maxLength: 191, description: "Ключ идемпотентности (уникален на организацию)."}
+                kaspi_connection_id: {type: integer, nullable: true}
+                received_amt: {type: number, nullable: true, description: "Наличные: полученная сумма (>= итога, для сдачи). POS другого банка игнорируется (= итогу)."}
+                cart_items:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [catalog_item_id, quantity]
+                    properties:
+                      catalog_item_id: {type: integer, description: "ID позиции из GET /catalog."}
+                      quantity: {type: integer, minimum: 1}
+                      price: {type: number, nullable: true, description: "Цена за единицу; по умолчанию — selling_price из каталога."}
+      responses:
+        '202':
+          description: Чек принят в обработку
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: integer}
+                  status: {type: string, example: pending}
+                  client_operation_id: {type: string}
+        '400':
+          description: organization_required
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: fiscal_receipts_disabled
+        '409':
+          description: Дубль client_operation_id (duplicate_client_operation_id) или нет кассира (kaspi_session_not_configured)
+        '422':
+          description: Ошибка валидации / connection_ambiguous
+  "/receipts/{id}":
+    get:
+      tags: [Receipts]
+      summary: Статус фискального чека
+      description: |
+        Возвращает текущий статус чека и его реквизиты (`fpd`, `operation_id`, `link`,
+        `shift_number`). `status`: `pending` | `issued` | `failed`. Чужой `id` → `404`.
+      operationId: showReceipt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer}
+      responses:
+        '200':
+          description: Статус чека
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: integer}
+                  status: {type: string, enum: [pending, issued, failed]}
+                  payment_type: {type: integer, enum: [3, 5]}
+                  client_operation_id: {type: string, nullable: true}
+                  total_price: {type: string, nullable: true}
+                  received_amt: {type: string, nullable: true}
+                  fpd: {type: string, nullable: true}
+                  operation_id: {type: string, nullable: true}
+                  operation_time: {type: string, nullable: true}
+                  shift_number: {type: integer, nullable: true}
+                  link: {type: string, nullable: true, description: "Ссылка на чек на receipt.kaspi.kz."}
+                  error_code: {type: string, nullable: true}
+                  error_message: {type: string, nullable: true}
+                  created_at: {type: string, format: date-time, nullable: true}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Чек не найден (receipt_not_found)
   "/refunds":
     get:
       tags: [Refunds]
@@ -3224,7 +3377,7 @@ components:
             skipped: {type: integer, example: 996}
             failed: {type: integer, example: 3}
         pending_remaining: {type: integer, description: "Сколько строк батча ещё не финализировано (0 = готово).", example: 1002}
-        poll_url: {type: string, description: "URL GET /catalog/batches/{id}.", example: "https://bpapi.bazarbay.site/api/v1/catalog/batches/8f14e45f-ceea-467e-9a2c-0000000000aa"}
+        poll_url: {type: string, description: "URL GET /catalog/batches/{id}.", example: "https://api.apipay.kz/api/v1/catalog/batches/8f14e45f-ceea-467e-9a2c-0000000000aa"}
         created_at: {type: string, format: date-time, nullable: true, example: "2026-07-11T10:00:00+00:00"}
         completed_at: {type: string, format: date-time, nullable: true, example: null}
     WebhookCatalogItemProcessed:
@@ -3275,8 +3428,30 @@ components:
             properties:
               external_ref: {type: string, nullable: true, example: "1C-000456"}
               error_code: {type: string, nullable: true, example: catalog_item_duplicate}
-        poll_url: {type: string, example: "https://bpapi.bazarbay.site/api/v1/catalog/batches/8f14e45f-ceea-467e-9a2c-0000000000aa"}
+        poll_url: {type: string, example: "https://api.apipay.kz/api/v1/catalog/batches/8f14e45f-ceea-467e-9a2c-0000000000aa"}
         timestamp: {type: string, format: date-time, example: "2026-07-11T10:12:00+00:00"}
+    WebhookReceiptEvent:
+      type: object
+      description: |
+        Payload вебхуков receipt.issued / receipt.failed. Таймстамп UTC +00:00.
+        Дедуп по `(event, receipt.id)`. При failed — детали в `receipt.error_code`.
+      properties:
+        event: {type: string, enum: [receipt.issued, receipt.failed], example: receipt.issued}
+        receipt:
+          type: object
+          properties:
+            id: {type: integer, example: 4210}
+            client_operation_id: {type: string, nullable: true, example: "pos-cash-0042"}
+            payment_type: {type: integer, enum: [3, 5], example: 3}
+            status: {type: string, enum: [issued, failed], example: issued}
+            fpd: {type: string, nullable: true, example: "537836550048"}
+            operation_id: {type: string, nullable: true, example: "KKM48390858"}
+            link: {type: string, nullable: true, example: "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM48390858"}
+            shift_number: {type: integer, nullable: true, example: 106}
+            total_price: {type: string, nullable: true, example: "10.00"}
+            error_code: {type: string, nullable: true, example: null}
+            error_message: {type: string, nullable: true}
+        timestamp: {type: string, format: date-time, example: "2026-07-12T16:25:43+00:00"}
     TariffSnapshot:
       type: object
       description: Снимок подписки мерчанта на ApiPay. Даты Asia/Almaty +05:00.
@@ -3711,6 +3886,40 @@ x-webhooks:
           application/json:
             schema:
               $ref: '#/components/schemas/WebhookCatalogBatchProcessed'
+      responses:
+        '200':
+          description: Принято.
+  receipt.issued:
+    post:
+      tags: [Webhooks]
+      summary: Фискальный чек выбит
+      description: |
+        Чек успешно выбит в Kaspi OFD (`POST /receipts`). В `receipt` — `fpd`,
+        `operation_id`, `link` (ссылка на чек), `shift_number`. Гейт —
+        `KASPI_FISCAL_RECEIPT_WEBHOOKS_ENABLED` (default false). Очередь `webhooks`,
+        `$tries=3`. Дедуп по `(event, receipt.id)`. Равноправен поллингу `GET /receipts/{id}`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookReceiptEvent'
+      responses:
+        '200':
+          description: Принято.
+  receipt.failed:
+    post:
+      tags: [Webhooks]
+      summary: Не удалось выбить чек
+      description: |
+        Выбивание чека не удалось. Причина — в `receipt.error_code`
+        (`shift_closed` — закрыта смена; `item_not_fiscal`; `rfo_missing`;
+        `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ НЕ создан —
+        повторите с НОВЫМ `client_operation_id`. Гейт/очередь — как у `receipt.issued`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookReceiptEvent'
       responses:
         '200':
           description: Принято.

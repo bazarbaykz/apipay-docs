@@ -13,7 +13,7 @@
 # Or run individual commands by copying them.
 
 PARTNER_KEY="${PARTNER_KEY:-pk_your_partner_key_here}"
-BASE_URL="https://bpapi.bazarbay.site"
+BASE_URL="https://api.apipay.kz"
 
 echo "ApiPay.kz Partner API - Merchant Onboarding"
 echo "==========================================="

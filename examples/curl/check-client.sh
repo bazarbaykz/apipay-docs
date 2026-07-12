@@ -3,7 +3,7 @@
 # Не использовать для массового перебора номеров — приведёт к блокировке организации.
 
 API_KEY="${APIPAY_API_KEY:-YOUR_API_KEY}"
-BASE_URL="https://bpapi.bazarbay.site/api/v1"
+BASE_URL="https://api.apipay.kz/api/v1"
 
 curl -sS -X POST "$BASE_URL/clients/check" \
   -H "X-API-Key: $API_KEY" \

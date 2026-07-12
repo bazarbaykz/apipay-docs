@@ -5,7 +5,7 @@
  */
 
 $apiKey = getenv('APIPAY_API_KEY') ?: 'YOUR_API_KEY';
-$baseUrl = 'https://bpapi.bazarbay.site/api/v1';
+$baseUrl = 'https://api.apipay.kz/api/v1';
 
 function checkClient(string $phone, string $apiKey, string $baseUrl): array
 {

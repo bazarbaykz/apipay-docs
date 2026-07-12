@@ -9,7 +9,7 @@
 ### Полный возврат
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"reason": "По запросу клиента"}'
@@ -18,7 +18,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 ### Частичный возврат
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"amount": 5000, "reason": "Частичный возврат"}'
@@ -37,7 +37,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 На каждую позицию — либо `count` (вернуть целыми штуками, сумма = `price × count`), либо `amount` (вернуть произвольную часть стоимости позиции, например для неделимой услуги с `count: 1`). В одном запросе позиции можно смешивать.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
+curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -81,7 +81,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/refund \
 **Эндпоинт:** `GET /refunds`
 
 ```bash
-curl "https://bpapi.bazarbay.site/api/v1/refunds?page=1&per_page=20&status[]=completed" \
+curl "https://api.apipay.kz/api/v1/refunds?page=1&per_page=20&status[]=completed" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -149,7 +149,7 @@ curl "https://bpapi.bazarbay.site/api/v1/refunds?page=1&per_page=20&status[]=com
 **Эндпоинт:** `GET /invoices/{id}/refunds`
 
 ```bash
-curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
+curl https://api.apipay.kz/api/v1/invoices/42/refunds \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -174,14 +174,14 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
 
 ```javascript
 // Полный возврат
-await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
+await fetch('https://api.apipay.kz/api/v1/invoices/42/refund', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
   body: JSON.stringify({ reason: 'Отмена заказа клиентом' })
 })
 
 // Частичный возврат
-await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
+await fetch('https://api.apipay.kz/api/v1/invoices/42/refund', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
   body: JSON.stringify({ amount: 5000, reason: 'Частичный возврат' })
@@ -189,7 +189,7 @@ await fetch('https://bpapi.bazarbay.site/api/v1/invoices/42/refund', {
 
 // Список возвратов с фильтрами
 const refunds = await fetch(
-  'https://bpapi.bazarbay.site/api/v1/refunds?status[]=completed&date_from=2025-01-01',
+  'https://api.apipay.kz/api/v1/refunds?status[]=completed&date_from=2025-01-01',
   { headers: { 'X-API-Key': 'YOUR_API_KEY' } }
 )
 ```
@@ -200,12 +200,12 @@ const refunds = await fetch(
 import requests
 
 # Полный возврат
-requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
+requests.post('https://api.apipay.kz/api/v1/invoices/42/refund',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'reason': 'Отмена заказа клиентом'})
 
 # Частичный возврат
-requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
+requests.post('https://api.apipay.kz/api/v1/invoices/42/refund',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'amount': 5000, 'reason': 'Частичный возврат'})
 ```
@@ -214,7 +214,7 @@ requests.post('https://bpapi.bazarbay.site/api/v1/invoices/42/refund',
 
 ```php
 // Полный возврат
-$ch = curl_init('https://bpapi.bazarbay.site/api/v1/invoices/42/refund');
+$ch = curl_init('https://api.apipay.kz/api/v1/invoices/42/refund');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],

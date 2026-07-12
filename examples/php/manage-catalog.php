@@ -9,7 +9,7 @@
  */
 
 $API_KEY = getenv('API_KEY');
-$API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1';
+$API_BASE_URL = 'https://api.apipay.kz/api/v1';
 
 function uploadImage($filePath) {
     global $API_KEY, $API_BASE_URL;

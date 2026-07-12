@@ -11,7 +11,7 @@ Creates a new payment invoice. Supports two modes: flat amount or cart items.
 ### Request (flat amount)
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+curl -X POST https://api.apipay.kz/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -27,7 +27,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 For organizations with catalog enabled:
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+curl -X POST https://api.apipay.kz/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -103,7 +103,7 @@ The request body depends on the organization's `has_catalog` setting:
 ### Request (no catalog)
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -116,7 +116,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
 ### Request (with catalog)
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -153,7 +153,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
   "created_at": "2026-05-09T07:27:37+00:00",
   "is_qr_token": true,
   "qr_token_url": "https://qr.kaspi.kz/5180629155669855245469327791577114170390",
-  "qr_image_url": "https://bpapi.bazarbay.site/storage/qr/3f41ee95-5fb1-41b6-8f90-d2ac7aebcb42.png",
+  "qr_image_url": "https://api.apipay.kz/storage/qr/3f41ee95-5fb1-41b6-8f90-d2ac7aebcb42.png",
   "qr_expires_at": "2026-05-09T07:32:38+00:00"
 }
 ```
@@ -195,7 +195,7 @@ To quickly test terminal scenarios, pass `simulate` right inside the create payl
 ##### Example: get an already-expired QR
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/qr \
+curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
   -H "X-API-Key: <sandbox_api_key>" \
   -H "Content-Type: application/json" \
   -d '{"amount": 250, "simulate": "expired"}'
@@ -209,7 +209,7 @@ Response (excerpt):
   "status": "expired",
   "is_qr_token": true,
   "qr_token_url": "https://qr.kaspi.kz/sandbox/b5d6ffe9-…",
-  "qr_image_url": "https://bpapi.bazarbay.site/storage/qr/b5d6ffe9-….png",
+  "qr_image_url": "https://api.apipay.kz/storage/qr/b5d6ffe9-….png",
   "qr_expires_at": "2026-05-09T07:52:08+00:00"
 }
 ```
@@ -237,7 +237,7 @@ Response (excerpt):
 **Endpoint:** `GET /invoices`
 
 ```bash
-curl "https://bpapi.bazarbay.site/api/v1/invoices?page=1&per_page=20&status[]=paid&sort_by=created_at&sort_order=desc" \
+curl "https://api.apipay.kz/api/v1/invoices?page=1&per_page=20&status[]=paid&sort_by=created_at&sort_order=desc" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -259,7 +259,7 @@ curl "https://bpapi.bazarbay.site/api/v1/invoices?page=1&per_page=20&status[]=pa
 **Endpoint:** `GET /invoices/{id}`
 
 ```bash
-curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
+curl https://api.apipay.kz/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -272,7 +272,7 @@ curl https://bpapi.bazarbay.site/api/v1/invoices/42 \
 Invoices with `status: "pending"` or `"processing"` can be cancelled. In sandbox returns `200 OK` (synchronous), in production returns `202 Accepted` with status `cancelling` (async processing via Kaspi).
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/42/cancel \
+curl -X POST https://api.apipay.kz/api/v1/invoices/42/cancel \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -298,7 +298,7 @@ Force-check the status of specified invoices. Accepts an array of invoice IDs (u
 | `invoice_ids` | array | Yes | Array of invoice IDs to check (max 100) |
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices/status/check \
+curl -X POST https://api.apipay.kz/api/v1/invoices/status/check \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -334,7 +334,7 @@ See [Refunds](refunds.md) for details.
 **Endpoint:** `GET /invoices/{id}/refunds`
 
 ```bash
-curl https://bpapi.bazarbay.site/api/v1/invoices/42/refunds \
+curl https://api.apipay.kz/api/v1/invoices/42/refunds \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -370,7 +370,7 @@ processing → cancelled (via cancel)
 ### JavaScript
 
 ```javascript
-const response = await fetch('https://bpapi.bazarbay.site/api/v1/invoices', {
+const response = await fetch('https://api.apipay.kz/api/v1/invoices', {
   method: 'POST',
   headers: {
     'X-API-Key': 'YOUR_API_KEY',
@@ -391,7 +391,7 @@ const invoice = await response.json()
 import requests
 
 response = requests.post(
-    'https://bpapi.bazarbay.site/api/v1/invoices',
+    'https://api.apipay.kz/api/v1/invoices',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'amount': 10000, 'phone_number': '87001234567', 'description': 'Order #123'}
 )
@@ -401,7 +401,7 @@ invoice = response.json()
 ### PHP
 
 ```php
-$ch = curl_init('https://bpapi.bazarbay.site/api/v1/invoices');
+$ch = curl_init('https://api.apipay.kz/api/v1/invoices');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],

@@ -21,7 +21,7 @@ X-Partner-Key: pk_your_partner_key_here
 
 | Параметр | Значение |
 |----------|----------|
-| Base URL | `https://bpapi.bazarbay.site` |
+| Base URL | `https://api.apipay.kz` |
 | Аутентификация | Заголовок `X-Partner-Key: pk_...` |
 | Content-Type | `application/json` |
 

@@ -11,7 +11,7 @@ const fs = require('fs')
 const path = require('path')
 
 const API_KEY = process.env.API_KEY
-const API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1'
+const API_BASE_URL = 'https://api.apipay.kz/api/v1'
 
 async function uploadImage(filePath) {
   const formData = new FormData()

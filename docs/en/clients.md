@@ -13,7 +13,7 @@ Returns whether the phone is registered in Kaspi, and the client's display name 
 ### Request
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/clients/check \
+curl -X POST https://api.apipay.kz/api/v1/clients/check \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"phone": "77001234567"}'
@@ -57,7 +57,7 @@ See also [Errors and limits](errors.md).
 
 ```javascript
 // Before creating an invoice/subscription
-const check = await fetch('https://bpapi.bazarbay.site/api/v1/clients/check', {
+const check = await fetch('https://api.apipay.kz/api/v1/clients/check', {
   method: 'POST',
   headers: { 'X-API-Key': KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({ phone: customerPhone })

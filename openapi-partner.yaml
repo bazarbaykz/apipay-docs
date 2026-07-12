@@ -86,7 +86,7 @@ info:
     name: ApiPay.kz Support
     url: https://apipay.kz
 servers:
-  - url: https://bpapi.bazarbay.site/api/partner
+  - url: https://api.apipay.kz/api/partner
     description: Production (базовый URL Partner API; все пути ниже — относительно него)
 security:
   - PartnerKey: []

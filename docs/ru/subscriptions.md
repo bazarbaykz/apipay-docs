@@ -7,7 +7,7 @@
 **Эндпоинт:** `POST /subscriptions`
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/subscriptions \
+curl -X POST https://api.apipay.kz/api/v1/subscriptions \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -160,7 +160,7 @@ Webhook-события: `subscription.payment_failed`, `subscription.grace_perio
 ### JavaScript
 
 ```javascript
-const response = await fetch('https://bpapi.bazarbay.site/api/v1/subscriptions', {
+const response = await fetch('https://api.apipay.kz/api/v1/subscriptions', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -173,7 +173,7 @@ const response = await fetch('https://bpapi.bazarbay.site/api/v1/subscriptions',
 
 ```python
 import requests
-requests.post('https://bpapi.bazarbay.site/api/v1/subscriptions',
+requests.post('https://api.apipay.kz/api/v1/subscriptions',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'amount': 5000, 'phone_number': '87001234567', 'billing_period': 'monthly'})
 ```
@@ -181,7 +181,7 @@ requests.post('https://bpapi.bazarbay.site/api/v1/subscriptions',
 ### PHP
 
 ```php
-$ch = curl_init('https://bpapi.bazarbay.site/api/v1/subscriptions');
+$ch = curl_init('https://api.apipay.kz/api/v1/subscriptions');
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_HTTPHEADER => ['X-API-Key: YOUR_API_KEY', 'Content-Type: application/json'],

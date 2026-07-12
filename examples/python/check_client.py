@@ -7,7 +7,7 @@ import os
 import requests
 
 API_KEY = os.environ.get("APIPAY_API_KEY", "YOUR_API_KEY")
-BASE_URL = "https://bpapi.bazarbay.site/api/v1"
+BASE_URL = "https://api.apipay.kz/api/v1"
 
 
 def check_client(phone: str) -> dict:

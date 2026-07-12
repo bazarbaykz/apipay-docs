@@ -21,7 +21,7 @@ hash — save it securely, it cannot be recovered.
 
 | Parameter | Value |
 |-----------|-------|
-| Base URL | `https://bpapi.bazarbay.site` |
+| Base URL | `https://api.apipay.kz` |
 | Authentication | Header `X-Partner-Key: pk_...` |
 | Content-Type | `application/json` |
 

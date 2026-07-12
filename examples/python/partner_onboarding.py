@@ -17,7 +17,7 @@ import sys
 import requests
 
 PARTNER_KEY = os.environ.get('PARTNER_KEY')
-BASE_URL = 'https://bpapi.bazarbay.site'
+BASE_URL = 'https://api.apipay.kz'
 
 
 def api(method: str, path: str, body: dict = None) -> dict:

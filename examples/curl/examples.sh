@@ -11,7 +11,7 @@
 # Or run individual commands by copying them.
 
 API_KEY="${API_KEY:-your_api_key}"
-BASE_URL="https://bpapi.bazarbay.site/api/v1"
+BASE_URL="https://api.apipay.kz/api/v1"
 
 echo "ApiPay.kz API v2 Examples"
 echo "========================="

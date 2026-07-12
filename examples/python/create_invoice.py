@@ -12,7 +12,7 @@ import requests
 import sys
 
 API_KEY = os.environ.get('API_KEY')
-API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1'
+API_BASE_URL = 'https://api.apipay.kz/api/v1'
 
 
 def create_invoice(amount: int, phone_number: str, description: str = None, external_order_id: str = None) -> dict:

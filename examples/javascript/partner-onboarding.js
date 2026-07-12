@@ -12,7 +12,7 @@
  */
 
 const PARTNER_KEY = process.env.PARTNER_KEY
-const BASE_URL = 'https://bpapi.bazarbay.site'
+const BASE_URL = 'https://api.apipay.kz'
 
 async function api(method, path, body) {
   const response = await fetch(`${BASE_URL}${path}`, {

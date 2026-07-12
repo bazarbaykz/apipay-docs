@@ -13,7 +13,7 @@
 ### Запрос
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/clients/check \
+curl -X POST https://api.apipay.kz/api/v1/clients/check \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"phone": "77001234567"}'
@@ -57,7 +57,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/clients/check \
 
 ```javascript
 // Перед созданием счёта/подписки
-const check = await fetch('https://bpapi.bazarbay.site/api/v1/clients/check', {
+const check = await fetch('https://api.apipay.kz/api/v1/clients/check', {
   method: 'POST',
   headers: { 'X-API-Key': KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({ phone: customerPhone })

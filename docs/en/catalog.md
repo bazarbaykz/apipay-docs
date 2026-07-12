@@ -9,7 +9,7 @@ The Catalog API allows you to manage your product catalog. Organizations with a 
 Returns available measurement units for catalog items.
 
 ```bash
-curl https://bpapi.bazarbay.site/api/v1/catalog/units \
+curl https://api.apipay.kz/api/v1/catalog/units \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -20,7 +20,7 @@ Response: `{ "data": [{ "id": 1, "name": "шт", "name_kaz": "дана" }, ...] 
 **Endpoint:** `GET /catalog`
 
 ```bash
-curl "https://bpapi.bazarbay.site/api/v1/catalog?search=coffee&page=1&per_page=20" \
+curl "https://api.apipay.kz/api/v1/catalog?search=coffee&page=1&per_page=20" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -45,7 +45,7 @@ Each item also includes `gtin` (string or `null`) — the GTIN from the National
 **Endpoint:** `POST /catalog/upload-image`
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/upload-image \
+curl -X POST https://api.apipay.kz/api/v1/catalog/upload-image \
   -H "X-API-Key: YOUR_API_KEY" \
   -F "image=@photo.jpg"
 ```
@@ -67,7 +67,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/upload-image \
 Resolves a barcode against Kaspi's National Catalog and returns candidate product cards. Use it before creating an item to pull the official name, NTIN, and GTIN. Runs synchronously.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/scan \
+curl -X POST https://api.apipay.kz/api/v1/catalog/scan \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"input": "4607015232646"}'
@@ -119,7 +119,7 @@ If nothing is found, you get `data: []` and/or a `scan_result.code` other than `
 Batch create 1-50 items.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/catalog \
+curl -X POST https://api.apipay.kz/api/v1/catalog \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -152,7 +152,7 @@ The National Catalog fields are filled from the candidate chosen via `POST /cata
 **Endpoint:** `PATCH /catalog/{id}`
 
 ```bash
-curl -X PATCH https://bpapi.bazarbay.site/api/v1/catalog/101 \
+curl -X PATCH https://api.apipay.kz/api/v1/catalog/101 \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name": "Coffee Latte Grande", "selling_price": 1800}'
@@ -171,7 +171,7 @@ Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_dele
 **Response code:** `200 OK` (sandbox) / `202 Accepted` (production).
 
 ```bash
-curl -X DELETE https://bpapi.bazarbay.site/api/v1/catalog/101 \
+curl -X DELETE https://api.apipay.kz/api/v1/catalog/101 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -180,7 +180,7 @@ curl -X DELETE https://bpapi.bazarbay.site/api/v1/catalog/101 \
 Create invoices with `cart_items` instead of a flat amount:
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+curl -X POST https://api.apipay.kz/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -201,7 +201,7 @@ See [Invoices](invoices.md) for details.
 // Upload image
 const formData = new FormData()
 formData.append('image', fileInput.files[0])
-const upload = await fetch('https://bpapi.bazarbay.site/api/v1/catalog/upload-image', {
+const upload = await fetch('https://api.apipay.kz/api/v1/catalog/upload-image', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY' },
   body: formData
@@ -209,7 +209,7 @@ const upload = await fetch('https://bpapi.bazarbay.site/api/v1/catalog/upload-im
 const { image_id } = await upload.json()
 
 // Create items
-await fetch('https://bpapi.bazarbay.site/api/v1/catalog', {
+await fetch('https://api.apipay.kz/api/v1/catalog', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -225,12 +225,12 @@ import requests
 
 # Upload image
 with open('photo.jpg', 'rb') as f:
-    resp = requests.post('https://bpapi.bazarbay.site/api/v1/catalog/upload-image',
+    resp = requests.post('https://api.apipay.kz/api/v1/catalog/upload-image',
         headers={'X-API-Key': 'YOUR_API_KEY'}, files={'image': f})
 image_id = resp.json()['image_id']
 
 # Create items
-requests.post('https://bpapi.bazarbay.site/api/v1/catalog',
+requests.post('https://api.apipay.kz/api/v1/catalog',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'items': [{'name': 'Coffee Latte', 'selling_price': 1500, 'unit_id': 1, 'image_id': image_id}]})
 ```

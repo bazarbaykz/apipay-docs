@@ -2,7 +2,7 @@
 // Не использовать для массового перебора номеров — приведёт к блокировке организации.
 
 const API_KEY = process.env.APIPAY_API_KEY || 'YOUR_API_KEY'
-const BASE_URL = 'https://bpapi.bazarbay.site/api/v1'
+const BASE_URL = 'https://api.apipay.kz/api/v1'
 
 async function checkClient(phone) {
   const res = await fetch(`${BASE_URL}/clients/check`, {

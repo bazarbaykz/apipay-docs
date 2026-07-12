@@ -9,7 +9,7 @@ API каталога позволяет управлять товарами. Т�
 Возвращает доступные единицы измерения для товаров каталога.
 
 ```bash
-curl https://bpapi.bazarbay.site/api/v1/catalog/units \
+curl https://api.apipay.kz/api/v1/catalog/units \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -32,7 +32,7 @@ curl https://bpapi.bazarbay.site/api/v1/catalog/units \
 **Эндпоинт:** `POST /catalog/upload-image`
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/upload-image \
+curl -X POST https://api.apipay.kz/api/v1/catalog/upload-image \
   -H "X-API-Key: YOUR_API_KEY" \
   -F "image=@photo.jpg"
 ```
@@ -48,7 +48,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/upload-image \
 Резолвит штрихкод в Нацкаталоге Kaspi и возвращает карточки товаров-кандидатов. Используйте перед созданием товара, чтобы подтянуть официальное название, НТИН и GTIN. Работает синхронно.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/scan \
+curl -X POST https://api.apipay.kz/api/v1/catalog/scan \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"input": "4607015232646"}'
@@ -100,7 +100,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog/scan \
 Пакетное создание 1-50 товаров.
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/catalog \
+curl -X POST https://api.apipay.kz/api/v1/catalog \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"items": [{"name": "Кофе латте", "selling_price": 1500, "unit_id": 1, "image_id": "550e8400-..."}]}'
@@ -137,7 +137,7 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/catalog \
 ## Использование с корзиной
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+curl -X POST https://api.apipay.kz/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -158,13 +158,13 @@ curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
 // Загрузка изображения
 const formData = new FormData()
 formData.append('image', fileInput.files[0])
-const upload = await fetch('https://bpapi.bazarbay.site/api/v1/catalog/upload-image', {
+const upload = await fetch('https://api.apipay.kz/api/v1/catalog/upload-image', {
   method: 'POST', headers: { 'X-API-Key': 'YOUR_API_KEY' }, body: formData
 })
 const { image_id } = await upload.json()
 
 // Создание товаров
-await fetch('https://bpapi.bazarbay.site/api/v1/catalog', {
+await fetch('https://api.apipay.kz/api/v1/catalog', {
   method: 'POST',
   headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
   body: JSON.stringify({ items: [{ name: 'Кофе латте', selling_price: 1500, unit_id: 1, image_id }] })
@@ -177,12 +177,12 @@ await fetch('https://bpapi.bazarbay.site/api/v1/catalog', {
 import requests
 # Загрузка изображения
 with open('photo.jpg', 'rb') as f:
-    resp = requests.post('https://bpapi.bazarbay.site/api/v1/catalog/upload-image',
+    resp = requests.post('https://api.apipay.kz/api/v1/catalog/upload-image',
         headers={'X-API-Key': 'YOUR_API_KEY'}, files={'image': f})
 image_id = resp.json()['image_id']
 
 # Создание товаров
-requests.post('https://bpapi.bazarbay.site/api/v1/catalog',
+requests.post('https://api.apipay.kz/api/v1/catalog',
     headers={'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json'},
     json={'items': [{'name': 'Кофе латте', 'selling_price': 1500, 'unit_id': 1, 'image_id': image_id}]})
 ```

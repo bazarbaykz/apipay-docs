@@ -13,7 +13,7 @@
 
 | Параметр | Значение |
 |----------|----------|
-| Base URL | `https://bpapi.bazarbay.site/api/v1` |
+| Base URL | `https://api.apipay.kz/api/v1` |
 | Аутентификация | Заголовок `X-API-Key: your_api_key` |
 | Content-Type | `application/json` |
 | Rate Limit | 60 запросов/минуту и 10 000 запросов/сутки на API ключ |
@@ -21,7 +21,7 @@
 ## Первый счёт
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+curl -X POST https://api.apipay.kz/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"amount": 10000, "phone_number": "87001234567"}'

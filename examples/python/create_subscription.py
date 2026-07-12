@@ -12,7 +12,7 @@ import requests
 import sys
 
 API_KEY = os.environ.get('API_KEY')
-API_BASE_URL = 'https://bpapi.bazarbay.site/api/v1'
+API_BASE_URL = 'https://api.apipay.kz/api/v1'
 
 
 def create_subscription(data: dict) -> dict:

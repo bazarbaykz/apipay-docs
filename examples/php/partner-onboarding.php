@@ -13,7 +13,7 @@
  */
 
 $PARTNER_KEY = getenv('PARTNER_KEY');
-$BASE_URL = 'https://bpapi.bazarbay.site';
+$BASE_URL = 'https://api.apipay.kz';
 
 /**
  * Send a Partner API request

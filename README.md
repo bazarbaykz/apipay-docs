@@ -1,6 +1,6 @@
 # ApiPay.kz
 
-[![API Version](https://img.shields.io/badge/API-v2.0-blue.svg)](https://bpapi.bazarbay.site/api/v1)
+[![API Version](https://img.shields.io/badge/API-v2.0-blue.svg)](https://api.apipay.kz/api/v1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/en/getting-started.md)
 
@@ -23,7 +23,7 @@ Before creating invoices, you must connect your organization:
 ### 2. Create Invoice
 
 ```bash
-curl -X POST https://bpapi.bazarbay.site/api/v1/invoices \
+curl -X POST https://api.apipay.kz/api/v1/invoices \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"amount": 10000, "phone_number": "87001234567"}'
@@ -71,7 +71,7 @@ Response:
 
 | Parameter | Value |
 |-----------|-------|
-| Base URL | `https://bpapi.bazarbay.site/api/v1` |
+| Base URL | `https://api.apipay.kz/api/v1` |
 | Authentication | Header `X-API-Key: your_api_key` |
 | Rate Limit | 200 requests/minute per API key |
 
