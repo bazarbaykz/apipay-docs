@@ -3444,9 +3444,9 @@ components:
             client_operation_id: {type: string, nullable: true, example: "pos-cash-0042"}
             payment_type: {type: integer, enum: [3, 5], example: 3}
             status: {type: string, enum: [issued, failed], example: issued}
-            fpd: {type: string, nullable: true, example: "537836550048"}
-            operation_id: {type: string, nullable: true, example: "KKM48390858"}
-            link: {type: string, nullable: true, example: "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM48390858"}
+            fpd: {type: string, nullable: true, example: "000000000000"}
+            operation_id: {type: string, nullable: true, example: "KKM00000000"}
+            link: {type: string, nullable: true, example: "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM00000000"}
             shift_number: {type: integer, nullable: true, example: 106}
             total_price: {type: string, nullable: true, example: "10.00"}
             error_code: {type: string, nullable: true, example: null}
