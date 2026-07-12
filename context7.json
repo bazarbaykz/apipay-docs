@@ -1,5 +1,7 @@
 {
   "$schema": "https://context7.com/schema/context7.json",
+  "url": "https://context7.com/bazarbaykz/apipay-docs",
+  "public_key": "pk_EADO3pigqJU80TRayUt2W",
   "projectTitle": "ApiPay.kz",
   "description": "REST API для Kaspi Pay: выставление счетов по номеру телефона, возвраты, подписки, каталог товаров, фискальные чеки и вебхуки.",
   "folders": [],
