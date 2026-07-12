@@ -1,0 +1,18 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "ApiPay.kz",
+  "description": "REST API для Kaspi Pay: выставление счетов по номеру телефона, возвраты, подписки, каталог товаров, фискальные чеки и вебхуки.",
+  "folders": [],
+  "excludeFolders": [".idea", "tmp", "spravka", "primery-koda", ".claude", ".github"],
+  "excludeFiles": ["CONTRIBUTING.md", "SUMMARY.md", "SUMMARY.en.md"],
+  "rules": [
+    "Base URL: https://api.apipay.kz/api/v1",
+    "Аутентификация — заголовок X-API-Key: your_api_key (не Bearer, не OAuth)",
+    "Rate limit: 60 запросов/минуту и 10 000 запросов/сутки на один API-ключ",
+    "Номер телефона клиента передаётся в формате 87001234567 или 77001234567 (Казахстан)",
+    "Суммы передаются в тенге (KZT) целым числом",
+    "Часть операций асинхронна и возвращает 202 Accepted — результат забирается поллингом GET по ресурсу или приходит вебхуком",
+    "Для идемпотентности повторных запросов передавайте заголовок Idempotency-Key",
+    "Партнёрский API описан отдельно (openapi-partner.yaml) и использует свои ключи"
+  ]
+}
