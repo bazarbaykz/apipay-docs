@@ -34,6 +34,7 @@ curl "https://bpapi.bazarbay.site/api/v1/catalog?search=coffee&page=1&per_page=2
 | `barcode` | string | -- | Filter by barcode |
 | `first_char` | string | -- | Filter by first character of name |
 | `statuses[]` | array | -- | Filter by product statuses (multiple allowed): `active`, `pending`, `deleting`, `failed` |
+| `without_ntin` | boolean | -- | `true` returns only items without an NTIN (`ntin` = `null`), regardless of a barcode — broader than the response field `ntin_missing` (which requires a non-empty `barcode`). Handy for estimating what's left to finish via `meta.total`. Composes with all modes and filters. |
 
 Each item in the response includes `created_at` — the creation timestamp in the system (ISO 8601). Available immediately after creation, even before Kaspi returns `date_added`.
 

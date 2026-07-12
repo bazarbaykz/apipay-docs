@@ -19,7 +19,9 @@ curl https://bpapi.bazarbay.site/api/v1/catalog/units \
 
 **Эндпоинт:** `GET /catalog`
 
-Фильтры: `search`, `barcode`, `first_char`, `statuses[]` (можно несколько значений: `active`, `pending`, `deleting`, `failed`). Пагинация: `page`, `per_page` (1-200).
+Фильтры: `search`, `barcode`, `first_char`, `statuses[]` (можно несколько значений: `active`, `pending`, `deleting`, `failed`), `without_ntin`. Пагинация: `page`, `per_page` (1-200).
+
+Фильтр `without_ntin=true` возвращает только позиции без НТИН (`ntin` = `null`), независимо от наличия штрихкода — шире, чем поле ответа `ntin_missing` (оно требует непустой `barcode`). Удобно оценивать остаток «сколько позиций осталось доделать» по `meta.total`. Компонуется со всеми режимами и фильтрами.
 
 Каждый товар в ответе содержит поле `created_at` — дата создания в системе (ISO 8601). Доступно сразу после создания, даже если Kaspi ещё не вернул `date_added`.
 
