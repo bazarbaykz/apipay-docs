@@ -10,6 +10,7 @@
 * [Подписки](docs/ru/subscriptions.md)
 * [Каталог](docs/ru/catalog.md)
 * [Возвраты](docs/ru/refunds.md)
+* [Фискальные чеки](docs/ru/receipts.md)
 * [Вебхуки](docs/ru/webhooks.md)
 * [Ошибки](docs/ru/errors.md)
 * [Partner API](docs/ru/partner-api.md)

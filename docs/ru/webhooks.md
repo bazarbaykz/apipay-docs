@@ -16,13 +16,15 @@ Webhooks доставляют уведомления в реальном вре�
 
 ## События
 
-ApiPay отправляет 12 типов событий:
+ApiPay отправляет 14 типов событий:
 
 | Событие | Описание |
 |---------|----------|
 | `invoice.status_changed` | Изменился статус счёта |
 | `invoice.qr_scanned` | Клиент отсканировал QR (status остаётся `pending`, `qr_substate=scanned`) |
 | `invoice.refunded` | Прошёл (или не прошёл) возврат по счёту |
+| `receipt.issued` | Фискальный чек успешно выбит (Kaspi OFD) |
+| `receipt.failed` | Выбить фискальный чек не удалось |
 | `subscription.created` | Создана подписка |
 | `subscription.payment_succeeded` | Оплачен очередной счёт подписки |
 | `subscription.payment_failed` | Счёт подписки не оплачен |
@@ -257,6 +259,67 @@ ApiPay отправляет 12 типов событий:
 | `refund.items` | array \| null | Позиции возврата (только для позиционных возвратов): `catalog_item_id`, `name`, `price`, `count`, `amount`. |
 | `invoice.available_for_refund` | number | Сумма, ещё доступная для возврата. Приходит числом (float), в отличие от `amount` и `total_refunded` (строки). |
 | `invoice.status` | string | Статус счёта после возврата. Полный возврат статус **НЕ меняет** (остаётся `paid` — или `partially_refunded`, если ранее был частичный) + `is_fully_refunded=true`; первый частичный переводит в `partially_refunded` (и дополнительно приходит `invoice.status_changed`). |
+
+### receipt.issued
+
+Отправляется, когда фискальный чек успешно выбит в Kaspi OFD (после `POST /receipts`). Равноправен поллингу `GET /receipts/{id}`. Вебхуки чеков — за отдельным гейтом; если он у вас выключен, используйте поллинг. Подробнее о фиче — [Фискальные чеки](receipts.md).
+
+```json
+{
+  "event": "receipt.issued",
+  "receipt": {
+    "id": 4210,
+    "client_operation_id": "pos-2026-07-12-0042",
+    "payment_type": 3,
+    "status": "issued",
+    "fpd": "000000000000",
+    "operation_id": "KKM00000000",
+    "link": "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM00000000",
+    "shift_number": 106,
+    "total_price": "10.00",
+    "error_code": null,
+    "error_message": null
+  },
+  "timestamp": "2026-07-12T16:25:43+00:00"
+}
+```
+
+### receipt.failed
+
+Отправляется, когда выбить фискальный чек не удалось. Причина — в `receipt.error_code` (например `shift_closed` — смена закрыта; `item_not_fiscal` — позиция без НТИН; `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ **не** создан — повторите с **новым** `client_operation_id` (кроме `shift_closed` — сначала откройте смену в Kaspi Pos).
+
+```json
+{
+  "event": "receipt.failed",
+  "receipt": {
+    "id": 4210,
+    "client_operation_id": "pos-2026-07-12-0042",
+    "payment_type": 3,
+    "status": "failed",
+    "fpd": null,
+    "operation_id": null,
+    "link": null,
+    "shift_number": null,
+    "total_price": "10.00",
+    "error_code": "shift_closed",
+    "error_message": "Смена не открыта"
+  },
+  "timestamp": "2026-07-12T16:25:43+00:00"
+}
+```
+
+**Поля payload**
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `receipt.status` | string | `issued` (успех) или `failed` (неудача). |
+| `receipt.fpd` | string \| null | Фискальный признак документа. Заполнен при `issued`, `null` при `failed`. |
+| `receipt.operation_id` | string \| null | ID операции в Kaspi. Заполнен при `issued`. |
+| `receipt.link` | string \| null | Ссылка на чек на `receipt.kaspi.kz`. Заполнена при `issued`. |
+| `receipt.shift_number` | integer \| null | Номер смены. Заполнен при `issued`. |
+| `receipt.error_code` | string \| null | Только при `status=failed` — стабильный код из каталога (см. [Коды ошибок](errors.md)). Стройте логику по нему. |
+
+> Дедуп по `(event, receipt.id)`. Все даты — в UTC (`+00:00`).
 
 ### subscription.created
 
@@ -498,6 +561,8 @@ ApiPay отправляет 12 типов событий:
 | `invoice.status_changed` | `partially_refunded` | Первый частичный возврат по счёту (дополнительно к `invoice.refunded`). Повторные частичные возвраты статус не меняют. |
 | `invoice.refunded` | `completed` | Возврат проведён. Включает возвраты, сделанные кассиром в приложении Kaspi (импортируются автоматически). |
 | `invoice.refunded` | `failed` | Возврат не удался (`refund.error_code`). Система сама **не** повторяет; сумма не блокируется — можно создать новый возврат. |
+| `receipt.issued` | — | Фискальный чек выбит в Kaspi OFD (после `POST /receipts`). Реквизиты — `fpd`/`operation_id`/`link`. Равноправен поллингу `GET /receipts/{id}`. |
+| `receipt.failed` | — | Чек не выбит (`receipt.error_code`). Фискальный документ не создан — повторите с новым `client_operation_id` (при `shift_closed` сначала откройте смену в Kaspi Pos). |
 | `subscription.created` | — | Подписка создана. Счета по подписке выставляет система автоматически в `next_billing_at` (или сразу при `bill_immediately`). По каждому счёту приходят обычные invoice-вебхуки. |
 | `subscription.payment_succeeded` | — | Очередной счёт подписки оплачен. `failed_attempts` сброшен, льготный период (если был) снят. |
 | `subscription.payment_failed` | — | Счёт подписки истёк или отменён (`reason`). Пока попыток меньше `max_retry_attempts` система сама перевыставит счёт — ничего пересоздавать не нужно. |
@@ -629,6 +694,7 @@ function verifyWebhook($payload, $signature, $secret) {
 
 - `(invoice.id, invoice.status)` — для invoice-событий
 - `(refund.id, refund.status)` — для возвратов
+- `(event, receipt.id)` — для событий чеков (`receipt.issued`/`receipt.failed`)
 - `(event, subscription.id, invoice_id)` — для событий подписки
 
 ## Лучшие практики безопасности

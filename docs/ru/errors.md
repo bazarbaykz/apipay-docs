@@ -123,6 +123,19 @@ ApiPay.kz использует стандартные HTTP коды статус
 | `kyc_rejected` | 403 | sync | Приём платежей закрыт по итогам проверки бизнеса. Не повторяемая — обратитесь в поддержку, если считаете это ошибкой. |
 | `webhook_url_requires_domain` | 422 | sync | Адрес webhook должен быть на вашем домене — IP-адреса не принимаются (для ещё не одобренных организаций в рабочем режиме; в песочнице правило мягче). |
 | `webhook_url_tunnel_forbidden` | 422 | sync | Туннели (ngrok и подобные) нельзя использовать для рабочих webhook — они временны и отключатся. Укажите адрес на вашем домене. В песочнице туннель для теста допустим. |
+| `fiscal_receipts_disabled` | 403 | sync | Фича фискальных чеков выключена. Обратитесь в поддержку для включения. |
+| `duplicate_client_operation_id` | 409 | sync | При выбивании чека (`POST /receipts`) `client_operation_id` уже использован. В теле — `receipt_id`/`status` исходного чека; повтор разрешён только после `failed`. |
+| `receipt_preview_unavailable` | 503 | sync | Kaspi временно недоступен для превью чека (`POST /receipts/preview`). Повторите позже. |
+| `receipt_not_found` | 404 | sync | Чек не найден или принадлежит другой организации (`GET /receipts/{id}`). |
+| `shift_closed` | — | async (`receipt.failed`, `status=failed`) | Смена в Kaspi Pos закрыта. Откройте смену в приложении Kaspi Pos и выбейте чек заново. |
+| `item_not_fiscal` | — | async (`receipt.failed`, `status=failed`) | Позиция чека без НТИН — не фискальная. Дорезолвите НТИН (`POST /catalog/scan` + `PATCH /catalog/{id}`) и повторите. |
+| `rfo_missing` | — | async (`receipt.failed`, `status=failed`) | Не определена торговая точка (РФО) для чека. Обратитесь в поддержку. |
+| `receipt_kaspi_error` | — | async (`receipt.failed`, `status=failed`) | Kaspi отклонил выбивание чека. Текст причины — в `error_message`. |
+| `receipt_dispatch_error` | — | async (`receipt.failed`, `status=failed`) | Технический сбой отправки чека. Повторите с **новым** `client_operation_id`. |
+
+> Коды `kaspi_session_not_configured` и `connection_ambiguous` (выше) относятся и к чекам:
+> `POST /receipts` / `/receipts/preview` требуют активного кассира, а при нескольких
+> активных кассах — `kaspi_connection_id`. Подробнее — [Фискальные чеки](receipts.md).
 
 > Подробная матрица «что делает система и что делать вам» по каждому
 > асинхронному коду — в разделе [Webhooks → Сценарии реагирования](webhooks.md).

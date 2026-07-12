@@ -124,6 +124,19 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `kyc_rejected` | 403 | sync | Payment acceptance is closed following the business review. Not retryable — contact support if you believe this is a mistake. |
 | `webhook_url_requires_domain` | 422 | sync | The webhook URL must be on your own domain — IP addresses are not accepted (for not-yet-approved organizations in production; the rule is softer in the sandbox). |
 | `webhook_url_tunnel_forbidden` | 422 | sync | Tunnels (ngrok and similar) cannot be used for production webhooks — they are temporary and will go offline. Use an address on your own domain. A tunnel is allowed in the sandbox for testing. |
+| `fiscal_receipts_disabled` | 403 | sync | The fiscal receipts feature is disabled. Contact support to enable it. |
+| `duplicate_client_operation_id` | 409 | sync | On issuing a receipt (`POST /receipts`) the `client_operation_id` was already used. The body carries `receipt_id`/`status` of the original receipt; a retry is allowed only after `failed`. |
+| `receipt_preview_unavailable` | 503 | sync | Kaspi is temporarily unavailable for the receipt preview (`POST /receipts/preview`). Retry later. |
+| `receipt_not_found` | 404 | sync | Receipt not found or belongs to another organization (`GET /receipts/{id}`). |
+| `shift_closed` | — | async (`receipt.failed`, `status=failed`) | The shift in Kaspi Pos is closed. Open the shift in the Kaspi Pos app and issue the receipt again. |
+| `item_not_fiscal` | — | async (`receipt.failed`, `status=failed`) | A receipt line item has no NTIN — it is not fiscal. Resolve the NTIN (`POST /catalog/scan` + `PATCH /catalog/{id}`) and retry. |
+| `rfo_missing` | — | async (`receipt.failed`, `status=failed`) | The point of sale (RFO) for the receipt is not determined. Contact support. |
+| `receipt_kaspi_error` | — | async (`receipt.failed`, `status=failed`) | Kaspi rejected issuing the receipt. The reason text is in `error_message`. |
+| `receipt_dispatch_error` | — | async (`receipt.failed`, `status=failed`) | A technical dispatch failure. Retry with a **new** `client_operation_id`. |
+
+> The `kaspi_session_not_configured` and `connection_ambiguous` codes (above) also apply
+> to receipts: `POST /receipts` / `/receipts/preview` require an active cashier, and with
+> several active cashiers — a `kaspi_connection_id`. See [Fiscal Receipts](receipts.md).
 
 > A detailed "what the system does and what you should do" matrix for each
 > asynchronous code lives in [Webhooks → Response scenarios](webhooks.md).

@@ -16,13 +16,15 @@ Configure webhooks in [ApiPay.kz Dashboard](https://apipay.kz) → Settings → 
 
 ## Events
 
-ApiPay sends 12 event types:
+ApiPay sends 14 event types:
 
 | Event | Description |
 |-------|-------------|
 | `invoice.status_changed` | An invoice status changed |
 | `invoice.qr_scanned` | The customer scanned the QR (status stays `pending`, `qr_substate=scanned`) |
 | `invoice.refunded` | A refund on an invoice succeeded (or failed) |
+| `receipt.issued` | A fiscal receipt was successfully issued (Kaspi OFD) |
+| `receipt.failed` | Issuing a fiscal receipt failed |
 | `subscription.created` | A subscription was created |
 | `subscription.payment_succeeded` | A subscription invoice was paid |
 | `subscription.payment_failed` | A subscription invoice was not paid |
@@ -257,6 +259,67 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
 | `refund.items` | array \| null | Refund line items (only for itemized refunds): `catalog_item_id`, `name`, `price`, `count`, `amount`. |
 | `invoice.available_for_refund` | number | Amount still available for refund. Comes as a number (float), unlike `amount` and `total_refunded` (strings). |
 | `invoice.status` | string | Invoice status after the refund. A full refund does **not** change the status (stays `paid` — or `partially_refunded` if there was an earlier partial one) + `is_fully_refunded=true`; the first partial refund moves it to `partially_refunded` (and an `invoice.status_changed` is also sent). |
+
+### receipt.issued
+
+Sent when a fiscal receipt is successfully issued in Kaspi OFD (after `POST /receipts`). Equivalent to polling `GET /receipts/{id}`. Receipt webhooks sit behind a separate gate; if it is disabled for you, use polling. See [Fiscal Receipts](receipts.md) for details.
+
+```json
+{
+  "event": "receipt.issued",
+  "receipt": {
+    "id": 4210,
+    "client_operation_id": "pos-2026-07-12-0042",
+    "payment_type": 3,
+    "status": "issued",
+    "fpd": "000000000000",
+    "operation_id": "KKM00000000",
+    "link": "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM00000000",
+    "shift_number": 106,
+    "total_price": "10.00",
+    "error_code": null,
+    "error_message": null
+  },
+  "timestamp": "2026-07-12T16:25:43+00:00"
+}
+```
+
+### receipt.failed
+
+Sent when issuing a fiscal receipt fails. The reason is in `receipt.error_code` (e.g. `shift_closed` — the shift is closed; `item_not_fiscal` — a line item has no NTIN; `receipt_kaspi_error`; `receipt_dispatch_error`). The fiscal document was **not** created — retry with a **new** `client_operation_id` (except for `shift_closed` — first open the shift in Kaspi Pos).
+
+```json
+{
+  "event": "receipt.failed",
+  "receipt": {
+    "id": 4210,
+    "client_operation_id": "pos-2026-07-12-0042",
+    "payment_type": 3,
+    "status": "failed",
+    "fpd": null,
+    "operation_id": null,
+    "link": null,
+    "shift_number": null,
+    "total_price": "10.00",
+    "error_code": "shift_closed",
+    "error_message": "Shift is not open"
+  },
+  "timestamp": "2026-07-12T16:25:43+00:00"
+}
+```
+
+**Payload fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `receipt.status` | string | `issued` (success) or `failed` (failure). |
+| `receipt.fpd` | string \| null | Fiscal document sign. Filled at `issued`, `null` at `failed`. |
+| `receipt.operation_id` | string \| null | Operation ID in Kaspi. Filled at `issued`. |
+| `receipt.link` | string \| null | Link to the receipt on `receipt.kaspi.kz`. Filled at `issued`. |
+| `receipt.shift_number` | integer \| null | Shift number. Filled at `issued`. |
+| `receipt.error_code` | string \| null | Only at `status=failed` — a stable code from the catalog (see [Error Codes](errors.md)). Build your logic on it. |
+
+> Deduplicate by `(event, receipt.id)`. All dates are in UTC (`+00:00`).
 
 ### subscription.created
 
@@ -498,6 +561,8 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 | `invoice.status_changed` | `partially_refunded` | The first partial refund on the invoice (in addition to `invoice.refunded`). Subsequent partial refunds don't change the status. |
 | `invoice.refunded` | `completed` | The refund went through. Includes refunds made by the cashier in the Kaspi app (imported automatically). |
 | `invoice.refunded` | `failed` | The refund failed (`refund.error_code`). The system does **not** retry; the amount is not locked — you can create a new refund. |
+| `receipt.issued` | — | A fiscal receipt was issued in Kaspi OFD (after `POST /receipts`). Details in `fpd`/`operation_id`/`link`. Equivalent to polling `GET /receipts/{id}`. |
+| `receipt.failed` | — | The receipt was not issued (`receipt.error_code`). No fiscal document was created — retry with a new `client_operation_id` (for `shift_closed`, first open the shift in Kaspi Pos). |
 | `subscription.created` | — | The subscription was created. The system issues subscription invoices automatically at `next_billing_at` (or immediately with `bill_immediately`). Each invoice triggers the regular invoice webhooks. |
 | `subscription.payment_succeeded` | — | The next subscription invoice was paid. `failed_attempts` is reset; the grace period (if any) is lifted. |
 | `subscription.payment_failed` | — | The subscription invoice expired or was cancelled (`reason`). While attempts are below `max_retry_attempts` the system re-issues the invoice itself — nothing to recreate. |
@@ -629,6 +694,7 @@ Client-side deduplication is **mandatory**: a retry after a partial delivery to 
 
 - `(invoice.id, invoice.status)` — for invoice events
 - `(refund.id, refund.status)` — for refunds
+- `(event, receipt.id)` — for receipt events (`receipt.issued`/`receipt.failed`)
 - `(event, subscription.id, invoice_id)` — for subscription events
 
 ## Security Best Practices

@@ -10,6 +10,7 @@
 * [Subscriptions](docs/en/subscriptions.md)
 * [Catalog](docs/en/catalog.md)
 * [Refunds](docs/en/refunds.md)
+* [Fiscal Receipts](docs/en/receipts.md)
 * [Webhooks](docs/en/webhooks.md)
 * [Errors](docs/en/errors.md)
 * [Partner API](docs/en/partner-api.md)
