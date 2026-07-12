@@ -1,4 +1,4 @@
-# ApiPay.kz
+# ApiPay.kz — REST API для Kaspi Pay
 
 [![API Version](https://img.shields.io/badge/API-v2.0-blue.svg)](https://api.apipay.kz/api/v1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
