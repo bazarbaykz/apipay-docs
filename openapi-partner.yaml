@@ -378,6 +378,20 @@ paths:
                 error: already_connected
                 error_code: already_connected
                 message: Произошла ошибка.
+        "503":
+          description: >-
+            `entrance_auth_disabled` — подключение/переавторизация кассира временно
+            недоступны (технические работы на стороне ApiPay). Повторите позже; уже
+            подключённые кассиры продолжают работать.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: entrance_auth_disabled
+                error_code: entrance_auth_disabled
+                message: Подключение кассира временно недоступно, идут технические работы.
         "429":
           $ref: "#/components/responses/RateLimited"
   /organizations/{organization}/kaspi-auth/send-phone:
@@ -483,15 +497,25 @@ paths:
             `kaspi_busy` — Kaspi временно недоступен/троттлит. Согласно опорной
             доке возвращается с заголовком `Retry-After: 60` (см. TODO(verify)
             в исходнике YAML — код-путь не подтверждён).
+            `entrance_auth_disabled` — подключение кассира временно отключено на
+            стороне ApiPay (технические работы); повторите позже.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
-              example:
-                success: false
-                error: kaspi_busy
-                error_code: kaspi_busy
-                message: Kaspi временно недоступен, повторите позже.
+              examples:
+                kaspi_busy:
+                  value:
+                    success: false
+                    error: kaspi_busy
+                    error_code: kaspi_busy
+                    message: Kaspi временно недоступен, повторите позже.
+                entrance_auth_disabled:
+                  value:
+                    success: false
+                    error: entrance_auth_disabled
+                    error_code: entrance_auth_disabled
+                    message: Подключение кассира временно недоступно, идут технические работы.
         "429":
           $ref: "#/components/responses/RateLimited"
   /organizations/{organization}/kaspi-auth/verify-otp:
@@ -603,6 +627,20 @@ paths:
                 error: finish_no_x509
                 error_code: finish_no_x509
                 message: Произошла ошибка.
+        "503":
+          description: >-
+            `entrance_auth_disabled` — подключение/переавторизация кассира временно
+            недоступны (технические работы на стороне ApiPay). Повторите позже; уже
+            подключённые кассиры продолжают работать.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: entrance_auth_disabled
+                error_code: entrance_auth_disabled
+                message: Подключение кассира временно недоступно, идут технические работы.
         "429":
           $ref: "#/components/responses/RateLimited"
   /organizations/{organization}/kaspi-auth/status:
@@ -1621,6 +1659,11 @@ components:
               type: integer
             needs_reauth:
               type: integer
+              description: |
+                Мерчанты, у которых нет ни одного РАБОЧЕГО кассира: коннекшн отключён ЛИБО его
+                Kaspi-сессия мертва (`session_status` ∈ {expired, error}). Вторая ось добавлена
+                2026-07-14 — до неё мёртвая сессия не считалась вообще, и счётчик занижал.
+                Пока сессия мертва, счета/чеки мерчанта отдают `409 kaspi_session_expired`.
             tariff_active:
               type: integer
             tariff_expired:

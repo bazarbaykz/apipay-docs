@@ -255,11 +255,16 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: Дубль ключа идемпотентности (external_order_id_idempotency уже использован)
+          description: |
+            `duplicate_idempotency_key` — дубль ключа идемпотентности (external_order_id_idempotency
+            уже использован); `kaspi_session_expired` — сессия кассира Kaspi мертва, счёт не создан
+            (нужна переавторизация кассира, ретрай не поможет).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DuplicateIdempotencyResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/DuplicateIdempotencyResponse'
+                  - $ref: '#/components/schemas/SessionExpiredResponse'
         '422':
           description: |
             Ошибка валидации. Особые случаи: `connection_ambiguous` (>1 активной connection
@@ -270,11 +275,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/ValidationErrorBody'
         '403':
-          $ref: '#/components/responses/KycRejected'
+          description: |
+            `kyc_rejected` — мерчант отклонён на KYC-модерации; `tariff_inactive` — подписка на
+            ApiPay не активна (продлите тариф в кабинете).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TariffInactiveResponse'
+                  - type: object
+                    properties:
+                      error: {type: string, example: kyc_rejected}
+                      error_code: {$ref: '#/components/schemas/ErrorCode'}
+                      message: {type: string, example: "Выставление счетов ограничено. Обратитесь в поддержку."}
         '429':
           $ref: '#/components/responses/RateLimitCap'
         '503':
-          $ref: '#/components/responses/KaspiSessionInvalid'
+          $ref: '#/components/responses/InvoiceCreationUnavailable'
   "/invoices/bulk":
     post:
       tags: [Invoices]
@@ -339,7 +356,7 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimitCap'
         '503':
-          $ref: '#/components/responses/KaspiSessionInvalid'
+          $ref: '#/components/responses/InvoiceCreationUnavailable'
   "/invoices/qr":
     post:
       tags: [Invoices]
@@ -375,14 +392,29 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '409':
           description: |
-            `duplicate_idempotency_key` (дубль ключа) или `superseded` (defensive; при
+            `duplicate_idempotency_key` (дубль ключа); `kaspi_session_expired` (сессия кассира
+            мертва — QR не создан, нужна переавторизация); либо `superseded` (defensive; при
             текущем no-op supersede недостижим — оба параллельных запроса получают 201).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DuplicateIdempotencyResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/DuplicateIdempotencyResponse'
+                  - $ref: '#/components/schemas/SessionExpiredResponse'
         '403':
-          $ref: '#/components/responses/KycRejected'
+          description: |
+            `kyc_rejected` — мерчант отклонён на KYC-модерации; `tariff_inactive` — подписка на
+            ApiPay не активна (продлите тариф в кабинете).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TariffInactiveResponse'
+                  - type: object
+                    properties:
+                      error: {type: string, example: kyc_rejected}
+                      error_code: {$ref: '#/components/schemas/ErrorCode'}
+                      message: {type: string, example: "Выставление счетов ограничено. Обратитесь в поддержку."}
         '422':
           $ref: '#/components/responses/ValidationError'
         '429':
@@ -406,7 +438,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          $ref: '#/components/responses/KaspiSessionInvalid'
+          $ref: '#/components/responses/InvoiceCreationUnavailable'
   "/invoices/stats":
     get:
       tags: [Invoices]
@@ -793,7 +825,9 @@ paths:
 
         Для оплат, НЕ прошедших через Kaspi QR: `payment_type=3` (наличные),
         `payment_type=5` (POS другого банка). За kill-switch — при отключённой фиче
-        `403 fiscal_receipts_disabled`. Sandbox отдаёт детерминированное превью без Kaspi.
+        `403 fiscal_receipts_disabled`; **kill-switch гейтит только боевые организации** —
+        в песочнице чеки работают всегда (свой флаг, default ON).
+        Sandbox отдаёт детерминированное превью без Kaspi.
       operationId: previewReceipt
       requestBody:
         required: true
@@ -849,7 +883,15 @@ paths:
 
         **Идемпотентность:** `client_operation_id` уникален на организацию — повтор с тем
         же ключом не выбивает второй чек (`409 duplicate_client_operation_id`); повтор
-        после `failed` разрешён. За kill-switch (`403 fiscal_receipts_disabled`).
+        после `failed` разрешён. За kill-switch (`403 fiscal_receipts_disabled`) —
+        **боевые организации; в песочнице чеки работают всегда** (свой флаг, default ON).
+
+        **Песочница.** Чек зеркалит бой: позиция с `barcode`+`ntin` даёт `issued` с
+        реальными суммами, позиция без `ntin` — `failed`/`item_not_fiscal`. Kaspi не
+        вызывается, фискальный документ не пишется. Поле `simulate` (только sandbox,
+        иначе `403 not_sandbox`) форсирует исход — так воспроизводятся `shift_closed`,
+        `item_not_fiscal`, `receipt_kaspi_error`. Вебхуки `receipt.issued`/`receipt.failed`
+        в песочнице уходят независимо от прод-флага вебхуков.
       operationId: createReceipt
       requestBody:
         required: true
@@ -874,6 +916,16 @@ paths:
                       catalog_item_id: {type: integer, description: "ID позиции из GET /catalog."}
                       quantity: {type: integer, minimum: 1}
                       price: {type: number, nullable: true, description: "Цена за единицу; по умолчанию — selling_price из каталога."}
+                simulate:
+                  type: object
+                  nullable: true
+                  description: |
+                    **Только песочница** (боевая организация → `403 not_sandbox`). Форсирует
+                    исход чека, чтобы интегратор обкатал обработку ошибок.
+                  required: [status]
+                  properties:
+                    status: {type: string, enum: [issued, failed], description: "issued — обычный sandbox-путь (корзина резолвится строго); failed — терминальный сбой."}
+                    error_code: {type: string, nullable: true, enum: [shift_closed, item_not_fiscal, receipt_kaspi_error], description: "Код при status=failed; по умолчанию receipt_kaspi_error."}
       responses:
         '202':
           description: Чек принят в обработку
@@ -890,11 +942,85 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: fiscal_receipts_disabled
+          description: |
+            `fiscal_receipts_disabled` — фича отключена (боевая орга); `not_sandbox` — simulate
+            прислан вне песочницы; `tariff_inactive` — подписка на ApiPay не активна.
         '409':
-          description: Дубль client_operation_id (duplicate_client_operation_id) или нет кассира (kaspi_session_not_configured)
+          description: |
+            Дубль `client_operation_id` (`duplicate_client_operation_id`); нет кассира
+            (`kaspi_session_not_configured`); `kaspi_session_expired` — сессия кассира мертва,
+            чек не выбит (нужна переавторизация кассира).
         '422':
           description: Ошибка валидации / connection_ambiguous
+    get:
+      tags: [Receipts]
+      summary: История фискальных чеков
+      description: |
+        Пагинированный список чеков организации, свежие сверху (`created_at DESC`).
+        Пагинация — **плоская** `{current_page, data, total}` (не meta-обёртка).
+        Элемент списка — та же форма, что у `GET /receipts/{id}`.
+
+        Выборка скоупится режимом организации: боевая организация видит только боевые
+        чеки, тестовая — только тестовые.
+
+        **Чтение истории НЕ гейтится kill-switch'ем** `fiscal_receipts_enabled` (он про
+        выбивание чеков): даже с выключенной фичей список уже выбитых чеков остаётся
+        доступен. `403 fiscal_receipts_disabled` бывает только на `POST /receipts`
+        и `POST /receipts/preview`.
+      operationId: listReceipts
+      parameters:
+        - name: status
+          in: query
+          description: Фильтр по статусу.
+          schema: {type: string, enum: [pending, issued, failed]}
+        - name: payment_type
+          in: query
+          description: 3 — наличные, 5 — POS другого банка.
+          schema: {type: integer, enum: [3, 5]}
+        - name: invoice_id
+          in: query
+          description: Чеки, привязанные к конкретному счёту.
+          schema: {type: integer}
+        - name: from
+          in: query
+          description: |
+            Нижняя граница `created_at` (дата или дата-время). Голая дата и дата-время без
+            смещения трактуются в **Asia/Almaty** (+05:00) — календарный день мерчанта;
+            явное смещение (`2026-07-13T10:00:00+03:00`, `...Z`) берётся как есть.
+          schema: {type: string}
+        - name: to
+          in: query
+          description: |
+            Верхняя граница `created_at`; должна быть >= `from`, иначе `422`. Голая дата
+            (`2026-07-13`) включает весь день целиком **по Asia/Almaty**; дата-время без
+            смещения трактуется в Asia/Almaty, с явным смещением — берётся как есть.
+          schema: {type: string}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+      responses:
+        '200':
+          description: Список чеков
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current_page: {type: integer, example: 1}
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FiscalReceiptListItem'
+                  total: {type: integer, example: 12}
+        '400':
+          description: organization_required
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
   "/receipts/{id}":
     get:
       tags: [Receipts]
@@ -919,6 +1045,7 @@ paths:
                   id: {type: integer}
                   status: {type: string, enum: [pending, issued, failed]}
                   payment_type: {type: integer, enum: [3, 5]}
+                  invoice_id: {type: integer, nullable: true}
                   client_operation_id: {type: string, nullable: true}
                   total_price: {type: string, nullable: true}
                   received_amt: {type: string, nullable: true}
@@ -1246,13 +1373,19 @@ paths:
       parameters:
         - name: from
           in: query
-          description: Начало окна (включительно), по created_at. Default — now-7d при отсутствии.
+          description: |
+            Начало окна (включительно), по created_at. Default — now-7d при отсутствии.
+            Голая дата и дата-время без смещения трактуются в **Asia/Almaty** (+05:00) —
+            календарный день мерчанта; явное смещение берётся как есть.
           schema:
             type: string
             format: date-time
         - name: to
           in: query
-          description: Конец окна (включительно). Должен быть >= from, иначе 422.
+          description: |
+            Конец окна (включительно). Должен быть >= from, иначе 422. Голая дата
+            (`2026-07-13`) включает весь день целиком **по Asia/Almaty**; дата-время без
+            смещения трактуется в Asia/Almaty, с явным смещением — берётся как есть.
           schema:
             type: string
             format: date-time
@@ -1615,6 +1748,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/EntranceAuthDisabled'
   "/connections/{connection}/auth/send-phone":
     post:
       tags: [Connections]
@@ -1653,6 +1788,8 @@ paths:
           $ref: '#/components/responses/ConnectionNotFound'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/EntranceAuthDisabled'
   "/connections/{connection}/auth/verify-otp":
     post:
       tags: [Connections]
@@ -1697,6 +1834,8 @@ paths:
           $ref: '#/components/responses/ConnectionNotFound'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/EntranceAuthDisabled'
   "/connections/{connection}/auth/status":
     get:
       tags: [Connections]
@@ -2790,6 +2929,35 @@ components:
             properties:
               error: {type: string, example: kaspi_session_invalid}
               message: {type: string, example: "Kaspi session is invalid or expired. Please contact support."}
+    InvoiceCreationUnavailable:
+      description: |
+        Создание счёта временно недоступно. `error` / `error_code`:
+        * `kaspi_session_invalid` — сессия кассира Kaspi истекла (переподключите кассира);
+        * `invoices_disabled` — приём новых счетов приостановлен (технические работы). Счёт
+          НЕ создан — повторите позже. Чтение счетов, отмена, возврат и статусы продолжают
+          работать. Стоп может быть ТОЧЕЧНЫМ по кассиру: 503 отдаётся, если приостановлена
+          запись через кассира, на которого адресован счёт (`kaspi_connection_id` — явный
+          или primary по умолчанию); счета на других кассиров организации создаются штатно.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            kaspi_session_invalid:
+              value: {error: kaspi_session_invalid, message: "Kaspi session is invalid or expired. Please contact support."}
+            invoices_disabled:
+              value: {error: invoices_disabled, error_code: invoices_disabled, message: "Invoice creation is temporarily unavailable due to maintenance. Please retry later."}
+    EntranceAuthDisabled:
+      description: |
+        `entrance_auth_disabled` — подключение/переавторизация кассира временно недоступны
+        (технические работы). Повторите позже; уже подключённые кассиры продолжают работать.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            entrance_auth_disabled:
+              value: {error: entrance_auth_disabled, message: "Cashier connection is temporarily unavailable"}
     RateLimitCap:
       description: |
         Превышен антифрод/триал-лимит на создание счетов. `error_code` — один из
@@ -2874,6 +3042,25 @@ components:
         message: {type: string, example: "Счёт с таким ключом идемпотентности уже создан"}
         invoice_id: {type: integer, example: 12345}
         status: {type: string, description: "Статус существующего счёта.", example: pending}
+    SessionExpiredResponse:
+      type: object
+      description: |
+        Сессия кассира Kaspi мертва — счёт/чек не создан. Раньше такой запрос принимался (201)
+        и молча падал в `error` уже в очереди; теперь отказ приходит синхронно. Лечится ТОЛЬКО
+        переавторизацией кассира в кабинете apipay.kz — ретрай не поможет. Состояние видно
+        заранее в `GET /account/health` → `connection.needs_reauth`.
+      properties:
+        error_code: {$ref: '#/components/schemas/ErrorCode'}
+        message: {type: string, example: "Сессия кассира Kaspi истекла — переавторизуйте кассира в кабинете apipay.kz."}
+    TariffInactiveResponse:
+      type: object
+      description: |
+        Подписка мерчанта на ApiPay не активна — счета и чеки не выставляются. Лечится оплатой
+        тарифа в кабинете apipay.kz. Состояние видно заранее в `GET /tariff` и
+        `GET /account/health` → `tariff.status`.
+      properties:
+        error_code: {$ref: '#/components/schemas/ErrorCode'}
+        message: {type: string, example: "Подписка на ApiPay не активна — продлите тариф в кабинете apipay.kz."}
     ErrorCode:
       type: string
       description: |
@@ -2894,6 +3081,10 @@ components:
         - qr_render_failed
         - kaspi_session_invalid
         - kaspi_session_unavailable
+        - kaspi_session_expired
+        - tariff_inactive
+        - invoices_disabled
+        - entrance_auth_disabled
         - manager_throttled
         - whatsapp_otp_throttled
         - whatsapp_gateway_error
@@ -3115,6 +3306,27 @@ components:
         barcode: {type: string, nullable: true, description: "Нацкаталог-поля позиции (если были в корзине)."}
         ntin: {type: string, nullable: true}
         gtin: {type: string, nullable: true}
+    FiscalReceiptListItem:
+      type: object
+      description: |
+        Элемент истории чеков (GET /receipts) — та же форма, что отдаёт GET /receipts/{id}.
+        Суммы — строки (decimal). `raw_request`/`raw_response` наружу не отдаются.
+      properties:
+        id: {type: integer, example: 42}
+        status: {type: string, enum: [pending, issued, failed]}
+        payment_type: {type: integer, enum: [3, 5]}
+        invoice_id: {type: integer, nullable: true, description: "Счёт, к которому привязан чек (если есть)."}
+        client_operation_id: {type: string, nullable: true}
+        total_price: {type: string, nullable: true, example: "1500.00"}
+        received_amt: {type: string, nullable: true, example: "2000.00"}
+        fpd: {type: string, nullable: true}
+        operation_id: {type: string, nullable: true}
+        operation_time: {type: string, nullable: true}
+        shift_number: {type: integer, nullable: true}
+        link: {type: string, nullable: true, description: "Ссылка на чек на receipt.kaspi.kz."}
+        error_code: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+        created_at: {type: string, format: date-time, nullable: true}
     InvoiceListItem:
       type: object
       description: Элемент списка счетов (сериализация модели, даты UTC +00:00).
@@ -3490,7 +3702,25 @@ components:
           type: object
           properties:
             kaspi_connected: {type: boolean, example: true}
-            session_status: {type: string, nullable: true, description: "Статус кассира; так детектится «слетела сессия».", example: active}
+            session_status:
+              type: string
+              nullable: true
+              enum: [active, expired, error]
+              description: |
+                Здоровье Kaspi-сессии кассира — так детектится «слетела сессия» (поллинг, без вебхука).
+                `active` — сессия жива (либо ещё ни разу не проверялась); `expired`/`error` — мертва,
+                нужна переавторизация кассира: до неё создание счетов и чеков отдаёт
+                `409 kaspi_session_expired`. `null` — активного кассира нет вовсе.
+              example: active
+            session_error_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: "Когда сессия была признана мёртвой (null, если жива)."
+            needs_reauth:
+              type: boolean
+              description: "true — сессию надо переподключить (эквивалент session_status ∈ {expired, error})."
+              example: false
             last_used_at: {type: string, format: date-time, nullable: true}
         tariff:
           type: object
@@ -3896,7 +4126,8 @@ x-webhooks:
       description: |
         Чек успешно выбит в Kaspi OFD (`POST /receipts`). В `receipt` — `fpd`,
         `operation_id`, `link` (ссылка на чек), `shift_number`. Гейт —
-        `KASPI_FISCAL_RECEIPT_WEBHOOKS_ENABLED` (default false). Очередь `webhooks`,
+        `KASPI_FISCAL_RECEIPT_WEBHOOKS_ENABLED` (default false); **sandbox-чек уведомляет
+        независимо от этого флага** (своя ось раскатки, default ON). Очередь `webhooks`,
         `$tries=3`. Дедуп по `(event, receipt.id)`. Равноправен поллингу `GET /receipts/{id}`.
       requestBody:
         content:
@@ -3913,8 +4144,15 @@ x-webhooks:
       description: |
         Выбивание чека не удалось. Причина — в `receipt.error_code`
         (`shift_closed` — закрыта смена; `item_not_fiscal`; `rfo_missing`;
+        `kaspi_session_invalid` — сессия кассира недействительна, переподключите кассира;
+        `kaspi_session_not_configured` — кассир чека деактивирован или удалён к моменту
+        выбивания (чек НЕ выбивается от другой кассы);
+        `fiscal_receipts_disabled` — выбивание чеков отключено либо запись через целевого
+        кассира приостановлена;
         `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ НЕ создан —
-        повторите с НОВЫМ `client_operation_id`. Гейт/очередь — как у `receipt.issued`.
+        повтор допустим: после `failed` прежний `client_operation_id` освобождается.
+        Гейт/очередь — как у `receipt.issued`.
+        В песочнице воспроизводится параметром `simulate` в `POST /receipts`.
       requestBody:
         content:
           application/json:
