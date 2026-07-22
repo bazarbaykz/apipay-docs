@@ -90,7 +90,7 @@ tags:
   - name: Refunds
     description: Возвраты по счетам.
   - name: Receipts
-    description: Фискальные чеки в Kaspi OFD для оплат наличными / через POS другого банка (не прошедших через Kaspi QR). За kill-switch fiscal_receipts_enabled.
+    description: Фискальные чеки в Kaspi OFD для оплат наличными / через POS другого банка (не прошедших через Kaspi QR).
   - name: Tariff & Account
     description: Информация мерчанта о себе — тарифный каталог, статус подписки на ApiPay, health аккаунта.
   - name: Connections
@@ -277,7 +277,8 @@ paths:
         '403':
           description: |
             `kyc_rejected` — мерчант отклонён на KYC-модерации; `tariff_inactive` — подписка на
-            ApiPay не активна (продлите тариф в кабинете).
+            ApiPay не активна (продлите тариф в кабинете). Грейс-периода у тарифа нет —
+            блокировка наступает сразу после `expires_at`, который приходит в теле ответа.
           content:
             application/json:
               schema:
@@ -302,6 +303,10 @@ paths:
         (`throttle:bulk-invoices`). Структурная ошибка тела (невалидная схема) → `422`
         отклоняет весь батч атомарно; бизнес-ошибки отдельных позиций возвращаются
         поэлементно в `invoices[]` (created/duplicate/failed), сам батч при этом `201`.
+
+        ⚠️ **Неактивный тариф — исключение из поэлементной модели:** `tariff_inactive`
+        отбивает **весь запрос** `403`, а не приходит в `failed[]`. Причина не в конкретной
+        позиции, а в самой организации, поэтому запрос закрывается на входе.
       operationId: createInvoicesBulk
       requestBody:
         required: true
@@ -351,6 +356,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '422':
           $ref: '#/components/responses/ValidationError'
         '429':
@@ -404,7 +411,8 @@ paths:
         '403':
           description: |
             `kyc_rejected` — мерчант отклонён на KYC-модерации; `tariff_inactive` — подписка на
-            ApiPay не активна (продлите тариф в кабинете).
+            ApiPay не активна (продлите тариф в кабинете). Грейс-периода у тарифа нет —
+            блокировка наступает сразу после `expires_at`, который приходит в теле ответа.
           content:
             application/json:
               schema:
@@ -571,6 +579,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '404':
           description: Счёт не найден
   "/invoices/{id}/refund":
@@ -630,6 +640,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '404':
           description: Счёт не найден
         '422':
@@ -824,9 +836,8 @@ paths:
         список строк `{Title, Subtitle, isBoldText}` (сумма, способ оплаты).
 
         Для оплат, НЕ прошедших через Kaspi QR: `payment_type=3` (наличные),
-        `payment_type=5` (POS другого банка). За kill-switch — при отключённой фиче
-        `403 fiscal_receipts_disabled`; **kill-switch гейтит только боевые организации** —
-        в песочнице чеки работают всегда (свой флаг, default ON).
+        `payment_type=5` (POS другого банка). `403 fiscal_receipts_disabled` — только
+        когда приостановлена запись через целевого кассира.
         Sandbox отдаёт детерминированное превью без Kaspi.
       operationId: previewReceipt
       requestBody:
@@ -861,7 +872,10 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Фича отключена (fiscal_receipts_disabled)
+          description: |
+            `fiscal_receipts_disabled` — приостановлена запись через целевого кассира;
+            `tariff_inactive` — подписка на ApiPay не активна (грейса нет, блок сразу
+            после `expires_at`; тело несёт `expires_at`).
         '409':
           description: Нет активного кассира (kaspi_session_not_configured)
         '422':
@@ -883,15 +897,15 @@ paths:
 
         **Идемпотентность:** `client_operation_id` уникален на организацию — повтор с тем
         же ключом не выбивает второй чек (`409 duplicate_client_operation_id`); повтор
-        после `failed` разрешён. За kill-switch (`403 fiscal_receipts_disabled`) —
-        **боевые организации; в песочнице чеки работают всегда** (свой флаг, default ON).
+        после `failed` разрешён. `403 fiscal_receipts_disabled` — только когда
+        приостановлена запись через целевого кассира чека.
 
         **Песочница.** Чек зеркалит бой: позиция с `barcode`+`ntin` даёт `issued` с
         реальными суммами, позиция без `ntin` — `failed`/`item_not_fiscal`. Kaspi не
         вызывается, фискальный документ не пишется. Поле `simulate` (только sandbox,
         иначе `403 not_sandbox`) форсирует исход — так воспроизводятся `shift_closed`,
         `item_not_fiscal`, `receipt_kaspi_error`. Вебхуки `receipt.issued`/`receipt.failed`
-        в песочнице уходят независимо от прод-флага вебхуков.
+        уходят при любом терминальном статусе чека.
       operationId: createReceipt
       requestBody:
         required: true
@@ -943,8 +957,9 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: |
-            `fiscal_receipts_disabled` — фича отключена (боевая орга); `not_sandbox` — simulate
-            прислан вне песочницы; `tariff_inactive` — подписка на ApiPay не активна.
+            `fiscal_receipts_disabled` — приостановлена запись через целевого кассира;
+            `not_sandbox` — simulate прислан вне песочницы; `tariff_inactive` — подписка
+            на ApiPay не активна.
         '409':
           description: |
             Дубль `client_operation_id` (`duplicate_client_operation_id`); нет кассира
@@ -963,10 +978,9 @@ paths:
         Выборка скоупится режимом организации: боевая организация видит только боевые
         чеки, тестовая — только тестовые.
 
-        **Чтение истории НЕ гейтится kill-switch'ем** `fiscal_receipts_enabled` (он про
-        выбивание чеков): даже с выключенной фичей список уже выбитых чеков остаётся
-        доступен. `403 fiscal_receipts_disabled` бывает только на `POST /receipts`
-        и `POST /receipts/preview`.
+        **Чтение истории не гейтится ничем**: список уже выбитых чеков остаётся доступен
+        всегда. `403 fiscal_receipts_disabled` бывает только на `POST /receipts`
+        и `POST /receipts/preview` (пауза записи через кассира).
       operationId: listReceipts
       parameters:
         - name: status
@@ -1786,10 +1800,44 @@ paths:
           $ref: '#/components/responses/CashierManagementDisabled'
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
+        '409':
+          description: |
+            `context_expired` — контекст процесса протух либо Kaspi его закрыл: нужен новый
+            `init`, повторять `send-phone` бесполезно. `no_process` — авторизация не начата
+            (или уже закрыта предыдущим терминальным исходом). `org_claim_conflict` —
+            кассир уже привязан к другой организации.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                context_expired:
+                  value: {error: context_expired, message: "Auth session expired — re-initialize"}
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: |
+            Ошибка формата `phoneNumber` (стандартная Laravel-форма валидации) либо
+            `not_cashier` (у номера есть пароль/роли сверх кассира), `not_registered`
+            (номер не заведён кассиром в Kaspi).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                not_cashier:
+                  value: {error: not_cashier, message: "Number is not a cashier-only account"}
+        '502':
+          description: '`sms_failed` — Kaspi не вернул экран ввода OTP.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                sms_failed:
+                  value: {error: sms_failed, message: "OTP screen was not returned"}
         '503':
-          $ref: '#/components/responses/EntranceAuthDisabled'
+          $ref: '#/components/responses/CashierAuthUnavailable'
   "/connections/{connection}/auth/verify-otp":
     post:
       tags: [Connections]
@@ -1798,6 +1846,15 @@ paths:
         Шаг 3 из 3 (point of no return). Лимит **10/мин** (`v1-cashier-auth-otp`). При
         неверном OTP — `200` с `success:false` (можно повторить). При успехе — `success:true`
         и сессия кассира активирована.
+
+        ⚠️ **Не всякий неуспех повторяем.** Kaspi может код **принять** и увести на
+        универсальную регистрацию («введите ИИН») — это значит, что номер не заведён
+        кассиром. Тогда шаг отдаёт **`422 not_registered`**, а не `200`: сессия
+        авторизации закрыта, повторять OTP или слать SMS заново бессмысленно —
+        следующий `send-phone` вернёт `409 no_process`. Нужен новый `init` после того,
+        как номер добавлен кассиром в Kaspi Business → Кассиры. Так же терминальны
+        `409 context_expired` (Kaspi потерял контекст → новый `init`) и
+        `503 kaspi_busy` (анти-абуз Kaspi → пауза по `Retry-After`, затем новый `init`).
       operationId: connectionAuthVerifyOtp
       parameters:
         - $ref: '#/components/parameters/ConnectionId'
@@ -1832,10 +1889,36 @@ paths:
           $ref: '#/components/responses/CashierManagementDisabled'
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
+        '409':
+          description: |
+            Терминально: `context_expired` — Kaspi потерял контекст процесса (нужен новый
+            `init`, а не повтор OTP); `no_process` — авторизация не начата либо уже
+            закрыта предыдущим терминальным исходом.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                context_expired:
+                  value: {error: context_expired, message: "Auth session expired — re-initialize"}
+                no_process:
+                  value: {error: no_process, message: "Auth session is not initialized"}
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: |
+            Ошибка формата `otp` (стандартная Laravel-форма валидации) либо терминальный
+            `not_registered` — Kaspi принял код, но увёл на регистрацию пользователя:
+            номер не заведён кассиром. Сессия закрыта, ретрай бессмыслен.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                not_registered:
+                  value: {error: not_registered, message: "Number is not a registered Kaspi cashier"}
         '503':
-          $ref: '#/components/responses/EntranceAuthDisabled'
+          $ref: '#/components/responses/CashierAuthUnavailable'
   "/connections/{connection}/auth/status":
     get:
       tags: [Connections]
@@ -2186,6 +2269,8 @@ paths:
                   value: {error: "sandbox_catalog_limit", message: "Лимит каталога в тестовом режиме — 1000 позиций. Для большего каталога подключите платный тариф."}
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '409':
           description: "Каталог занят другой операцией (per-org lock match-and-merge не взят за 5с) — повторите запрос"
           content:
@@ -2230,6 +2315,8 @@ paths:
                   image_id: {type: string, format: uuid}
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '422':
           $ref: '#/components/responses/ValidationError'
   "/catalog/scan":
@@ -2291,6 +2378,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '422':
           $ref: '#/components/responses/ValidationError'
         '429':
@@ -2352,6 +2441,8 @@ paths:
                   catalog_item_id: {type: integer}
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '404':
           description: Товар не найден
         '422':
@@ -2385,6 +2476,8 @@ paths:
                   catalog_item_id: {type: integer}
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '404':
           description: Товар не найден
   "/clients/check":
@@ -2431,6 +2524,8 @@ paths:
                   client_name: {type: string, nullable: true, description: "Формат «Имя Ф.»; null если has_kaspi=false.", example: "Иван И."}
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '422':
           description: Телефон пустой или не нормализуется к 11 цифрам
           content:
@@ -2546,7 +2641,11 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Организация не верифицирована
+          description: |
+            Организация не верифицирована; либо `tariff_inactive` — подписка мерчанта на
+            ApiPay не активна (грейса нет, блок сразу после `expires_at`; тело несёт
+            `expires_at`). Остановить уже существующую подписку (`pause`/`cancel`) можно
+            и без действующего тарифа.
         '422':
           $ref: '#/components/responses/ValidationError'
   "/subscriptions/{id}":
@@ -2633,6 +2732,8 @@ paths:
                   subscription: {$ref: '#/components/schemas/Subscription'}
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '404':
           description: Подписка не найдена
         '422':
@@ -2685,6 +2786,8 @@ paths:
           description: Нельзя возобновить (подписка не paused)
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
         '404':
           description: Подписка не найдена
   "/subscriptions/{id}/cancel":
@@ -2920,6 +3023,17 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ValidationErrorBody'
+    TariffInactive:
+      description: |
+        `tariff_inactive` — подписка мерчанта на ApiPay не активна, платные операции закрыты.
+        Лечится оплатой тарифа в кабинете apipay.kz; грейс-периода нет — блокировка наступает
+        сразу после `expires_at`. Состояние видно заранее в `GET /tariff` и
+        `GET /account/health` → `tariff.status`. Чтение (`GET`) продолжает работать,
+        закрываются только действия.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TariffInactiveResponse'
     KaspiSessionInvalid:
       description: Сессия Kaspi недействительна или истекла
       content:
@@ -2958,6 +3072,26 @@ components:
           examples:
             entrance_auth_disabled:
               value: {error: entrance_auth_disabled, message: "Cashier connection is temporarily unavailable"}
+    CashierAuthUnavailable:
+      description: |
+        `entrance_auth_disabled` — подключение кассира временно недоступно (техработы).
+        `kaspi_busy` — Kaspi троттлит анти-абузом; сессия закрыта, после паузы нужен
+        новый `init`. Отличается от `EntranceAuthDisabled` наличием второй причины —
+        используется на шагах, где Kaspi может ответить троттлом (`send-phone`, `verify-otp`).
+      headers:
+        Retry-After:
+          description: Секунд до повторной попытки (только для `kaspi_busy`).
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            entrance_auth_disabled:
+              value: {error: entrance_auth_disabled, message: "Cashier connection is temporarily unavailable"}
+            kaspi_busy:
+              value: {error: kaspi_busy, message: "Kaspi is busy — retry shortly"}
     RateLimitCap:
       description: |
         Превышен антифрод/триал-лимит на создание счетов. `error_code` — один из
@@ -3055,12 +3189,25 @@ components:
     TariffInactiveResponse:
       type: object
       description: |
-        Подписка мерчанта на ApiPay не активна — счета и чеки не выставляются. Лечится оплатой
-        тарифа в кабинете apipay.kz. Состояние видно заранее в `GET /tariff` и
+        Подписка мерчанта на ApiPay не активна — платные операции закрыты (счета, чеки,
+        возвраты, отмены, каталог, подписки, lookup клиента, ручная синхронизация). Лечится
+        оплатой тарифа в кабинете apipay.kz; **грейс-периода нет** — блокировка наступает
+        сразу после `expires_at`. Состояние видно заранее в `GET /tariff` и
         `GET /account/health` → `tariff.status`.
+
+        Чтение (`GET`) не блокируется, как и оплата тарифа, управление аккаунтом/ключами и
+        переподключение кассира — иначе мерчант не смог бы разблокироваться.
       properties:
+        success: {type: boolean, example: false}
+        error: {type: string, example: tariff_inactive}
         error_code: {$ref: '#/components/schemas/ErrorCode'}
         message: {type: string, example: "Подписка на ApiPay не активна — продлите тариф в кабинете apipay.kz."}
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Когда истёк тариф. `null` — тариф не заводился вовсе.
+          example: "2026-07-19T15:01:00+00:00"
     ErrorCode:
       type: string
       description: |
@@ -3541,11 +3688,10 @@ components:
       properties:
         state:
           type: string
-          enum: [draining, paused_throttle, paused_hold, direct, not_connected, sandbox]
+          enum: [draining, paused_throttle, paused_hold, not_connected, sandbox]
           description: |
             draining — очередь двигается; paused_throttle — пауза из-за троттла Kaspi
             (см. throttle_retry_in_seconds); paused_hold — пауза-накопление (hold);
-            direct — приём выключен, строки обработает прямой джоб (ETA неприменим);
             not_connected — организация без kaspi_user_id; sandbox — sandbox-режим.
           example: draining
         ahead_in_cashier_queue: {type: integer, example: 2200}
@@ -4081,8 +4227,8 @@ x-webhooks:
       summary: Позиция каталога обработана
       description: |
         Позиция каталога заведена в Kaspi (`status: active`) либо отвергнута
-        (`status: failed`, причина в `error_code`). **Включён по умолчанию** (kill-switch
-        env `KASPI_CATALOG_WEBHOOKS_ENABLED`). Отдельная очередь `catalog-webhooks`,
+        (`status: failed`, причина в `error_code`). Шлётся безусловно — прежний kill-switch
+        env `KASPI_CATALOG_WEBHOOKS_ENABLED` удалён. Отдельная очередь `catalog-webhooks`,
         `$tries=3`, backoff `[10,60]`. Сверяйте по `external_ref` (ключ маппинга 1С,
         UNIQUE per org). При bulk-заливке предпочтителен поллинг targeted-GET
         `GET /catalog?external_refs[]=…`; вебхук равноправен для точечных операций.
@@ -4104,7 +4250,8 @@ x-webhooks:
       description: |
         Итог bulk-заливки каталога (POST /catalog инжест-путь): ОДИН агрегированный вебхук
         вместо лавины per-item. Шлётся при завершении батча (все строки финализированы),
-        гейт — `KASPI_CATALOG_WEBHOOKS_ENABLED` И `KASPI_CATALOG_BATCH_WEBHOOKS_ENABLED`.
+        безусловно — прежние kill-switch'и `KASPI_CATALOG_WEBHOOKS_ENABLED` /
+        `KASPI_CATALOG_BATCH_WEBHOOKS_ENABLED` удалены.
         Семантика доставки — **exactly-once на реальный переход** processing→terminal, но при
         ретраях/страховочном sweeper'е возможен **повтор** — дедуплицируйте по
         `(batch_id, status)`. `sample_failed` — до 50 `{external_ref, error_code}` БЕЗ текста
@@ -4125,9 +4272,8 @@ x-webhooks:
       summary: Фискальный чек выбит
       description: |
         Чек успешно выбит в Kaspi OFD (`POST /receipts`). В `receipt` — `fpd`,
-        `operation_id`, `link` (ссылка на чек), `shift_number`. Гейт —
-        `KASPI_FISCAL_RECEIPT_WEBHOOKS_ENABLED` (default false); **sandbox-чек уведомляет
-        независимо от этого флага** (своя ось раскатки, default ON). Очередь `webhooks`,
+        `operation_id`, `link` (ссылка на чек), `shift_number`. Шлётся безусловно при
+        терминальном статусе чека. Очередь `webhooks`,
         `$tries=3`. Дедуп по `(event, receipt.id)`. Равноправен поллингу `GET /receipts/{id}`.
       requestBody:
         content:
@@ -4147,11 +4293,10 @@ x-webhooks:
         `kaspi_session_invalid` — сессия кассира недействительна, переподключите кассира;
         `kaspi_session_not_configured` — кассир чека деактивирован или удалён к моменту
         выбивания (чек НЕ выбивается от другой кассы);
-        `fiscal_receipts_disabled` — выбивание чеков отключено либо запись через целевого
-        кассира приостановлена;
+        `fiscal_receipts_disabled` — запись через целевого кассира приостановлена;
         `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ НЕ создан —
         повтор допустим: после `failed` прежний `client_operation_id` освобождается.
-        Гейт/очередь — как у `receipt.issued`.
+        Очередь — как у `receipt.issued`.
         В песочнице воспроизводится параметром `simulate` в `POST /receipts`.
       requestBody:
         content:

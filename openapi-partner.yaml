@@ -22,7 +22,7 @@ info:
     ## Границы этой спецификации
 
     Здесь описана **только** S2S-поверхность X-Partner-Key (`routes/partner.php`,
-    15 эндпоинтов). Партнёрский **кабинет** под Sanctum-сессией
+    17 эндпоинтов). Партнёрский **кабинет** под Sanctum-сессией
     (`api-key/rotate`, `PUT /mode`, `webhook-logs`, `claim-requests`,
     `sandbox/toggle`, `production-request`, `managed-organizations` и т.д.) —
     отдельная поверхность в `routes/api.php` и в этот машинный канон НЕ входит.
@@ -486,17 +486,16 @@ paths:
                 error: sms_failed
                 error_code: sms_failed
                 message: Не удалось отправить SMS.
-        # TODO(verify): опорная дока (docs/partner-api.md) обещает для kaspi_busy
-        # заголовок `Retry-After: 60`, но PartnerKaspiAuthController::error()
-        # (через safely) его НЕ ставит — единственный код-путь с Retry-After это
-        # тарифные лимиты (PartnerTariffController). Проверить, добавляет ли
-        # Retry-After для kaspi_busy глобальный обработчик; заголовок здесь не
-        # объявляю, чтобы не выдумывать.
+        # ПРОВЕРЕНО 2026-07-19 по коду: `Retry-After: 60` ставит ТОЛЬКО
+        # app/Traits/HandlesSelfAuthException.php (SPA-кабинет и /api/v1/*).
+        # Партнёрская поверхность идёт через HandlesPartnerOrgKaspiAuth +
+        # PartnerApiResponse::error() — оба заголовок НЕ ставят, глобального
+        # обработчика на этом пути нет. Заголовок здесь намеренно не объявлен.
         "503":
           description: >-
-            `kaspi_busy` — Kaspi временно недоступен/троттлит. Согласно опорной
-            доке возвращается с заголовком `Retry-After: 60` (см. TODO(verify)
-            в исходнике YAML — код-путь не подтверждён).
+            `kaspi_busy` — Kaspi временно недоступен/троттлит. Заголовок
+            `Retry-After` на партнёрской поверхности **не отдаётся** (в отличие
+            от кабинета/`/api/v1`) — используйте собственный бэкофф, ориентир 60 с.
             `entrance_auth_disabled` — подключение кассира временно отключено на
             стороне ApiPay (технические работы); повторите позже.
           content:
@@ -530,6 +529,15 @@ paths:
         `{ success:false, error:"invalid_otp", process_status:"otp_required" }` —
         это повторяемо, сессия не сбрасывается. Лимит `partner-kaspi-auth`
         (см. send-phone).
+
+
+        ⚠️ **Отличайте «неверный код» от терминального исхода.** Kaspi может
+        код **принять** и увести пользователя на универсальную регистрацию
+        («введите ИИН») — это значит, что номер не заведён кассиром. Тогда шаг
+        отдаёт **422 `not_registered`** (а не 200), сессия авторизации
+        закрывается, и повторять OTP или запрашивать SMS заново бессмысленно:
+        следующий `send-phone` вернёт `409 no_process`. Нужен новый `init` —
+        после того, как номер добавлен кассиром в Kaspi Business → Кассиры.
       operationId: partnerKaspiAuthVerifyOtp
       requestBody:
         required: true
@@ -602,7 +610,9 @@ paths:
         "409":
           description: >-
             `no_process` (авторизация не начата/истекла), `org_claim_conflict`
-            (конкурентная привязка кассира к чужой организации).
+            (конкурентная привязка кассира к чужой организации),
+            `context_expired` (Kaspi потерял контекст процесса — нужен новый
+            `init`, а не повтор OTP).
           content:
             application/json:
               schema:
@@ -613,7 +623,23 @@ paths:
                 error_code: no_process
                 message: Нет активного процесса авторизации.
         "422":
-          $ref: "#/components/responses/LaravelValidationError"
+          description: >-
+            `invalid_otp` (неверный формат — также возможна стандартная
+            Laravel-форма валидации), `not_registered` (Kaspi принял код, но
+            увёл на регистрацию пользователя: номер не заведён кассиром).
+            **`not_registered` терминален** — сессия закрыта, повтор OTP и
+            повторный `send-phone` бессмысленны (см. описание операции).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/LaravelValidationError"
+              example:
+                success: false
+                error: not_registered
+                error_code: not_registered
+                message: Номер не зарегистрирован как кассир Kaspi.
         "502":
           description: >-
             Внутренняя ошибка финализации Kaspi-сессии: `finish_no_x509`,
@@ -632,15 +658,27 @@ paths:
             `entrance_auth_disabled` — подключение/переавторизация кассира временно
             недоступны (технические работы на стороне ApiPay). Повторите позже; уже
             подключённые кассиры продолжают работать.
+            `kaspi_busy` — Kaspi троттлит анти-абузом; сессия закрыта, нужен
+            новый `init` после паузы. Заголовок `Retry-After` на партнёрской
+            поверхности **не отдаётся** (см. send-phone) — используйте
+            собственный бэкофф.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
-              example:
-                success: false
-                error: entrance_auth_disabled
-                error_code: entrance_auth_disabled
-                message: Подключение кассира временно недоступно, идут технические работы.
+              examples:
+                entrance_auth_disabled:
+                  value:
+                    success: false
+                    error: entrance_auth_disabled
+                    error_code: entrance_auth_disabled
+                    message: Подключение кассира временно недоступно, идут технические работы.
+                kaspi_busy:
+                  value:
+                    success: false
+                    error: kaspi_busy
+                    error_code: kaspi_busy
+                    message: Kaspi временно недоступен, повторите позже.
         "429":
           $ref: "#/components/responses/RateLimited"
   /organizations/{organization}/kaspi-auth/status:
@@ -682,6 +720,62 @@ paths:
                 process_status: idle
                 kaspi_connected: false
                 expires_at: null
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ProductionRequired"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/kaspi-auth/logout:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Kaspi Auth]
+      summary: Отключить кассира
+      description: >-
+        Полностью снимает self-связку организации: удаляет Kaspi-сессию и
+        устройство её primary-кассира, переводит подключение в `inactive`.
+        Приём платежей по организации после этого невозможен до повторной
+        авторизации (`init → send-phone → verify-otp`).
+
+
+        **Идемпотентно**: организация без подключённого кассира возвращает `200`,
+        а не ошибку. Затрагивается только primary-подключение — другие кассиры
+        той же организации (multi-cashier) не трогаются. В Kaspi запрос не идёт,
+        поэтому узкого лимита `partner-kaspi-auth` здесь нет.
+
+
+        Для **смены** кассира этот метод не нужен — достаточно
+        `POST /kaspi-auth/init` с `force: true`.
+      operationId: partnerKaspiAuthLogout
+      responses:
+        "200":
+          description: Кассир отключён (или не был подключён)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  status:
+                    type: string
+                    description: Статус persisted-сессии после отключения
+                    enum: [none, pending, active, expired]
+                    example: none
+                  process_status:
+                    $ref: "#/components/schemas/ProcessStatus"
+                  kaspi_connected:
+                    type: boolean
+                    example: false
+              example:
+                success: true
+                status: none
+                process_status: idle
+                kaspi_connected: false
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
