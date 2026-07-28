@@ -9,7 +9,7 @@
 const API_KEY = process.env.API_KEY
 const API_BASE_URL = 'https://api.apipay.kz/api/v1'
 
-async function createInvoice(amount, phoneNumber, description, externalOrderId) {
+async function createInvoice(amount, phoneNumber, description, externalOrderId, idempotencyKey) {
   const response = await fetch(`${API_BASE_URL}/invoices`, {
     method: 'POST',
     headers: {
@@ -20,7 +20,10 @@ async function createInvoice(amount, phoneNumber, description, externalOrderId) 
       amount,
       phone_number: phoneNumber,
       description,
-      external_order_id: externalOrderId
+      external_order_id: externalOrderId,
+      // Idempotency key (unique per organization). Repeating a request with the same
+      // value returns 409 duplicate_idempotency_key instead of creating a second invoice.
+      external_order_id_idempotency: idempotencyKey
     })
   })
 
@@ -46,7 +49,8 @@ async function main() {
       10000,              // amount in KZT
       '87001234567',      // customer phone
       'Test payment',     // description
-      'order_123'         // your order ID
+      'order_123',        // your order ID
+      'order_123'         // idempotency key
     )
 
     console.log('\nInvoice created successfully!')
@@ -54,8 +58,10 @@ async function main() {
     console.log(`Invoice ID: ${invoice.id}`)
     console.log(`Amount: ${invoice.amount} KZT`)
     console.log(`Status: ${invoice.status}`)
-    console.log(`Phone: ${invoice.phone_number}`)
-    console.log('\nThe customer will receive a payment notification in the Kaspi app.')
+    console.log(`Phone: ${invoice.phone}`)
+    console.log('\nStatus "processing" means the invoice has not reached Kaspi yet.')
+    console.log('The final status (pending or error) arrives via the invoice.status_changed')
+    console.log('webhook, or poll GET /invoices/{id}. Do not re-create the invoice meanwhile.')
 
   } catch (error) {
     console.error('Error:', error.message)

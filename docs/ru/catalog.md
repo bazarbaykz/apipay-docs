@@ -89,7 +89,7 @@ curl -X POST https://api.apipay.kz/api/v1/catalog/scan \
 | `429` `kaspi_throttled` | Слишком часто (в теле `retry_after_seconds`, в заголовке `Retry-After`) | Подождите указанное время и повторите |
 | `503` `kaspi_scan_unavailable` | Нацкаталог временно недоступен | Повторите позже |
 
-**Лимиты:** 30 запросов/мин и 2000/сутки на API-ключ. Circuit-breaker: если Kaspi ограничил частоту, около 90 секунд эндпоинт сразу отдаёт `429 kaspi_throttled` — на это время сделайте паузу.
+**Лимиты:** 30 запросов/мин и 2000/сутки на API-ключ. Если Kaspi ограничил частоту, эндпоинт отвечает `429 kaspi_throttled` — дождитесь времени из `retry_after_seconds` (заголовок `Retry-After`) и повторите.
 
 **Типовой сценарий:** сканирование штрихкода → `POST /catalog/scan` → показать `data[]` (если пусто — создать товар без `ntin`/`gtin`) → продавец выбирает кандидата → `POST /catalog` с `ntin`/`gtin`/`from_catalog: true` → товар создаётся в статусе `pending` → асинхронно уходит в Kaspi → `active`.
 
@@ -97,7 +97,7 @@ curl -X POST https://api.apipay.kz/api/v1/catalog/scan \
 
 **Эндпоинт:** `POST /catalog`
 
-Пакетное создание 1-50 товаров.
+Пакетное создание: 1–100 позиций за запрос.
 
 ```bash
 curl -X POST https://api.apipay.kz/api/v1/catalog \
@@ -106,7 +106,7 @@ curl -X POST https://api.apipay.kz/api/v1/catalog \
   -d '{"items": [{"name": "Кофе латте", "selling_price": 1500, "unit_id": 1, "image_id": "550e8400-..."}]}'
 ```
 
-Поля: `name` (обяз.), `selling_price` (обяз.), `unit_id` (обяз.), `image_id` (опц.), `barcode` (опц., строка, макс. 50).
+Поля: `name` (обяз., строка, макс. 255), `selling_price` (обяз., число, мин. 0.01), `unit_id` (обяз., целое), `image_id` (опц., UUID из `POST /catalog/upload-image`), `barcode` (опц., строка, макс. 32).
 
 Поля Нацкаталога (опц., заполняются из выбранного кандидата `POST /catalog/scan`):
 
@@ -155,18 +155,20 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 ### JavaScript
 
 ```javascript
-// Загрузка изображения
+// ⚠️ X-API-Key — секрет. Все вызовы API выполняйте со своего сервера;
+// в код, который попадает в браузер, ключ помещать нельзя.
+import fs from 'node:fs/promises'
+
 const formData = new FormData()
-formData.append('image', fileInput.files[0])
+formData.append('image', new Blob([await fs.readFile('photo.jpg')]), 'photo.jpg')
 const upload = await fetch('https://api.apipay.kz/api/v1/catalog/upload-image', {
-  method: 'POST', headers: { 'X-API-Key': 'YOUR_API_KEY' }, body: formData
+  method: 'POST', headers: { 'X-API-Key': process.env.APIPAY_KEY }, body: formData
 })
 const { image_id } = await upload.json()
 
-// Создание товаров
 await fetch('https://api.apipay.kz/api/v1/catalog', {
   method: 'POST',
-  headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
+  headers: { 'X-API-Key': process.env.APIPAY_KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({ items: [{ name: 'Кофе латте', selling_price: 1500, unit_id: 1, image_id }] })
 })
 ```

@@ -43,7 +43,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -d '{
     "return_items": [
       { "catalog_item_id": 101, "count": 2 },
-      { "catalog_item_id": 612506, "amount": 19750 }
+      { "catalog_item_id": 205, "amount": 19750 }
     ],
     "reason": "Partial order return"
   }'
@@ -68,8 +68,8 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   "invoice": {
     "id": 42,
     "amount": "10000.00",
-    "status": "partially_refunded",
-    "total_refunded": "5000.00",
+    "status": "paid",
+    "total_refunded": "0.00",
     "pending_refund_amount": 5000,
     "available_for_refund": 5000
   }
@@ -167,6 +167,7 @@ curl https://api.apipay.kz/api/v1/invoices/42/refunds \
 1. **Only paid invoices** — Refund invoices with `status: "paid"` or `"partially_refunded"`
 2. **Multiple partial refunds** — Issue multiple partial refunds up to the original amount
 3. **Amount validation** — Cannot exceed `available_for_refund`
+4. **Connected Kaspi cashier required** — refunds go through the connected cashier. If the cashier is disconnected, a refund cannot be issued via the API — do it manually in the Kaspi Pay app.
 
 ## Code Examples
 

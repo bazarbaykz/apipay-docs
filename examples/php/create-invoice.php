@@ -27,7 +27,10 @@ function createInvoice($amount, $phoneNumber, $description = null, $externalOrde
             'amount' => $amount,
             'phone_number' => $phoneNumber,
             'description' => $description,
-            'external_order_id' => $externalOrderId
+            'external_order_id' => $externalOrderId,
+            // Idempotency key (unique per organization): a repeat with the same value
+            // returns 409 duplicate_idempotency_key instead of a second invoice.
+            'external_order_id_idempotency' => $externalOrderId
         ]),
         CURLOPT_RETURNTRANSFER => true
     ]);
@@ -67,8 +70,10 @@ try {
     echo "Invoice ID: {$invoice['id']}\n";
     echo "Amount: {$invoice['amount']} KZT\n";
     echo "Status: {$invoice['status']}\n";
-    echo "Phone: {$invoice['phone_number']}\n";
-    echo "\nThe customer will receive a payment notification in the Kaspi app.\n";
+    echo "Phone: {$invoice['phone']}\n";
+    echo "\nStatus \"processing\" means the invoice has not reached Kaspi yet.\n";
+    echo "The final status (pending or error) arrives via the invoice.status_changed\n";
+    echo "webhook, or poll GET /invoices/{id}. Do not re-create the invoice meanwhile.\n";
 
 } catch (Exception $e) {
     echo "Error: {$e->getMessage()}\n";

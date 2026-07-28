@@ -17,12 +17,12 @@
 
 ## Code Examples
 
-* [JavaScript](examples/javascript/create-invoice.js)
-* [Python](examples/python/create_invoice.py)
-* [PHP](examples/php/create-invoice.php)
-* [cURL](examples/curl/examples.sh)
+* [JavaScript](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/javascript)
+* [Python](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/python)
+* [PHP](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/php)
+* [cURL](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/curl)
 
 ## Reference
 
-* [OpenAPI Specification](openapi.yaml)
-* [Partner API OpenAPI Spec](openapi-partner.yaml)
+* [OpenAPI Specification](https://github.com/bazarbaykz/apipay-docs/blob/main/openapi.yaml)
+* [Partner API OpenAPI Spec](https://github.com/bazarbaykz/apipay-docs/blob/main/openapi-partner.yaml)

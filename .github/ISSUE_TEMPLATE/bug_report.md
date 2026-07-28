@@ -6,6 +6,10 @@ labels: bug
 assignees: ''
 ---
 
+> ⚠️ This is a public repository — issues and their history stay visible forever.
+> Do not paste API keys, customer phone numbers, real invoice/receipt/transaction IDs
+> or raw request logs. Mask them: `YOUR_API_KEY`, `87001234567`.
+
 ## Description
 
 A clear description of the error or issue.

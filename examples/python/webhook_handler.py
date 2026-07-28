@@ -49,7 +49,9 @@ def handle_invoice_status_changed(invoice: dict):
         print(f"  Client: {invoice.get('client_name')}")
         if invoice.get('external_order_id'):
             print(f"  Order ID: {invoice['external_order_id']}")
-            # TODO: Fulfill the order
+            # TODO: fulfill the order — deduplicate first!
+            # Delivery is at-least-once: the same (invoice.id, invoice.status) pair
+            # can arrive more than once. Skip the event if you already processed it.
 
     elif status == 'cancelled':
         print('  Invoice was cancelled')
@@ -58,8 +60,13 @@ def handle_invoice_status_changed(invoice: dict):
         print('  Invoice expired')
 
 
-def handle_invoice_refunded(invoice: dict):
-    """Handle invoice refunded event."""
+def handle_invoice_refunded(refund: dict, invoice: dict):
+    """Handle invoice refunded event — fires for both successful and failed refunds."""
+    if refund.get('status') != 'completed':
+        print(f"\nRefund #{refund['id']} for invoice #{invoice['id']} FAILED: {refund.get('error_code')}")
+        print('  Money was NOT returned. Do not mark the order as refunded.')
+        return
+
     print(f"\nInvoice #{invoice['id']} refunded")
     print(f"  Status: {invoice.get('status')}")
     print(f"  Total refunded: {invoice.get('total_refunded')} KZT")
@@ -71,14 +78,14 @@ def handle_subscription_event(event_type: str, data: dict):
     print(f"\nSubscription #{sub['id']} — {event_type}")
 
     if event_type == 'subscription.payment_succeeded':
-        inv = data['invoice']
-        print(f"  Payment succeeded! Invoice #{inv['id']}: {inv['amount']} KZT")
+        print(f"  Payment succeeded! Invoice #{data['invoice_id']}: {data['amount']} KZT")
+        print(f"  Paid at: {data.get('paid_at')}")
 
     elif event_type == 'subscription.payment_failed':
         print(f"  Payment failed: {data.get('reason')}")
 
     elif event_type == 'subscription.grace_period_started':
-        print(f"  Grace period: {sub.get('grace_period_days')} days, {sub.get('retry_attempts_remaining')} retries left")
+        print(f"  Grace period: {data.get('grace_period_days')} days, expires at {data.get('expires_at')}")
 
     elif event_type == 'subscription.expired':
         print('  Subscription expired')
@@ -106,10 +113,10 @@ def webhook():
             handle_invoice_status_changed(event['invoice'])
 
         elif event_type == 'invoice.refunded':
-            handle_invoice_refunded(event['invoice'])
+            handle_invoice_refunded(event['refund'], event['invoice'])
 
         elif event_type.startswith('subscription.'):
-            handle_subscription_event(event_type, event['data'])
+            handle_subscription_event(event_type, event)
 
         else:
             print(f"Unknown event type: {event_type}")

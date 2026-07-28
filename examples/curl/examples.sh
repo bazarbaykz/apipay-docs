@@ -1,11 +1,12 @@
 #!/bin/bash
 #
-# ApiPay.kz - cURL Examples (API v2)
+# ApiPay.kz - cURL Examples (API v1)
 #
 # These examples demonstrate how to use the ApiPay.kz API with cURL.
 #
 # Usage:
 #   export API_KEY="your_api_key"
+#   export BASE_URL="https://api.apipay.kz/api/v1"
 #   ./examples.sh
 #
 # Or run individual commands by copying them.
@@ -13,7 +14,7 @@
 API_KEY="${API_KEY:-your_api_key}"
 BASE_URL="https://api.apipay.kz/api/v1"
 
-echo "ApiPay.kz API v2 Examples"
+echo "ApiPay.kz API v1 Examples"
 echo "========================="
 echo ""
 
@@ -61,7 +62,7 @@ echo '      {"catalog_item_id": 101, "count": 2},'
 echo '      {"catalog_item_id": 205, "count": 3}'
 echo '    ]'
 echo '  }'\'
-echo "# discount_percentage is REQUIRED when cart items have discount"
+echo "# discount_percentage is optional: a global 1-99% discount on the whole invoice"
 echo ""
 
 echo "3. List Invoices"
@@ -107,7 +108,7 @@ echo "-----------------"
 echo 'curl -X POST $BASE_URL/invoices/42/refund \'
 echo '  -H "X-API-Key: $API_KEY" \'
 echo '  -H "Content-Type: application/json" \'
-echo '  -d '\''{"amount": 5000, "reason": "Partial return"}'\/
+echo '  -d '\''{"amount": 5000, "reason": "Partial return"}'\'
 echo ""
 
 echo "9. List Refunds"
@@ -140,7 +141,7 @@ echo '  -H "X-API-Key: $API_KEY" \'
 echo '  -H "Content-Type: application/json" \'
 echo '  -d '\''{'
 echo '    "items": ['
-echo '      {"name": "Coffee Latte", "selling_price": 1500, "unit_id": 1, "image_id": "550e8400-..."},'
+echo '      {"name": "Coffee Latte", "selling_price": 1500, "unit_id": 1, "image_id": "550e8400-e29b-41d4-a716-446655440000"},'
 echo '      {"name": "Cookie", "selling_price": 500, "unit_id": 1}'
 echo '    ]'
 echo '  }'\'
@@ -176,7 +177,7 @@ echo '    "billing_period": "monthly",'
 echo '    "billing_day": 1,'
 echo '    "subscriber_name": "John Doe",'
 echo '    "description": "Monthly subscription"'
-echo '  }'\/
+echo '  }'\'
 echo ""
 
 echo "16. List Subscriptions"

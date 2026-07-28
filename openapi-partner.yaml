@@ -21,11 +21,11 @@ info:
 
     ## Границы этой спецификации
 
-    Здесь описана **только** S2S-поверхность X-Partner-Key (`routes/partner.php`,
-    17 эндпоинтов). Партнёрский **кабинет** под Sanctum-сессией
+    Здесь описана **только** S2S-поверхность ключа `X-Partner-Key` —
+    17 эндпоинтов. Партнёрский **кабинет**
     (`api-key/rotate`, `PUT /mode`, `webhook-logs`, `claim-requests`,
     `sandbox/toggle`, `production-request`, `managed-organizations` и т.д.) —
-    отдельная поверхность в `routes/api.php` и в этот машинный канон НЕ входит.
+    отдельная поверхность, и в этот машинный канон она НЕ входит.
 
 
     ## Поток онбординга
@@ -76,12 +76,12 @@ info:
 
     ## Rate limits
 
-    - `partner-api` — 120 req/min на партнёра (вся группа).
+    - Общий лимит группы — 120 req/min на партнёра.
 
-    - `partner-org-create` — 10 req/min на партнёра (`POST /organizations`).
+    - Создание организаций — 10 req/min на партнёра (`POST /organizations`).
 
-    - `partner-kaspi-auth` — 10 req/min на партнёра+организацию для боевой орг
-      (60 req/min для тестовой — мок не шлёт SMS): `send-phone`, `verify-otp`.
+    - Шаги авторизации кассира (`send-phone`, `verify-otp`) — 10 req/min на
+      партнёра+организацию для боевой организации, 60 req/min для тестовой.
   contact:
     name: ApiPay.kz Support
     url: https://apipay.kz
@@ -402,10 +402,9 @@ paths:
       summary: Шаг 2 — отправить номер кассира
       description: >-
         Kaspi отправляет SMS-код на телефон кассира. Лимит
-        `partner-kaspi-auth` — 10 req/min (боевая) / 60 req/min (тестовая) на
-        партнёра+организацию. В sandbox используются магические тестовые номера
-        кассира (детерминированные ветки успеха/ошибок) — см. раздел Sandbox в
-        `docs/partner-api.md`.
+        на шаги авторизации кассира — 10 req/min (боевая) / 60 req/min (тестовая)
+        на партнёра+организацию. В sandbox используются тестовые номера кассира
+        с детерминированными ветками успеха и ошибок.
       operationId: partnerKaspiAuthSendPhone
       requestBody:
         required: true
@@ -448,8 +447,8 @@ paths:
           description: >-
             Конфликт процесса: `no_process` (авторизация не начата — вызовите
             `init`), `context_expired` (Kaspi-контекст протух, ~10 мин — вызовите
-            `init` заново), `org_claim_conflict` (номер уже привязан к
-            организации другого владельца).
+            `init` заново), `cashier_unavailable` (подключить этого кассира
+            сейчас нельзя; повтор запроса не поможет).
           content:
             application/json:
               schema:
@@ -486,11 +485,7 @@ paths:
                 error: sms_failed
                 error_code: sms_failed
                 message: Не удалось отправить SMS.
-        # ПРОВЕРЕНО 2026-07-19 по коду: `Retry-After: 60` ставит ТОЛЬКО
-        # app/Traits/HandlesSelfAuthException.php (SPA-кабинет и /api/v1/*).
-        # Партнёрская поверхность идёт через HandlesPartnerOrgKaspiAuth +
-        # PartnerApiResponse::error() — оба заголовок НЕ ставят, глобального
-        # обработчика на этом пути нет. Заголовок здесь намеренно не объявлен.
+        # Заголовок Retry-After на партнёрской поверхности не объявлен намеренно.
         "503":
           description: >-
             `kaspi_busy` — Kaspi временно недоступен/троттлит. Заголовок
@@ -537,7 +532,7 @@ paths:
         отдаёт **422 `not_registered`** (а не 200), сессия авторизации
         закрывается, и повторять OTP или запрашивать SMS заново бессмысленно:
         следующий `send-phone` вернёт `409 no_process`. Нужен новый `init` —
-        после того, как номер добавлен кассиром в Kaspi Business → Кассиры.
+        после того, как номер добавлен кассиром в Kaspi Pay → Кассиры.
       operationId: partnerKaspiAuthVerifyOtp
       requestBody:
         required: true
@@ -609,8 +604,8 @@ paths:
           $ref: "#/components/responses/OrganizationNotFound"
         "409":
           description: >-
-            `no_process` (авторизация не начата/истекла), `org_claim_conflict`
-            (конкурентная привязка кассира к чужой организации),
+            `no_process` (авторизация не начата/истекла), `cashier_unavailable`
+            (подключить этого кассира сейчас нельзя; повтор не поможет),
             `context_expired` (Kaspi потерял контекст процесса — нужен новый
             `init`, а не повтор OTP).
           content:
@@ -642,16 +637,16 @@ paths:
                 message: Номер не зарегистрирован как кассир Kaspi.
         "502":
           description: >-
-            Внутренняя ошибка финализации Kaspi-сессии: `finish_no_x509`,
-            `finish_no_token_sn`, `http_error`.
+            Не удалось завершить подключение кассира на стороне Kaspi.
+            Повторите подключение с шага `init`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
               example:
                 success: false
-                error: finish_no_x509
-                error_code: finish_no_x509
+                error: http_error
+                error_code: http_error
                 message: Произошла ошибка.
         "503":
           description: >-
@@ -797,7 +792,7 @@ paths:
         `webhook_url` проходит SSRF-валидацию (приватные/внутренние адреса
         отклоняются 422). До одобрения KYC на проде webhook обязан быть доменом
         (не IP/туннель). «Risk»-адрес (nip.io, free-TLD, dynamic-DNS, перехватчик
-        типа webhook.site) в режиме enforce требует `webhook_justification` (≥20)
+        типа webhook.site) требует `webhook_justification` (не короче 20 символов)
         и уходит на ручную модерацию: `webhook_review_status:"pending_review"`,
         доставка уведомлений НЕ идёт до одобрения админом.
       operationId: createPartnerApiKey
@@ -1052,8 +1047,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: >-
-            `production_access_required` — боевая организация у sandbox-партнёра
-            (middleware `partner.production`); либо `forbidden` (не operating).
+            `production_access_required` — боевая организация у sandbox-партнёра;
+            либо `forbidden` — ключ не operating.
           content:
             application/json:
               schema:
@@ -1152,12 +1147,18 @@ paths:
         после поступления средств — **автоактивации НЕТ**. Счёт виден в истории
         платежей (`GET .../tariff/payments`) как `payment_method=invoice` с
         под-объектом `invoice`; переход статуса `pending`→`completed` = тариф
-        выдан (поллинг). Событие вебхука об активации — см. раздел вебхуков
-        `docs/partner-api.md` (`tariff.activated`).
+        выдан (поллинг). Об активации партнёру уходит вебхук `tariff.activated`.
 
 
         Боевая организация — только для **production**-партнёра (иначе
-        `403 production_access_required`, middleware `partner.production`).
+        `403 production_access_required`).
+
+
+        ⛔ Тестовая (sandbox) организация счёт **не получает** —
+        `409 test_organization`. Она эфемерна: переход партнёра в production
+        удаляет её вместе с тарифом, поэтому реальные деньги на неё не
+        принимаются. Тариф песочницы проверяется мок-активацией
+        `POST .../tariff/pay`.
       operationId: partnerTariffInvoice
       requestBody:
         required: true
@@ -1211,8 +1212,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: >-
-            `production_access_required` — боевая организация у sandbox-партнёра
-            (middleware `partner.production`); либо `forbidden` (не operating).
+            `production_access_required` — боевая организация у sandbox-партнёра;
+            либо `forbidden` — ключ не operating.
           content:
             application/json:
               schema:
@@ -1225,7 +1226,9 @@ paths:
         "409":
           description: >-
             `invoice_locked` — другая операция выписки счёта для этой организации
-            ещё в процессе (лок не взят за 3с). Повторите.
+            ещё в процессе, повторите запрос. `test_organization` —
+            организация тестовая (`is_test`): счёт на реальные деньги не
+            выписывается, ретрай бессмыслен.
           content:
             application/json:
               schema:
@@ -1453,12 +1456,12 @@ components:
         external_id:
           type: string
           nullable: true
-          description: Референс клиента в CRM (колонка partner_external_id)
+          description: Ваш идентификатор клиента в CRM (ключ идемпотентности)
           example: crm-client-42
         origin:
           type: string
           enum: [referral, created, claimed]
-          description: Происхождение орги (аддитив B4, НИКОГДА не null)
+          description: Происхождение организации; поле всегда заполнено
           example: created
         payment_status:
           type: string
@@ -1568,7 +1571,7 @@ components:
         download_url:
           type: string
           format: uri
-          description: Публичная ссылка на PDF счёта
+          description: Ссылка на PDF счёта; открывается без авторизации — передавайте её только покупателю
           example: https://apipay.kz/invoices/xxxxxxxx/download
         buyer_name:
           type: string
@@ -1618,7 +1621,7 @@ components:
         download_url:
           type: string
           format: uri
-          description: Публичная ссылка на PDF счёта
+          description: Ссылка на PDF счёта; открывается без авторизации — передавайте её только покупателю
           example: https://apipay.kz/invoices/xxxxxxxx/download
         created_at:
           type: string
@@ -1727,7 +1730,9 @@ components:
         daily_limit:
           type: integer
           nullable: true
-          description: Дневной лимит счетов (null = безлимит, pro)
+          description: >-
+            Дневной лимит счетов из каталога тарифов. `null` — лимит в каталоге
+            не задан: для тарифа Pro объём согласуется индивидуально.
           example: 100
         base_price:
           type: integer
@@ -1755,8 +1760,7 @@ components:
               type: integer
               description: |
                 Мерчанты, у которых нет ни одного РАБОЧЕГО кассира: коннекшн отключён ЛИБО его
-                Kaspi-сессия мертва (`session_status` ∈ {expired, error}). Вторая ось добавлена
-                2026-07-14 — до неё мёртвая сессия не считалась вообще, и счётчик занижал.
+                Kaspi-сессия мертва (`session_status` ∈ {expired, error}).
                 Пока сессия мертва, счета/чеки мерчанта отдают `409 kaspi_session_expired`.
             tariff_active:
               type: integer
@@ -1828,8 +1832,8 @@ components:
     AuthError:
       type: object
       description: >-
-        Сокращённая форма ошибок middleware-слоя (partner.key / partner.org /
-        partner.production). Содержит только `success` и `error`; для
+        Сокращённая форма ошибок слоя аутентификации и проверки доступа.
+        Содержит только `success` и `error`; для
         `forbidden` (не operating) дополнительно дублируется `error_code`.
       required: [success, error]
       properties:
@@ -1841,7 +1845,7 @@ components:
           example: organization_not_found
         error_code:
           type: string
-          description: Присутствует только для `forbidden` (VerifyPartnerKey)
+          description: Присутствует только для `forbidden`
     LaravelValidationError:
       type: object
       description: >-
@@ -1893,7 +1897,7 @@ components:
             error_code: forbidden
     ProductionRequired:
       description: >-
-        Боевая организация у sandbox-партнёра (middleware `partner.production`):
+        Боевая организация у sandbox-партнёра:
         `production_access_required` (403). Также возможен `forbidden` при
         не-operating ключе. Тело — сокращённая форма `{ success:false, error }`.
       content:
@@ -1922,8 +1926,8 @@ components:
             $ref: "#/components/schemas/LaravelValidationError"
     RateLimited:
       description: >-
-        Превышен rate-limit (`partner-api` 120/min, `partner-org-create`
-        10/min, `partner-kaspi-auth` 10|60/min). Заголовок `Retry-After`, тело —
+        Превышен rate-limit (группа — 120/min, создание организаций — 10/min,
+        шаги авторизации кассира — 10|60/min). Заголовок `Retry-After`, тело —
         стандартная Laravel-форма.
       headers:
         Retry-After:
@@ -1939,9 +1943,7 @@ components:
 #
 # OpenAPI 3.0 не имеет top-level `webhooks` (это ключ 3.1). Используем
 # расширение `x-webhooks` (совместимо с Redoc) с той же структурой, что
-# path-операции. Источник — docs/partner-api.md § Webhooks; формат payload
-# идентичен публичному API. Полный каталог событий/полей — docs/reference-
-# webhooks.md (не воспроизводим здесь целиком, чтобы не выдумывать).
+# path-операции. Формат payload идентичен публичному API — см. docs/ru/webhooks.md.
 #
 # ⚠️ timestamp внутри payload приходит в UTC (+00:00), в отличие от дат
 # HTTP-ответов API (+05:00).

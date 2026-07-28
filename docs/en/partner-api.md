@@ -185,8 +185,8 @@ All endpoints return the organization in a single format:
 
 | Group | Limit |
 |-------|-------|
-| `partner-api` (all endpoints) | 120 requests/minute per partner |
-| `partner-kaspi-auth` (`send-phone`, `verify-otp`) | 10 requests/minute per partner + organization |
+| All Partner API endpoints | 120 requests/minute per partner |
+| Cashier authorization (`send-phone`, `verify-otp`) | 10 requests/minute per partner and organization |
 
 ## Error Codes
 

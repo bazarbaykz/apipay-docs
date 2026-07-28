@@ -108,7 +108,7 @@ If nothing is found, you get `data: []` and/or a `scan_result.code` other than `
 | `429` `kaspi_throttled` | Too frequent (body has `retry_after_seconds`, header has `Retry-After`) | Wait the indicated time, then retry |
 | `503` `kaspi_scan_unavailable` | The National Catalog is temporarily unavailable | Retry later |
 
-**Rate limits:** 30 requests/min and 2000/day per API key. Circuit breaker: if Kaspi throttles the till, the endpoint returns `429 kaspi_throttled` immediately for about 90 seconds — pause for that period.
+**Rate limits:** 30 requests/min and 2000/day per API key. If Kaspi throttles requests, the endpoint returns `429 kaspi_throttled` — wait for the time in `retry_after_seconds` (the `Retry-After` header) before retrying.
 
 **Typical flow:** scan the barcode → `POST /catalog/scan` → show `data[]` (if empty, create the item without `ntin`/`gtin`) → the merchant picks a candidate → `POST /catalog` with `ntin`/`gtin`/`from_catalog: true` → the item is created with status `pending` → it is pushed to Kaspi asynchronously → `active`.
 
@@ -116,7 +116,7 @@ If nothing is found, you get `data: []` and/or a `scan_result.code` other than `
 
 **Endpoint:** `POST /catalog`
 
-Batch create 1-50 items.
+Batch create 1–100 items per request.
 
 ```bash
 curl -X POST https://api.apipay.kz/api/v1/catalog \
@@ -138,7 +138,7 @@ curl -X POST https://api.apipay.kz/api/v1/catalog \
 | `selling_price` | number | Yes | Price in KZT (min 0.01) |
 | `unit_id` | integer | Yes | Unit of measurement ID |
 | `image_id` | string | No | Image UUID from upload-image |
-| `barcode` | string | No | Barcode (max 50 chars) |
+| `barcode` | string | No | Barcode (optional, string, max 32 characters — a Kaspi limit) |
 | `ntin` | string | No | NTIN of the selected National Catalog candidate (max 50) |
 | `gtin` | string | No | GTIN, only for GS1 candidates (max 50) |
 | `from_catalog` | boolean | No | Marks the item as created from the National Catalog (default `false`) |
@@ -158,7 +158,7 @@ curl -X PATCH https://api.apipay.kz/api/v1/catalog/101 \
   -d '{"name": "Coffee Latte Grande", "selling_price": 1800}'
 ```
 
-Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode`, `ntin` (optional, string, max 50), `gtin` (optional, string, max 50).
+Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode` (optional, string, max 32 characters — a Kaspi limit), `ntin` (optional, string, max 50), `gtin` (optional, string, max 50).
 
 > ⚠️ **Important about `ntin`/`gtin`.** Send these fields only when you actually want to change the National Catalog identity. For a regular edit (for example, price only), **do not send** `ntin`/`gtin` — otherwise `null` overwrites the National Catalog identity in Kaspi. It cannot be restored by synchronization: the Kaspi listing does not return `gtin`.
 
@@ -198,12 +198,17 @@ See [Invoices](invoices.md) for details.
 ### JavaScript
 
 ```javascript
+// X-API-Key is a secret — call the API from your server only, never from browser code
+import { readFile } from 'node:fs/promises'
+
+const API_KEY = process.env.APIPAY_KEY
+
 // Upload image
 const formData = new FormData()
-formData.append('image', fileInput.files[0])
+formData.append('image', new Blob([await readFile('photo.jpg')]), 'photo.jpg')
 const upload = await fetch('https://api.apipay.kz/api/v1/catalog/upload-image', {
   method: 'POST',
-  headers: { 'X-API-Key': 'YOUR_API_KEY' },
+  headers: { 'X-API-Key': API_KEY },
   body: formData
 })
 const { image_id } = await upload.json()
@@ -211,7 +216,7 @@ const { image_id } = await upload.json()
 // Create items
 await fetch('https://api.apipay.kz/api/v1/catalog', {
   method: 'POST',
-  headers: { 'X-API-Key': 'YOUR_API_KEY', 'Content-Type': 'application/json' },
+  headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({
     items: [{ name: 'Coffee Latte', selling_price: 1500, unit_id: 1, image_id }]
   })

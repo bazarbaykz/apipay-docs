@@ -2,7 +2,8 @@
  * ApiPay.kz - Manage Catalog Example
  *
  * This example demonstrates how to manage catalog items:
- * upload images, create items, update and delete.
+ * list the catalog, create items and read the per-item rejected[] result.
+ * uploadImage() below is a helper for POST /catalog/upload-image.
  *
  * Usage: API_KEY=your_key node manage-catalog.js
  */
@@ -79,10 +80,18 @@ async function main() {
     // Create new items (without image)
     console.log('\nCreating catalog items...')
     const result = await createItems([
-      { name: 'Coffee Latte', selling_price: 1500, unit_id: 1 },
-      { name: 'Cookie', selling_price: 500, unit_id: 1 }
+      { name: 'Coffee Latte', selling_price: 1500, unit_id: 1, external_ref: 'SKU-LATTE' },
+      { name: 'Cookie', selling_price: 500, unit_id: 1, external_ref: 'SKU-COOKIE' }
     ])
-    console.log('Items created (202 Accepted — processing async)')
+
+    // Валидация по позициям: битая позиция не роняет батч, она приходит в rejected[].
+    // rejected[] есть в ответе всегда — проверяйте его, иначе часть каталога не зальётся.
+    console.log(`Accepted: ${result.data.length}, rejected: ${result.rejected.length}`)
+    for (const item of result.rejected) {
+      console.error(`  item #${item.index}: ${item.error_code} — ${item.error_message}`)
+    }
+    // Production: позиции создаются в статусе pending, синхронизация в Kaspi асинхронная.
+    // Sandbox: позиции активны сразу. Итог сверяйте через GET /catalog?external_refs[]=...
 
   } catch (error) {
     console.error('Error:', error.message)

@@ -43,7 +43,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   -d '{
     "return_items": [
       { "catalog_item_id": 101, "count": 2 },
-      { "catalog_item_id": 612506, "amount": 19750 }
+      { "catalog_item_id": 205, "amount": 19750 }
     ],
     "reason": "Возврат части заказа"
   }'
@@ -68,8 +68,8 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
   "invoice": {
     "id": 42,
     "amount": "10000.00",
-    "status": "partially_refunded",
-    "total_refunded": "5000.00",
+    "status": "paid",
+    "total_refunded": "0.00",
     "pending_refund_amount": 5000,
     "available_for_refund": 5000
   }
@@ -167,6 +167,7 @@ curl https://api.apipay.kz/api/v1/invoices/42/refunds \
 1. **Только оплаченные счета** — Можно вернуть счета со статусом `paid` или `partially_refunded`
 2. **Несколько частичных возвратов** — Можно сделать несколько частичных возвратов до исходной суммы
 3. **Валидация суммы** — Сумма не может превышать `available_for_refund`
+4. **Нужна подключённая Kaspi-касса** — возврат проводится через подключённого кассира. Если кассир отключён, вернуть деньги через API нельзя — возврат делают вручную в приложении Kaspi Pay.
 
 ## Примеры кода
 

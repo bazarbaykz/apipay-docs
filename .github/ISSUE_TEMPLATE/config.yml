@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support (WhatsApp)
+    url: https://wa.me/77085167489
+    about: >-
+      Questions about your account, API keys, connecting a Kaspi cashier or a
+      specific payment. Please do not open a public issue for these — support
+      answers faster and your data stays private.
+  - name: Dashboard (apipay.kz)
+    url: https://apipay.kz
+    about: >-
+      Sign in to get your API key, connect a cashier and inspect invoices,
+      refunds and webhook deliveries.

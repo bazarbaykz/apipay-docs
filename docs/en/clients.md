@@ -2,7 +2,7 @@
 
 Spot-check phone numbers before creating an invoice or a subscription. Helps you avoid issuing an invoice to a number that has no Kaspi app installed (such an invoice would land in `error` with a descriptive `error_message`, but still burn your quota).
 
-> ⚠️ **Bulk number enumeration is prohibited.** Use the endpoint only for a one-off confirmation in the context of a known customer — before creating an invoice/subscription or processing a refund. The server runs a multi-layer anomaly detector (it factors in request distribution, number patterns, behavioural signals and a combination of other heuristics — the exact thresholds are intentionally not published). When the detector trips, the API key is deactivated without warning, the organization is blocked pending manual review, and the data is forwarded to Kaspi. This protection exists to safeguard Kaspi users — please use the endpoint for its intended purpose.
+> ⚠️ **Bulk number enumeration is prohibited.** The endpoint is meant for a one-off check of a number of a customer you already know — before creating an invoice or subscription, or processing a refund. If it is used for anything else, the API key is deactivated without warning. Limits: 60 requests per minute and 10 000 per day per API key.
 
 ## Check a phone number
 
@@ -49,7 +49,7 @@ curl -X POST https://api.apipay.kz/api/v1/clients/check \
 |--------|------|------|
 | `401` | `{"error": "Invalid API key", "message": "..."}` or `{"error": "API key is missing", ...}` | Missing or invalid `X-API-Key`. |
 | `422` | `{"error": "Validation failed", "field": "phone", "message": "..."}` | `phone` is empty, missing, or fails to normalize to 11 digits. |
-| `429` | `{"message": "Too Many Requests"}` | Per-key rate limit exceeded (60/min or 10 000/day). See the `Retry-After` header. |
+| `429` | `{"message": "Too Many Requests"}` | Exceeded the per-key limit for this endpoint (60/min, 10 000/day); the overall key limit is 200/min. See the `Retry-After` header. |
 
 See also [Errors and limits](errors.md).
 

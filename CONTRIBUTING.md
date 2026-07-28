@@ -8,7 +8,7 @@ Thank you for your interest in improving the ApiPay.kz documentation! This guide
 
 If you find an error in the documentation or have a suggestion:
 
-1. Check if the issue already exists in [GitHub Issues](../../issues)
+1. Check if the issue already exists in [GitHub Issues](https://github.com/bazarbaykz/apipay-docs/issues)
 2. If not, create a new issue with:
    - Clear description of the problem
    - Location in documentation (file, section)
@@ -22,6 +22,11 @@ We welcome improvements to:
 - **Examples** — Add or improve code examples
 - **Translations** — Improve Russian translations or add new languages
 - **Typos** — Fix spelling and grammar errors
+
+> **Which files can be edited.** Pull requests are accepted only for `docs/**` and `examples/**`.
+> The files `openapi.yaml`, `openapi-partner.yaml` and `llms.txt` are mirrors of the upstream
+> source and are regenerated automatically — any change to them will be overwritten by the next
+> sync. If you spot a problem in those files, please open an issue instead of a pull request.
 
 ### Adding Examples
 
@@ -60,14 +65,16 @@ If you'd like to add code examples:
 
 ### Language
 
-- **English** — Main documentation in `docs/en/`
-- **Russian** — Translations in `docs/ru/`
+- **Russian** — Source of truth in `docs/ru/`. The documentation entry point is `README.ru.md`, and Russian files are written first
+- **English** — Translation of the Russian source in `docs/en/`
+- **Both locales in one PR** — Any change to content must update `docs/ru/` and `docs/en/` together, so the two locales never drift apart
 - Keep language simple and direct
 - Avoid jargon when possible
 
 ### Code Examples
 
-- Use realistic values (not "foo", "bar")
+- Use synthetic values that merely look realistic: phone `87001234567`, amount `10000`, `YOUR_API_KEY` as a key placeholder
+- Never paste real API keys, customer phone numbers, invoice/receipt/transaction IDs or links to real Kaspi receipts — this repository is public and its history is permanent
 - Include error handling where appropriate
 - Add comments for complex logic
 - Test all examples before submitting

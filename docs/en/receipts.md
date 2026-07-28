@@ -13,7 +13,7 @@ When a customer pays via Kaspi QR, Kaspi produces the receipt itself — you don
 
 Before issuing a receipt, make sure that:
 
-1. **The feature is enabled.** Fiscal receipts sit behind a kill-switch on the ApiPay side. If disabled, any request returns `403 fiscal_receipts_disabled`.
+1. **Writing through the cashier is not paused.** Issuing receipts is available unconditionally; `403 fiscal_receipts_disabled` only arrives when writing through the cashier the receipt is addressed to has been paused — use another cashier (`kaspi_connection_id`) or resume writing. Reading the history (`GET /receipts`, `GET /receipts/{id}`) is not gated by anything.
 2. **A Kaspi cashier is connected.** You need an active cashier (Settings → Kaspi Authorization). Otherwise — `409 kaspi_session_not_configured`. If the organization has several active cashiers and no primary one is selected, pass `kaspi_connection_id` (otherwise `422 connection_ambiguous`).
 3. **The shift is open.** The merchant opens the shift in the Kaspi Pos app. If the shift is closed, the receipt fails with status `failed` and `error_code = shift_closed`.
 4. **Line items are fiscal.** Only items from the synchronized catalog (by `catalog_item_id`) that are fiscally registered (with NTIN and barcode) go into the receipt. An item without an NTIN fails the receipt with `item_not_fiscal`. Resolve the NTIN via `POST /catalog/scan` + `PATCH /catalog/{id}` (see [Catalog](catalog.md)).
@@ -167,6 +167,8 @@ The same outcome arrives as a `receipt.issued` (success) or `receipt.failed` (fa
 | `rfo_missing` | — (in `failed`) | The point of sale (RFO) is not determined | Contact support |
 | `receipt_kaspi_error` | — (in `failed`) | Kaspi rejected the issuing | The reason is in `error_message`; contact support if needed |
 | `receipt_dispatch_error` | — (in `failed`) | A technical dispatch failure | Retry with a **new** `client_operation_id` |
+| `kaspi_session_expired` | 409 | The Kaspi cashier session is dead — the receipt will not reach Kaspi | Reconnect the cashier (dashboard → Settings → Kaspi Authorization) and issue the receipt again |
+| `tariff_inactive` | 403 | The ApiPay subscription is not active | Pay for the plan in the dashboard: billable operations, receipts included, are blocked as soon as it lapses |
 
 > Codes without an HTTP status arrive on a failed receipt (`status=failed`) — in the `error_code` field of the `GET /receipts/{id}` response and in the `receipt.failed` webhook. Build your logic on `error_code`, not on the `error_message` text.
 

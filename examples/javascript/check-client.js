@@ -1,5 +1,6 @@
-// Проверить, зарегистрирован ли номер в Kaspi, перед созданием счёта.
-// Не использовать для массового перебора номеров — приведёт к блокировке организации.
+// Вызывайте для номера конкретного покупателя перед выставлением счёта.
+// Массовый перебор номеров запрещён: при использовании не по назначению
+// ключ может быть деактивирован без предупреждения.
 
 const API_KEY = process.env.APIPAY_API_KEY || 'YOUR_API_KEY'
 const BASE_URL = 'https://api.apipay.kz/api/v1'
@@ -21,11 +22,18 @@ async function checkClient(phone) {
   return res.json()
 }
 
-const result = await checkClient('77001234567')
-// { phone: '87001234567', has_kaspi: true, client_name: 'Иван И.' }
+async function main() {
+  const result = await checkClient('77001234567')
+  // { phone: '87001234567', has_kaspi: true, client_name: 'Иван И.' }
 
-if (!result.has_kaspi) {
-  console.error('Клиент не зарегистрирован в Kaspi — попросите другой номер')
-} else {
-  console.log(`Выставить счёт: ${result.client_name} (${result.phone})`)
+  if (!result.has_kaspi) {
+    console.error('Клиент не зарегистрирован в Kaspi — попросите другой номер')
+  } else {
+    console.log(`Выставить счёт: ${result.client_name} (${result.phone})`)
+  }
 }
+
+main().catch((error) => {
+  console.error('Error:', error.message)
+  process.exit(1)
+})

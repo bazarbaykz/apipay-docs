@@ -15,7 +15,7 @@ ApiPay.kz использует стандартные HTTP коды статус
 | 404 | Not Found | Ресурс не найден или принадлежит другой организации |
 | 410 | Gone | Ресурс истёк (например, таймаут верификации) |
 | 422 | Validation Error | Ошибка валидации полей — детали в объекте `errors` |
-| 429 | Too Many Requests | Превышен лимит запросов (200/мин на API-ключ) — см. `retry_after` |
+| 429 | Too Many Requests | Превышен лимит запросов (общий — 200/мин на API-ключ) — см. заголовок `Retry-After` |
 | 500 | Server Error | Внутренняя ошибка сервера |
 | 502 | Bad Gateway | Ошибка на стороне Kaspi API |
 | 503 | Service Unavailable | Сессия Kaspi недействительна или истекла |
@@ -44,10 +44,10 @@ ApiPay.kz использует стандартные HTTP коды статус
 ### 403 Forbidden
 
 ```json
-{"message": "Организация не подключена"}
+{"message": "Организация не верифицирована"}
 ```
 
-**Решение:** Напишите в поддержку через WhatsApp для подключения организации.
+**Решение:** Дождитесь верификации организации или тестируйте в песочнице. Если кассир Kaspi ещё не подключён — подключите его в кабинете (Настройки → Авторизация Kaspi); если мастер подключения не проходит, напишите в поддержку.
 
 ### 422 Validation Error
 
@@ -65,8 +65,7 @@ ApiPay.kz использует стандартные HTTP коды статус
 
 ```json
 {
-  "message": "Слишком много запросов. Повторите через 60 секунд.",
-  "retry_after": 60
+  "message": "Too Many Requests"
 }
 ```
 
@@ -111,7 +110,7 @@ ApiPay.kz использует стандартные HTTP коды статус
 | `kaspi_error` | 502 | sync + async для QR-счетов (`invoice.status_changed`, `status=error`) | Kaspi API вернул ошибку. Текст причины — в `message`/`error_message`. Повторите позже. |
 | `client_not_found` | — | async (`invoice.status_changed`, `status=error`) | Номер телефона не зарегистрирован в Kaspi. Не повторяйте с тем же номером — попросите другой. |
 | `network_unavailable` | — | async (`invoice.status_changed`, `status=error`) | Сеть/Kaspi были недоступны; ретраи исчерпаны. Создайте новый счёт через 1–2 минуты. |
-| `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync при `POST /catalog/scan` | Kaspi ограничил частоту запросов. По счетам — создайте новый через 2–3 минуты. При `POST /catalog/scan` приходит синхронно (HTTP 429): `retry_after_seconds` в теле, заголовок `Retry-After`; circuit-breaker ~90 c. Подождите указанное время и повторите. |
+| `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync при `POST /catalog/scan` | Kaspi ограничил частоту запросов. По счетам — создайте новый через 2–3 минуты. При `POST /catalog/scan` приходит синхронно (HTTP 429): `retry_after_seconds` в теле, заголовок `Retry-After`. Подождите указанное время и повторите. |
 | `kaspi_session_expired` | 400 | sync | Сессия Kaspi мерчанта истекла при `POST /catalog/scan`. Переподключите кассира Kaspi и повторите. |
 | `kaspi_scan_unavailable` | 503 | sync | Нацкаталог Kaspi временно недоступен при `POST /catalog/scan`. Повторите позже. |
 | `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | Истёк срок возврата (~14 дней) или возврат уже сделан. Не повторяйте. |
@@ -167,10 +166,12 @@ async function apiRequest(url, options) {
       case 422:
         const fields = Object.keys(error.errors || {}).join(', ')
         throw new Error(`Ошибка валидации: ${fields}`)
-      case 429:
-        const retry = error.retry_after || 60
+      case 429: {
+        const retry = Number(response.headers.get('Retry-After')) || 60
+        if (options.__retried) throw new Error(`Лимит запросов исчерпан, повторите через ${retry} с`)
         await new Promise(r => setTimeout(r, retry * 1000))
-        return apiRequest(url, options) // повтор
+        return apiRequest(url, { ...options, __retried: true }) // одна повторная попытка
+      }
       default:
         throw new Error(error.message || 'Неизвестная ошибка')
     }
@@ -182,8 +183,9 @@ async function apiRequest(url, options) {
 
 ## Rate Limiting
 
-- **Per-key минута:** 60 запросов в минуту на API ключ
-- **Per-key сутки:** 10 000 запросов в сутки на API ключ
+- **Общий лимит:** 200 запросов в минуту на API-ключ
+- **`POST /clients/check`:** 60 запросов в минуту и 10 000 в сутки на API-ключ (отдельный счётчик)
+- **`POST /catalog/scan`:** 30 запросов в минуту и 2000 в сутки на API-ключ
 - **QR-счета:** отдельный лимит — 60 запросов в минуту на организацию (`POST /invoices/qr`)
 - **Заголовок:** `Retry-After` показывает количество секунд до следующей попытки
 - **Ответ:** статус 429, тело `{"message": "Too Many Requests"}` — не долбите эндпоинт, дождитесь указанного времени

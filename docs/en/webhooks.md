@@ -16,13 +16,18 @@ Configure webhooks in [ApiPay.kz Dashboard](https://apipay.kz) → Settings → 
 
 ## Events
 
-ApiPay sends 14 event types:
+ApiPay sends 19 event types:
 
 | Event | Description |
 |-------|-------------|
 | `invoice.status_changed` | An invoice status changed |
 | `invoice.qr_scanned` | The customer scanned the QR (status stays `pending`, `qr_substate=scanned`) |
 | `invoice.refunded` | A refund on an invoice succeeded (or failed) |
+| `qr_refund.identified` | The customer scanned the refund QR (session → `customer_identified`) |
+| `qr_refund.completed` | The QR refund was completed (`refunded_amount`, `receipt_url`) |
+| `qr_refund.expired` | The refund QR expired before the customer was identified |
+| `catalog.item_processed` | A catalog item was processed (`status`: `active`/`failed`); in a queued bulk upload it is replaced by the aggregated `catalog.batch_processed` |
+| `catalog.batch_processed` | The outcome of a bulk catalog upload as a single aggregate (`totals`, `sample_failed[]`) |
 | `receipt.issued` | A fiscal receipt was successfully issued (Kaspi OFD) |
 | `receipt.failed` | Issuing a fiscal receipt failed |
 | `subscription.created` | A subscription was created |
@@ -34,6 +39,8 @@ ApiPay sends 14 event types:
 | `subscription.resumed` | The subscription was resumed |
 | `subscription.cancelled` | The subscription was cancelled |
 | `webhook.test` | Test event from the dashboard |
+
+> Full payloads for the `qr_refund.*` and `catalog.*` events are in `openapi.yaml`, section `x-webhooks`.
 
 ### invoice.status_changed
 
@@ -150,7 +157,7 @@ Sent when an invoice status changes.
 
 ### invoice.qr_scanned
 
-QR invoices only. Sent when the customer has scanned the QR and reached the payment screen in the Kaspi app. This is a **sub-state**: the invoice status stays `pending`, while the marker `qr_substate: "scanned"` shows the customer is already on the payment step. Sent exactly **once** per QR and transiently — a terminal webhook (`paid` or `cancelled`) follows. The event is additive; the HMAC signature is unchanged.
+QR invoices only. Sent when the customer has scanned the QR and reached the payment screen in the Kaspi app. This is a **sub-state**: the invoice status stays `pending`, while the marker `qr_substate: "scanned"` shows the customer is already on the payment step. Sent exactly **once** per QR and transiently — a terminal webhook (`paid` or `cancelled`) follows. The signature is verified the same way as for the other events.
 
 ```json
 {
@@ -238,7 +245,7 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
     "external_order_id": "order_123",
     "amount": "5000.00",
     "total_refunded": "0.00",
-    "available_for_refund": "5000.00",
+    "available_for_refund": 5000,
     "is_fully_refunded": false,
     "is_sandbox": false,
     "status": "paid",
@@ -262,7 +269,7 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
 
 ### receipt.issued
 
-Sent when a fiscal receipt is successfully issued in Kaspi OFD (after `POST /receipts`). Equivalent to polling `GET /receipts/{id}`. Receipt webhooks sit behind a separate gate; if it is disabled for you, use polling. See [Fiscal Receipts](receipts.md) for details.
+Sent when a fiscal receipt is successfully issued in Kaspi OFD (after `POST /receipts`). Equivalent to polling `GET /receipts/{id}`. If receipt webhooks do not arrive for you, use polling — the result is the same. See [Fiscal Receipts](receipts.md) for details.
 
 ```json
 {
@@ -575,7 +582,7 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 
 ## Status transitions
 
-Guarantee: exactly **one** webhook per real status transition. Consecutive duplicates of the same status, the technical `processing`/`cancelling`, a stale `pending` after a terminal status, and `error` after `paid` are all suppressed. That said, a re-delivery of the same transition is possible (retries after a partial delivery) — deduplicate by `(invoice.id, status)` and `(refund.id, status)`. Respond `200 OK` quickly (≤5 seconds) and process asynchronously.
+ApiPay does not duplicate webhooks for the same status: consecutive duplicates of one status, the technical `processing`/`cancelling`, a stale `pending` after a terminal status, and `error` after `paid` are not sent. Delivery itself is at-least-once and not guaranteed: the same transition can be re-delivered (retries after a partial delivery), and during a circuit-breaker pause it is not delivered at all. Deduplicate by `(invoice.id, status)` and `(refund.id, status)`, and reconcile state via the GET methods. Respond `200 OK` quickly (≤5 seconds) and process asynchronously.
 
 **Allowed transitions:**
 
@@ -605,7 +612,7 @@ When a webhook brings `status=error` (invoice) or `status=failed` (refund), the 
 | `client_not_found` | The phone number is not registered in Kaspi | Finalizes the invoice immediately, no retries | Ask the customer for another number and create a new invoice |
 | `network_unavailable` | The network/Kaspi was unavailable | Retried on its own; the webhook means retries are exhausted | Create a new invoice/refund in 1–2 minutes |
 | `session_transient` | A transient cashier session glitch | Invalidated the session automatically and retried | Create a new invoice later; if it recurs — reconnect the cashier in the dashboard |
-| `kaspi_throttled` | Kaspi rate-limited the till's requests | Automatically slows that till's queue (up to 3 minutes per invoice) and retries; the webhook = finalization | While the invoice is in `processing` — nothing. After `error` — a new invoice in 2–3 minutes; reduce your invoice creation rate |
+| `kaspi_throttled` | Kaspi rate-limited the till's requests | Spreads that till's invoices out over time and retries; the webhook = finalization | While the invoice is in `processing` — nothing. After `error` — a new invoice in 2–3 minutes; reduce your invoice creation rate |
 | `organization_not_configured` | No Kaspi cashier is connected to the organization | Finalizes immediately | Connect a cashier: dashboard → Settings → Kaspi Authorization |
 | `invoice_already_paid` | An attempt to cancel an already-paid invoice | Stopped the cancellation; the money is received | Don't cancel; to return the money, create a refund |
 | `invoice_already_cancelled` | The invoice is already cancelled | — | Nothing: the desired state is already reached |
@@ -619,7 +626,7 @@ When a webhook brings `status=error` (invoice) or `status=failed` (refund), the 
 **Scenarios without an `error_code`:**
 
 - **A new QR on the same till** — QR invoices coexist: creating a new QR does **not** cancel the previous ones, and the supersede webhook (`cancelled` with "Superseded by new QR invoice #N") no longer exists. Two parallel `POST /invoices/qr` both get `201` + `pending`. React per `invoice.id` separately — if several QRs are paid, you'll get several `paid` webhooks. (`409 superseded` is a defensive branch, unreachable in practice — don't build logic on it.)
-- **The client cancelled the QR** — a `cancelled` webhook = a real client cancellation (they minimized/closed the app: `NotConfirmedByUser` / `CancelledByUser`), not a system supersede. Create a new invoice if needed.
+- **The client cancelled the QR** — a `cancelled` webhook = a real client cancellation (they minimized or closed the Kaspi app), not a system supersede. Create a new invoice if needed.
 - **The client scanned the QR** — an `invoice.qr_scanned` webhook (`qr_substate=scanned`, status stays `pending`): the customer is on the payment screen. A "payment started" signal — do not treat the invoice as paid, wait for `paid`.
 - **Invoice expired** — an `expired` webhook (phone invoices — 24h; QR — minutes, on the terminal from Kaspi). Create a new invoice if needed.
 - **Payment after cancellation/expiry** — a `paid` webhook after `cancelled`/`expired`: the money is received — ship the order or issue a refund.
@@ -636,7 +643,10 @@ const crypto = require('crypto')
 
 function verifyWebhook(payload, signature, secret) {
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex')
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
+  const expectedBuf = Buffer.from(expected)
+  const receivedBuf = Buffer.from(signature || '')
+  if (receivedBuf.length !== expectedBuf.length) return false
+  return crypto.timingSafeEqual(expectedBuf, receivedBuf)
 }
 ```
 
@@ -681,7 +691,7 @@ If your endpoint is consistently unavailable, delivery to the key is paused:
 
 Webhooks during the pause are **not** re-sent — reconcile state via the GET methods. Any successful delivery (or a successful test webhook from the dashboard) resets the counter. The status is visible in the API keys list.
 
-> `subscription.*` events are not written to the dashboard Webhook logs: there is no manual retry or circuit breaker for them (a known limitation).
+> `subscription.*` events are not written to the dashboard Webhook logs: there is no manual retry or circuit breaker for them — reconcile subscription state via `GET /subscriptions/{id}`.
 
 ## Response Requirements
 

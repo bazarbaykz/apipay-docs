@@ -31,13 +31,12 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `description` | string | Нет | Описание (макс. 255) |
 | `subscriber_name` | string | Нет | Имя подписчика (макс. 255) |
 | `external_subscriber_id` | string | Нет | Ваш ID подписчика (макс. 255) |
-| `started_at` | string | Нет | Дата начала (YYYY-MM-DD) |
+| `started_at` | string | Нет | Дата начала (YYYY-MM-DD). По умолчанию — сегодня |
 | `max_retry_attempts` | integer | Нет | Макс. попыток повтора (1-10) |
 | `retry_interval_hours` | integer | Нет | Часов между попытками (1-168) |
 | `grace_period_days` | integer | Нет | Льготный период в днях (1-30) |
 | `metadata` | object | Нет | Произвольные данные |
-| `webhook_id` | number | Нет | ID webhook из личного кабинета |
-| `cart_items` | array | Нет | Корзина `[{ catalog_item_id, count }]` (для организаций с каталогом, пересчитывает amount) |
+| `cart_items` | array | Условно | Корзина `[{ catalog_item_id, count }]`, 1–100 позиций. Для организаций **с каталогом** обязательна — сумму считает сервер, `amount` игнорируется. Организациям **без каталога** передавать нельзя: вернётся `422` |
 | `bill_immediately` | boolean | Нет | Если `true` — первый счёт выставляется сразу. По умолчанию `false` (первый счёт по расписанию) |
 
 ### Периоды списания
@@ -51,6 +50,28 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `quarterly` | Раз в квартал |
 | `yearly` | Раз в год |
 
+### Ответ
+
+```json
+{
+  "message": "Subscription created",
+  "subscription": {
+    "id": 1,
+    "amount": "5000.00",
+    "phone_number": "87001234567",
+    "subscriber_name": "Иван Иванов",
+    "description": "Ежемесячная подписка",
+    "billing_period": "monthly",
+    "billing_day": 1,
+    "status": "active",
+    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "created_at": "2026-02-01T12:00:00+00:00"
+  }
+}
+```
+
+HTTP-статус — `201`. Сама подписка лежит в поле `subscription`; так же устроены ответы `PUT /subscriptions/{id}`, `pause`, `resume` и `cancel`.
+
 ## Список подписок
 
 **Эндпоинт:** `GET /subscriptions`
@@ -60,20 +81,18 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | Параметр | Тип | Описание |
 |----------|-----|----------|
 | `page` | integer | Номер страницы (по умолч. 1) |
-| `per_page` | integer | Элементов на странице (1-100, по умолч. 10) |
+| `per_page` | integer | Элементов на странице (по умолч. 20) |
 | `status` | string | Фильтр: `active`, `paused`, `cancelled`, `expired` |
 | `phone_number` | string | Фильтр по телефону |
 | `external_subscriber_id` | string | Фильтр по вашему ID подписчика |
-| `search` | string | Поиск по имени/телефону |
-| `billing_period` | string | Фильтр: daily, weekly, biweekly, monthly, quarterly, yearly |
-| `sort_by` | string | Поле сортировки (id, amount, subscriber_name, next_billing_at, created_at) |
-| `sort_order` | string | `asc` или `desc` |
+
+> Других фильтров и сортировки на этом эндпоинте нет: список всегда отдаётся в порядке «новые сверху» (`created_at DESC`).
 
 ## Получение подписки
 
 **Эндпоинт:** `GET /subscriptions/{id}`
 
-Возвращает подписку со статистикой и последним платежом.
+Возвращает подписку со статистикой и последним платежом. Тело ответа — объект `{ "subscription": { … } }`: и сама подписка, и вложенные `stats` / `last_payment` лежат внутри поля `subscription`.
 
 ### Поля stats
 
@@ -82,7 +101,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `total_payments` | integer | Всего платежей |
 | `successful_payments` | integer | Успешных платежей |
 | `failed_payments` | integer | Неуспешных платежей |
-| `total_collected` | string | Общая собранная сумма |
+| `total_amount` | string | Общая собранная сумма |
 
 ### Поле last_payment
 
@@ -116,7 +135,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 
 **Эндпоинт:** `GET /subscriptions/{id}/invoices`
 
-### Структура элемента (SubscriptionInvoiceResource)
+### Структура элемента ответа
 
 | Поле | Тип | Описание |
 |------|-----|----------|
@@ -151,7 +170,9 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 1. **Платёж не прошёл** — система повторяет попытку
 2. **Повторы** — до `max_retry_attempts` раз с интервалом `retry_interval_hours`
 3. **Подписка активна** — во время повторов подписка остаётся `active`
-4. **Истечение** — если все повторы неудачны, подписка переходит в `expired`
+4. **Истечение** — если оплата так и не прошла, подписка переходит в `expired` по окончании льготного периода: через `grace_period_days` со дня последней неудачной попытки
+
+Значения по умолчанию, если не передавать их при создании: `max_retry_attempts` — 3, `retry_interval_hours` — 24, `grace_period_days` — 3.
 
 Webhook-события: `subscription.payment_failed`, `subscription.grace_period_started`, `subscription.payment_succeeded`, `subscription.expired`. См. [Webhooks](webhooks.md).
 

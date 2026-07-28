@@ -72,6 +72,9 @@ def finish_onboarding(org_id: str, otp: str, webhook_url: str):
     print('--------------------')
     print(f"X-API-Key:      {key['key']}")
     print(f"Webhook secret: {key['webhook_secret']}")
+    print(f"Webhook review: {key.get('webhook_review_status')}")
+    if key.get('webhook_review_status') == 'pending_review':
+        print('  Notifications are held until the webhook URL is approved.')
     print('\nStore the key securely — it is shown only once.')
     print('Use it as X-API-Key for the regular API to create invoices for this merchant.')
 

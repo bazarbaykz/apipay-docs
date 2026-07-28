@@ -15,7 +15,13 @@ API_KEY = os.environ.get('API_KEY')
 API_BASE_URL = 'https://api.apipay.kz/api/v1'
 
 
-def create_invoice(amount: int, phone_number: str, description: str = None, external_order_id: str = None) -> dict:
+def create_invoice(
+    amount: int,
+    phone_number: str,
+    description: str = None,
+    external_order_id: str = None,
+    external_order_id_idempotency: str = None
+) -> dict:
     """Create a payment invoice."""
     response = requests.post(
         f'{API_BASE_URL}/invoices',
@@ -27,7 +33,13 @@ def create_invoice(amount: int, phone_number: str, description: str = None, exte
             'amount': amount,
             'phone_number': phone_number,
             'description': description,
-            'external_order_id': external_order_id
+            'external_order_id': external_order_id,
+            # Idempotency key (up to 191 chars, unique within your organization).
+            # A repeat request with the same value does not create a duplicate:
+            # the API answers 409 with error `duplicate_idempotency_key` and returns
+            # invoice_id / status of the existing invoice. Re-issuing with the same key
+            # is possible only once the previous invoice is expired, cancelled or error.
+            'external_order_id_idempotency': external_order_id_idempotency
         }
     )
 
@@ -51,7 +63,8 @@ def main():
             amount=10000,              # amount in KZT
             phone_number='87001234567',  # customer phone
             description='Test payment',  # description
-            external_order_id='order_123'  # your order ID
+            external_order_id='order_123',  # your order ID
+            external_order_id_idempotency='order_123'  # idempotency key (optional)
         )
 
         print('\nInvoice created successfully!')
@@ -59,8 +72,12 @@ def main():
         print(f"Invoice ID: {invoice['id']}")
         print(f"Amount: {invoice['amount']} KZT")
         print(f"Status: {invoice['status']}")
-        print(f"Phone: {invoice['phone_number']}")
-        print('\nThe customer will receive a payment notification in the Kaspi app.')
+        print(f"Phone: {invoice['phone']}")
+        print(
+            '\nStatus is "processing": the invoice is queued and Kaspi has not been called yet. '
+            'Wait for the invoice.status_changed webhook (or poll GET /invoices/{id}) — '
+            'the customer sees the payment request only after the status becomes "pending".'
+        )
 
     except Exception as e:
         print(f'Error: {e}')

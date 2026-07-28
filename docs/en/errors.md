@@ -15,7 +15,7 @@ ApiPay.kz uses standard HTTP status codes with detailed error messages.
 | 404 | Not Found | Resource not found, or belongs to another organization |
 | 410 | Gone | Resource expired (e.g., verification timeout) |
 | 422 | Validation Error | Field validation failed — details in the `errors` object |
-| 429 | Too Many Requests | Rate limit exceeded (200/min per API key) — see `retry_after` |
+| 429 | Too Many Requests | Rate limit exceeded (overall limit: 200/min per API key) — see the `Retry-After` header |
 | 500 | Server Error | Internal server error |
 | 502 | Bad Gateway | Error on the Kaspi API side |
 | 503 | Service Unavailable | Kaspi session invalid or expired |
@@ -47,7 +47,7 @@ ApiPay.kz uses standard HTTP status codes with detailed error messages.
 {"message": "Organization not verified"}
 ```
 
-**Solution:** Contact support via WhatsApp to connect your organization.
+**Solution:** Wait until the organization is verified, or test in the sandbox. If the Kaspi cashier is not connected yet, connect it in the dashboard (Settings → Kaspi Authorization); if the connection wizard fails, contact support.
 
 ### 422 Validation Error
 
@@ -65,8 +65,7 @@ ApiPay.kz uses standard HTTP status codes with detailed error messages.
 
 ```json
 {
-  "message": "Too many requests. Please retry after 60 seconds.",
-  "retry_after": 60
+  "message": "Too Many Requests"
 }
 ```
 
@@ -112,7 +111,7 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `kaspi_error` | 502 | sync + async for QR invoices (`invoice.status_changed`, `status=error`) | Kaspi API returned an error. The reason text is in `message`/`error_message`. Retry later. |
 | `client_not_found` | — | async (`invoice.status_changed`, `status=error`) | The phone number is not registered in Kaspi. Don't retry the same number — ask for another. |
 | `network_unavailable` | — | async (`invoice.status_changed`, `status=error`) | The network/Kaspi was unavailable; retries are exhausted. Create a new invoice in 1–2 minutes. |
-| `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync on `POST /catalog/scan` | Kaspi rate-limited requests. For invoices, create a new one in 2–3 minutes. On `POST /catalog/scan` it is returned synchronously (HTTP 429): `retry_after_seconds` in the body, `Retry-After` header; circuit-breaker ~90s. Wait the given time and retry. |
+| `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync on `POST /catalog/scan` | Kaspi rate-limited requests. For invoices, create a new one in 2–3 minutes. On `POST /catalog/scan` it is returned synchronously (HTTP 429): `retry_after_seconds` in the body, `Retry-After` header. Wait the given time and retry. |
 | `kaspi_session_expired` | 400 | sync | The merchant's Kaspi session expired on `POST /catalog/scan`. Reconnect the Kaspi cashier and retry. |
 | `kaspi_scan_unavailable` | 503 | sync | Kaspi's National Catalog is temporarily unavailable on `POST /catalog/scan`. Retry later. |
 | `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | The refund window expired (~14 days) or the refund was already made. Don't retry. |
@@ -168,10 +167,12 @@ async function apiRequest(url, options) {
       case 422:
         const fields = Object.keys(error.errors || {}).join(', ')
         throw new Error(`Validation failed: ${fields}`)
-      case 429:
-        const retry = error.retry_after || 60
+      case 429: {
+        const retry = Number(response.headers.get('Retry-After')) || 60
+        if (options.__retried) throw new Error(`Rate limit exceeded, retry in ${retry}s`)
         await new Promise(r => setTimeout(r, retry * 1000))
-        return apiRequest(url, options) // retry
+        return apiRequest(url, { ...options, __retried: true }) // single retry
+      }
       default:
         throw new Error(error.message || 'Unknown error')
     }
@@ -183,8 +184,9 @@ async function apiRequest(url, options) {
 
 ## Rate Limiting
 
-- **Per-key minute:** 60 requests per minute per API key
-- **Per-key day:** 10 000 requests per day per API key
+- **Overall limit:** 200 requests per minute per API key
+- **`POST /clients/check`:** 60 requests per minute and 10 000 per day per API key (separate counter)
+- **`POST /catalog/scan`:** 30 requests per minute and 2000 per day per API key
 - **QR invoices:** a separate limit of 60 requests per minute per organization (`POST /invoices/qr`)
 - **Header:** `Retry-After` shows the number of seconds to wait before retrying
 - **Response:** HTTP 429 with body `{"message": "Too Many Requests"}` — do not hammer the endpoint, wait for the indicated time

@@ -3,7 +3,8 @@
  * ApiPay.kz - Manage Catalog Example
  *
  * This example demonstrates how to manage catalog items:
- * upload images, create items, update and delete.
+ * list the catalog, create items and read the per-item rejected[] result.
+ * uploadImage() below is a helper for POST /catalog/upload-image.
  *
  * Usage: API_KEY=your_key php manage-catalog.php
  */
@@ -92,10 +93,19 @@ try {
     // Create new items (without image)
     echo "\nCreating catalog items...\n";
     $result = createItems([
-        ['name' => 'Coffee Latte', 'selling_price' => 1500, 'unit_id' => 1],
-        ['name' => 'Cookie', 'selling_price' => 500, 'unit_id' => 1]
+        ['name' => 'Coffee Latte', 'selling_price' => 1500, 'unit_id' => 1, 'external_ref' => 'SKU-LATTE'],
+        ['name' => 'Cookie', 'selling_price' => 500, 'unit_id' => 1, 'external_ref' => 'SKU-COOKIE']
     ]);
-    echo "Items created (202 Accepted — processing async)\n";
+
+    // Валидация по позициям: битая позиция не роняет батч, она приходит в rejected[].
+    // rejected[] есть в ответе всегда — проверяйте его, иначе часть каталога не зальётся.
+    $rejected = $result['rejected'] ?? [];
+    echo 'Accepted: ' . count($result['data'] ?? []) . ', rejected: ' . count($rejected) . "\n";
+    foreach ($rejected as $item) {
+        echo "  item #{$item['index']}: {$item['error_code']} — {$item['error_message']}\n";
+    }
+    // Production: позиции создаются в статусе pending, синхронизация в Kaspi асинхронная.
+    // Sandbox: позиции активны сразу. Итог сверяйте через GET /catalog?external_refs[]=...
 
 } catch (Exception $e) {
     echo "Error: {$e->getMessage()}\n";

@@ -1,6 +1,6 @@
 # ApiPay.kz — REST API для Kaspi Pay
 
-[![API Version](https://img.shields.io/badge/API-v2.0-blue.svg)](https://api.apipay.kz/api/v1)
+[![API Version](https://img.shields.io/badge/API-v2.1.0-blue.svg)](https://api.apipay.kz/api/v1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/ru/getting-started.md)
 
@@ -36,10 +36,13 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 {
   "id": 124,
   "amount": "10000.00",
-  "status": "pending",
-  "created_at": "2025-01-15T10:00:00Z"
+  "status": "processing",
+  "phone": "87001234567",
+  "created_at": "2026-01-15T10:00:00+00:00"
 }
 ```
+
+Счёт создаётся асинхронно: `201` возвращает `status: "processing"`. Финальный статус (`pending` или `error`) придёт вебхуком `invoice.status_changed` либо по `GET /invoices/{id}`. Не создавайте счёт заново, пока он в `processing`.
 
 ## Обзор API
 
@@ -54,6 +57,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 | `GET /invoices/{id}/refunds` | Возвраты по счёту |
 | `POST /invoices/status/check` | Проверка статусов pending-счетов |
 | `GET /refunds` | Список всех возвратов |
+| `POST /clients/check` | Проверка номера перед выставлением счёта |
 | `GET /catalog` | Список товаров каталога |
 | `POST /catalog/upload-image` | Загрузка изображения товара |
 | `POST /catalog` | Создание товаров |
@@ -68,6 +72,10 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 | `POST /subscriptions/{id}/resume` | Возобновление подписки |
 | `POST /subscriptions/{id}/cancel` | Отмена подписки |
 | `GET /subscriptions/{id}/invoices` | Счета подписки |
+| `POST /receipts/preview` | Превью фискального чека |
+| `POST /receipts` | Выбить фискальный чек |
+| `GET /receipts` | История фискальных чеков |
+| `GET /receipts/{id}` | Получение фискального чека |
 
 ## Конфигурация
 
@@ -85,6 +93,8 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 - [Каталог](docs/ru/catalog.md) — Управление каталогом товаров
 - [Возвраты](docs/ru/refunds.md) — Полные и частичные возвраты
 - [Webhooks](docs/ru/webhooks.md) — Уведомления о платежах в реальном времени
+- [Клиенты](docs/ru/clients.md) — Проверка номера перед выставлением счёта
+- [Фискальные чеки](docs/ru/receipts.md) — Чеки Kaspi OFD для оплат наличными и через POS другого банка
 - [Коды ошибок](docs/ru/errors.md) — HTTP коды и обработка ошибок
 - [Partner API](docs/ru/partner-api.md) — Для CRM-интеграторов: подключайте мерчантов и выставляйте счета от их имени
 
@@ -109,7 +119,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 
 - **WhatsApp**: [+7 708 516 7489](https://wa.me/77085167489)
 - **Личный кабинет**: [apipay.kz](https://apipay.kz)
-- **Issues**: [GitHub Issues](../../issues)
+- **Issues**: [GitHub Issues](https://github.com/bazarbaykz/apipay-docs/issues)
 
 ## Лицензия
 

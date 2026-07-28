@@ -1,7 +1,7 @@
 {
   "name": "apipay-examples",
   "version": "2.0.0",
-  "description": "ApiPay.kz API v2 integration examples",
+  "description": "ApiPay.kz API v1 integration examples",
   "main": "create-invoice.js",
   "scripts": {
     "create-invoice": "node create-invoice.js",

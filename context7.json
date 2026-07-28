@@ -5,16 +5,25 @@
   "projectTitle": "ApiPay.kz — Kaspi Pay REST API",
   "description": "REST API for Kaspi Pay payments in Kazakhstan: invoices by phone number, payment QR codes, refunds, subscriptions, product catalog and fiscal receipts (Kaspi OFD). Independent service, not affiliated with Kaspi Bank.",
   "folders": [],
-  "excludeFolders": [".idea", "tmp", "spravka", "primery-koda", ".claude", ".github"],
-  "excludeFiles": ["CONTRIBUTING.md", "SUMMARY.md", "SUMMARY.en.md"],
+  "excludeFolders": [
+    ".idea",
+    "tmp",
+    ".claude",
+    ".github"
+  ],
+  "excludeFiles": [
+    "CONTRIBUTING.md",
+    "SUMMARY.md",
+    "SUMMARY.en.md"
+  ],
   "rules": [
     "Base URL: https://api.apipay.kz/api/v1",
     "Аутентификация — заголовок X-API-Key: your_api_key (не Bearer, не OAuth)",
-    "Rate limit: 60 запросов/минуту и 10 000 запросов/сутки на один API-ключ",
-    "Номер телефона клиента передаётся в формате 87001234567 или 77001234567 (Казахстан)",
-    "Суммы передаются в тенге (KZT) целым числом",
-    "Часть операций асинхронна и возвращает 202 Accepted — результат забирается поллингом GET по ресурсу или приходит вебхуком",
-    "Для идемпотентности повторных запросов передавайте заголовок Idempotency-Key",
+    "Rate limit: 200 запросов/минуту на один API-ключ; у части эндпоинтов есть собственные лимиты — они указаны в описании операции в openapi.yaml",
+    "Номер плательщика передаётся в формате 87001234567 (11 цифр, начинается с 8; регэксп ^8\\d{10}$). POST /clients/check дополнительно принимает другие формы записи и нормализует их",
+    "Суммы передаются в тенге (KZT), допускается дробная часть: от 0.01 до 99999999.99",
+    "POST /invoices отвечает 201 со status: processing — финальный статус (pending или error) приходит вебхуком invoice.status_changed либо поллингом GET /invoices/{id}; часть операций отвечает 202 Accepted и забирается тем же поллингом",
+    "Идемпотентность: для счетов — поле external_order_id_idempotency в теле запроса, для массовой заливки каталога — заголовок Idempotency-Key",
     "Партнёрский API описан отдельно (openapi-partner.yaml) и использует свои ключи"
   ]
 }

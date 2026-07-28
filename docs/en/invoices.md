@@ -93,10 +93,10 @@ Differences from `POST /invoices`:
 - No `phone_number` required.
 - Synchronous response — the QR (`qr_token_url` + ready PNG) is returned immediately.
 - A QR invoice's lifecycle is measured in **minutes** (vs 24h for regular phone invoices). Kaspi dictates the exact expiry moment; the terminal status (`paid`/`cancelled`/`expired`) arrives via webhook. The `qr_expires_at` field is informational, not for local termination.
-- Cancel/refund are not supported — if no payment arrives, the invoice flips to `expired` after a few minutes (on the terminal from Kaspi).
+- Cancelling a QR invoice is not supported — if no payment arrives, the invoice flips to `expired` after a few minutes (on the terminal from Kaspi). A refund for a paid QR invoice goes through a separate branch, `POST /qr-refunds`: the customer scans a refund QR (see `openapi.yaml`).
 - Per-org rate limit: **60 QR requests per minute per organization** (separate from the general API limit).
 
-> ℹ️ **QR invoices coexist.** Creating a new QR on the same till does **not** cancel the previous ones — the old QR stays in `pending` and is monitored until its own terminal. React to `paid`/`cancelled`/`expired` per `invoice.id` separately (if several QRs are paid, you'll get several `paid` webhooks). The supersede webhook (`cancelled` with text "Superseded by new QR invoice #N") no longer exists. Phone invoices live for 24h in Kaspi.
+> ℹ️ **QR invoices coexist.** Creating a new QR on the same till does **not** cancel the previous ones — the old QR stays in `pending` and is monitored until its own terminal. React to `paid`/`cancelled`/`expired` per `invoice.id` separately (if several QRs are paid, you'll get several `paid` webhooks). Phone invoices live for 24h in Kaspi.
 
 The request body depends on the organization's `has_catalog` setting:
 
@@ -152,8 +152,8 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
   "phone": null,
   "created_at": "2026-05-09T07:27:37+00:00",
   "is_qr_token": true,
-  "qr_token_url": "https://qr.kaspi.kz/5180629155669855245469327791577114170390",
-  "qr_image_url": "https://api.apipay.kz/storage/qr/3f41ee95-5fb1-41b6-8f90-d2ac7aebcb42.png",
+  "qr_token_url": "https://qr.kaspi.kz/0000000000000000000000000000000000000000",
+  "qr_image_url": "https://api.apipay.kz/storage/qr/00000000-0000-0000-0000-000000000000.png",
   "qr_expires_at": "2026-05-09T07:32:38+00:00"
 }
 ```
@@ -168,11 +168,11 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
 
 ### Lifecycle and status handling
 
-1. Created in status `pending`. The server polls Kaspi every 2 sec for status sync.
+1. Created in status `pending`. The service tracks the status change on the Kaspi side itself.
 2. On terminal status (`paid`, `cancelled`, `expired`) we send the regular `invoice.status_changed` webhook — same format as for regular invoices, but `invoice` contains `is_qr_token: true` and the QR fields.
 3. Alternative poll: hit `GET /invoices/{id}` every 2-3 sec.
 4. After a few minutes without payment the status becomes `expired` — but only once Kaspi returns the terminal (via webhook), not on a local timer. The PNG is removed from storage within ~1 minute — `qr_image_url` will start returning 404 (by design).
-5. Cancel/refund for a QR invoice is not supported — to cancel, just wait for it to expire (a few minutes).
+5. Cancelling a QR invoice is not supported — just wait for it to expire (a few minutes). A refund for a paid QR invoice is performed through the separate `POST /qr-refunds` branch — the customer scans a refund QR.
 
 ### Sandbox mode
 
@@ -214,14 +214,14 @@ Response (excerpt):
 }
 ```
 
-`POST /api/invoices/{id}/simulate-status` separately also works with QR invoices (for dynamic scenarios: create `pending` → wait in UI → explicitly flip to `paid`/`cancelled`/`expired`).
+`POST /api/v1/invoices/{id}/simulate-status` separately also works with QR invoices (for dynamic scenarios: create `pending` → wait in UI → explicitly flip to `paid`/`cancelled`/`expired`).
 
 ### Errors
 
 | Code | error | When |
 |------|-------|------|
 | 400 | `organization_required` | API key has no organization |
-| 400 | `kaspi_session_not_configured` | Organization has no `kaspi_user_id` |
+| 400 | `kaspi_session_not_configured` | Organization has no connected Kaspi cashier (Settings → Kaspi authorization) |
 | 400 | `Organization not found or not verified` | Production organization not in `verified` status |
 | 400 | `sandbox_invoice_limit` | Sandbox invoice limit exceeded |
 | 422 | `Validation failed` | Invalid params (see body schema) |
@@ -350,14 +350,15 @@ curl https://api.apipay.kz/api/v1/invoices/42/refunds \
 | `expired` | Payment timeout | No | No |
 | `error` | Delivery to Kaspi failed (see `error_message`) | No | No |
 | `partially_refunded` | Partially refunded | No | Yes |
-| `refunded` | Fully refunded | No | No |
+
+> There is no `refunded` status: a full refund does not change the status — the invoice stays `paid` (or `partially_refunded` if there was an earlier partial one), and a full refund is visible via `is_fully_refunded=true`.
 
 ## Status Flow
 
 ```
-processing → pending → paid → partially_refunded → refunded
-    ↓           ↓        ↓
-  error    cancelling   refunded
+processing → pending → paid → partially_refunded
+    ↓           ↓
+  error    cancelling
                 ↓
             cancelled
 

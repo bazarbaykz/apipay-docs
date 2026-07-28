@@ -12,7 +12,14 @@
  */
 
 // Configuration
-$WEBHOOK_SECRET = getenv('WEBHOOK_SECRET') ?: 'your_webhook_secret_here';
+$WEBHOOK_SECRET = getenv('WEBHOOK_SECRET');
+
+if ($WEBHOOK_SECRET === false || $WEBHOOK_SECRET === '') {
+    error_log('WEBHOOK_SECRET is not set — refusing to process webhooks');
+    http_response_code(500);
+    echo 'Server misconfigured';
+    exit;
+}
 
 /**
  * Verify webhook signature using HMAC-SHA256
@@ -33,6 +40,12 @@ function handleInvoiceStatusChanged($invoice) {
 
     switch ($status) {
         case 'paid':
+            // The same delivery may arrive more than once: deduplicate by the
+            // (invoice.id, status) pair and make fulfilment idempotent — never
+            // ship an order or credit a balance twice for the same pair.
+            // Answer 200 within 5 seconds: acknowledge first, then do the slow
+            // work (fulfilment, e-mail, ERP sync) asynchronously — in a queue
+            // job or a background worker, not inside this handler.
             error_log("Payment received! Amount: {$invoice['amount']} KZT");
             if (!empty($invoice['external_order_id'])) {
                 error_log("Order ID: {$invoice['external_order_id']}");
@@ -66,8 +79,7 @@ function handleSubscriptionEvent($eventType, $data) {
 
     switch ($eventType) {
         case 'subscription.payment_succeeded':
-            $inv = $data['invoice'];
-            error_log("Payment succeeded! Invoice #{$inv['id']}: {$inv['amount']} KZT");
+            error_log("Payment succeeded! Invoice #{$data['invoice_id']}: {$data['amount']} KZT");
             break;
 
         case 'subscription.payment_failed':
@@ -75,7 +87,7 @@ function handleSubscriptionEvent($eventType, $data) {
             break;
 
         case 'subscription.grace_period_started':
-            error_log("Grace period: {$sub['grace_period_days']} days, {$sub['retry_attempts_remaining']} retries left");
+            error_log("Grace period: {$data['grace_period_days']} days, ends at {$data['expires_at']}");
             break;
 
         case 'subscription.expired':
@@ -117,14 +129,20 @@ switch ($eventType) {
         break;
 
     case 'invoice.refunded':
-        handleInvoiceRefunded($event['invoice']);
+        // Событие приходит и на успешный, и на неудачный возврат — смотрите refund.status
+        if (($event['refund']['status'] ?? null) === 'completed') {
+            handleInvoiceRefunded($event['invoice']);
+        } else {
+            $code = $event['refund']['error_code'] ?? 'unknown';
+            error_log("Refund #{$event['refund']['id']} failed: {$code} — деньги клиенту не возвращены");
+        }
         break;
 
     case 'subscription.payment_succeeded':
     case 'subscription.payment_failed':
     case 'subscription.grace_period_started':
     case 'subscription.expired':
-        handleSubscriptionEvent($eventType, $event['data']);
+        handleSubscriptionEvent($eventType, $event);
         break;
 
     default:

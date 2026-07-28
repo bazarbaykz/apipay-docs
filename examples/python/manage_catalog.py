@@ -2,8 +2,8 @@
 """
 ApiPay.kz - Manage Catalog Example
 
-This example demonstrates how to manage catalog items:
-upload images, create items, update and delete.
+This example demonstrates how to list catalog items and create them in a batch.
+Image upload is shown in upload_image() — pass the returned image_id in an item.
 
 Usage: API_KEY=your_key python manage_catalog.py
 """
@@ -33,7 +33,7 @@ def upload_image(file_path: str) -> dict:
 
 
 def create_items(items: list) -> dict:
-    """Create catalog items (batch, 1-50 items)."""
+    """Create catalog items (batch, 1-100 items per request)."""
     response = requests.post(
         f'{API_BASE_URL}/catalog',
         headers={
@@ -83,7 +83,10 @@ def main():
             {'name': 'Coffee Latte', 'selling_price': 1500, 'unit_id': 1},
             {'name': 'Cookie', 'selling_price': 500, 'unit_id': 1}
         ])
-        print('Items created (202 Accepted — processing async)')
+        print(f"Accepted: {len(result['data'])}, rejected: {len(result.get('rejected', []))}")
+        for bad in result.get('rejected', []):
+            print(f"  rejected: {bad}")
+        print('Accepted items are created with status "pending" and synced to Kaspi asynchronously.')
 
     except Exception as e:
         print(f'Error: {e}')

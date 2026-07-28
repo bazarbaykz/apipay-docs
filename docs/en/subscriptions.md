@@ -1,6 +1,8 @@
 # Subscriptions
 
-Subscriptions allow automatic recurring billing on a schedule — ideal for memberships, SaaS, and regular services.
+Subscriptions automatically issue Kaspi invoices on a schedule — for memberships, SaaS, and regular services.
+
+There is no auto-debit: on each billing date the system creates a regular Kaspi invoice, and the customer confirms the payment in the Kaspi app. If an invoice is not paid, the system re-issues it automatically — see [Grace Period](#grace-period).
 
 ## Create Subscription
 
@@ -37,7 +39,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `grace_period_days` | integer | No | Grace period in days (1-30) |
 | `metadata` | object | No | Custom JSON data |
 | `webhook_id` | number | No | Specific webhook ID from dashboard |
-| `cart_items` | array | No | Cart items `[{ catalog_item_id, count }]` (for catalog orgs, recalculates amount) |
+| `cart_items` | array | Conditional | Cart items `[{ catalog_item_id, count }]`, 1–100 items. **Required** for catalog organizations — the amount is computed server-side and `amount` is ignored. Non-catalog organizations must **not** send it: the request returns `422` |
 | `bill_immediately` | boolean | No | If `true` — first invoice is created immediately. Default: `false` (first invoice on schedule) |
 
 ### Billing Periods
@@ -55,18 +57,23 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 
 ```json
 {
-  "id": 1,
-  "amount": "5000.00",
-  "phone_number": "87001234567",
-  "subscriber_name": "John Doe",
-  "description": "Monthly subscription",
-  "billing_period": "monthly",
-  "billing_day": 1,
-  "status": "active",
-  "next_billing_at": "2025-03-01",
-  "created_at": "2025-02-01T12:00:00Z"
+  "message": "Subscription created",
+  "subscription": {
+    "id": 1,
+    "amount": "5000.00",
+    "phone_number": "87001234567",
+    "subscriber_name": "John Doe",
+    "description": "Monthly subscription",
+    "billing_period": "monthly",
+    "billing_day": 1,
+    "status": "active",
+    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "created_at": "2026-02-01T12:00:00+00:00"
+  }
 }
 ```
+
+The subscription itself is in the `subscription` field; `PUT /subscriptions/{id}`, `pause`, `resume` and `cancel` are shaped the same way.
 
 ## List Subscriptions
 
@@ -82,14 +89,12 @@ curl "https://api.apipay.kz/api/v1/subscriptions?status=active&page=1&per_page=2
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `page` | integer | Page number (default: 1) |
-| `per_page` | integer | Items per page (1-100, default: 10) |
+| `per_page` | integer | Items per page (default: 20) |
 | `status` | string | Filter: `active`, `paused`, `cancelled`, `expired` |
 | `phone_number` | string | Filter by phone |
 | `external_subscriber_id` | string | Filter by your subscriber ID |
-| `search` | string | Search by name/phone |
-| `billing_period` | string | Filter: daily, weekly, biweekly, monthly, quarterly, yearly |
-| `sort_by` | string | Sort field (id, amount, subscriber_name, next_billing_at, created_at) |
-| `sort_order` | string | `asc` or `desc` |
+
+> No other filters or sorting are available on this endpoint: the list is always returned newest-first (`created_at DESC`).
 
 ## Get Subscription
 
@@ -106,26 +111,28 @@ curl https://api.apipay.kz/api/v1/subscriptions/1 \
 
 ```json
 {
-  "id": 1,
-  "amount": "5000.00",
-  "phone_number": "87001234567",
-  "subscriber_name": "John Doe",
-  "billing_period": "monthly",
-  "billing_day": 1,
-  "status": "active",
-  "next_billing_at": "2025-03-01",
-  "stats": {
-    "total_payments": 5,
-    "successful_payments": 5,
-    "failed_payments": 0,
-    "total_collected": "25000.00"
-  },
-  "last_payment": {
+  "subscription": {
+    "id": 1,
     "amount": "5000.00",
-    "status": "paid",
-    "paid_at": "2025-02-01T10:30:00Z"
-  },
-  "created_at": "2025-01-01T12:00:00Z"
+    "phone_number": "87001234567",
+    "subscriber_name": "John Doe",
+    "billing_period": "monthly",
+    "billing_day": 1,
+    "status": "active",
+    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "stats": {
+      "total_payments": 5,
+      "successful_payments": 5,
+      "failed_payments": 0,
+      "total_amount": "25000.00"
+    },
+    "last_payment": {
+      "amount": "5000.00",
+      "status": "paid",
+      "paid_at": "2026-02-01T10:30:00+00:00"
+    },
+    "created_at": "2026-01-01T12:00:00+00:00"
+  }
 }
 ```
 
@@ -180,7 +187,7 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-### Response Item Structure (SubscriptionInvoiceResource)
+### Response Item Structure
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -215,7 +222,9 @@ When a payment fails, the system enters a grace period:
 1. **Payment fails** — System automatically retries
 2. **Retries** — Up to `max_retry_attempts` times at `retry_interval_hours` intervals
 3. **Grace period active** — Subscription remains `active` during retries
-4. **Expired** — If all retries fail, subscription transitions to `expired`
+4. **Expired** — if the payment still does not go through, the subscription moves to `expired` when the grace period ends: `grace_period_days` after the last failed attempt
+
+Defaults, if you do not pass them at creation: `max_retry_attempts` — 3, `retry_interval_hours` — 24, `grace_period_days` — 3.
 
 Webhook events: `subscription.payment_failed`, `subscription.grace_period_started`, `subscription.payment_succeeded`, `subscription.expired`. See [Webhooks](webhooks.md).
 

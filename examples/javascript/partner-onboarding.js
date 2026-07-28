@@ -69,6 +69,10 @@ async function finishOnboarding(orgId, otp, webhookUrl) {
   console.log('--------------------')
   console.log(`X-API-Key:      ${key.key}`)
   console.log(`Webhook secret: ${key.webhook_secret}`)
+  console.log(`Webhook review: ${key.webhook_review_status}`)
+  if (key.webhook_review_status && key.webhook_review_status !== 'approved') {
+    console.log('  Notifications are held until the webhook URL is approved.')
+  }
   console.log('\nStore the key securely — it is shown only once.')
   console.log('Use it as X-API-Key for the regular API to create invoices for this merchant.')
 }

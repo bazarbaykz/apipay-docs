@@ -52,7 +52,11 @@ function handleInvoiceStatusChanged(invoice) {
       console.log(`  Paid at: ${invoice.paid_at}`)
       if (invoice.external_order_id) {
         console.log(`  Order ID: ${invoice.external_order_id}`)
-        // TODO: Fulfill the order
+        // ВАЖНО: доставка вебхуков — at-least-once. Один и тот же переход статуса
+        // может прийти повторно, поэтому дедуплицируйте по паре (invoice.id, status)
+        // ДО отгрузки заказа — иначе клиент получит товар дважды.
+        // Отвечайте 200 в пределах 5 секунд, а саму отгрузку выносите в фоновую задачу.
+        // TODO: Fulfill the order (идемпотентно, в фоне)
       }
       break
 
@@ -87,7 +91,7 @@ function handleSubscriptionEvent(eventType, data) {
 
   switch (eventType) {
     case 'subscription.payment_succeeded':
-      console.log(`  Payment succeeded! Invoice #${data.invoice.id}: ${data.invoice.amount} KZT`)
+      console.log(`  Payment succeeded! Invoice #${data.invoice_id}: ${data.amount} KZT`)
       break
 
     case 'subscription.payment_failed':
@@ -95,7 +99,7 @@ function handleSubscriptionEvent(eventType, data) {
       break
 
     case 'subscription.grace_period_started':
-      console.log(`  Grace period: ${sub.grace_period_days} days, ${sub.retry_attempts_remaining} retries left`)
+      console.log(`  Grace period: ${data.grace_period_days} days, ends at ${data.expires_at}`)
       break
 
     case 'subscription.expired':
@@ -146,14 +150,20 @@ function handleRequest(req, res) {
           break
 
         case 'invoice.refunded':
-          handleInvoiceRefunded(event.invoice)
+          // Событие приходит и на успешный, и на неудачный возврат — смотрите refund.status
+          if (event.refund.status === 'completed') {
+            handleInvoiceRefunded(event.invoice)
+          } else {
+            console.log(`\nRefund #${event.refund.id} failed: ${event.refund.error_code}`)
+            console.log('  Деньги клиенту НЕ возвращены — новый возврат создаётся отдельно')
+          }
           break
 
         case 'subscription.payment_succeeded':
         case 'subscription.payment_failed':
         case 'subscription.grace_period_started':
         case 'subscription.expired':
-          handleSubscriptionEvent(event.event, event.data)
+          handleSubscriptionEvent(event.event, event)
           break
 
         default:

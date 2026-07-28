@@ -3,10 +3,11 @@ info:
   title: ApiPay.kz REST API
   version: "2.1.0"
   description: |
-    REST API для интернет-эквайринга через Kaspi Pay в Казахстане. Приём платежей по
-    номеру телефона без договора с банком. Поддержка каталога товаров, подписок,
-    возвратов, мультикассирности и вебхуков. При регистрации создаётся sandbox-организация
-    для тестирования без реального Kaspi.
+    REST API для приёма платежей через Kaspi Pay в Казахстане: счета по номеру телефона
+    и по QR. ApiPay — независимый сервис поверх вашего Kaspi Pay: он выставляет счета
+    через штатную роль «Кассир», деньги приходят напрямую на ваш Kaspi-счёт. Поддержка
+    каталога товаров, подписок, возвратов, мультикассирности и вебхуков. При регистрации
+    создаётся sandbox-организация для тестирования без реального Kaspi.
 
     ## Аутентификация
 
@@ -16,14 +17,14 @@ info:
 
     ## Rate limiting
 
-    Общий лимит — **200 запросов/мин на ключ** (`throttle:api-v1`). Отдельные эндпоинты
+    Общий лимит — **200 запросов/мин на ключ**. Отдельные эндпоинты
     имеют собственные лимиты (указаны в описании операции):
     - `GET /invoices/{id}` — 1000/мин (поллинг статуса без вебхуков);
     - `POST /invoices/bulk` — 20/мин;
     - `POST /invoices/qr` — 60/мин на организацию;
     - `POST /catalog/scan` — 30/мин + 2000/сутки;
     - `POST /clients/check` — 60/мин + 10 000/сутки на ключ, 200/мин + 20 000/сутки на
-      организацию, 10/мин на кассира (`kaspi_user_id`);
+      организацию, 10/мин на одного кассира;
     - авторизация кассира: `auth/init` и `auth/send-phone` — 5/мин, `auth/verify-otp` —
       10/мин (на пару ключ+кассир).
 
@@ -98,7 +99,7 @@ tags:
   - name: Tariff & Account
     description: Информация мерчанта о себе — тарифный каталог, статус подписки на ApiPay, health аккаунта.
   - name: Connections
-    description: Управление кассирами (KaspiConnection) собственной организации из CRM — CRUD и OTP-переавторизация. Требует per-key флаг can_manage_cashiers.
+    description: Управление кассирами собственной организации из CRM — CRUD и OTP-переавторизация. Требует per-key флаг can_manage_cashiers.
   - name: Catalog
     description: Каталог товаров — единицы измерения, листинг/экспорт, создание, Нацкаталог-скан.
   - name: Clients
@@ -228,7 +229,11 @@ paths:
         `GET /invoices/{id}`. Не пересоздавайте счёт, пока он в `processing`.
 
         Два режима суммы: без корзины (`amount`) или с корзиной (`cart_items`, сумма
-        считается сервером). Организации с каталогом обязаны присылать `cart_items`.
+        считается сервером). Организация с каталогом может выставить счёт и одной суммой,
+        без `cart_items`. Обратное неверно: организация без каталога с `cart_items`
+        получит `422 This organization does not support catalog.`
+        Для `POST /invoices/qr` и `POST /static-qr` правило другое — там у организации
+        с каталогом корзина обязательна.
       operationId: createInvoice
       requestBody:
         required: true
@@ -303,8 +308,8 @@ paths:
       summary: Пакетное создание счетов
       description: |
         Создаёт до 100 счетов одним запросом на **одного кассира** (`kaspi_connection_id`
-        общий на всю пачку; по умолчанию — primary). Доп. лимит **20/мин**
-        (`throttle:bulk-invoices`). Структурная ошибка тела (невалидная схема) → `422`
+        общий на всю пачку; по умолчанию — primary). Доп. лимит **20/мин**.
+        Структурная ошибка тела (невалидная схема) → `422`
         отклоняет весь батч атомарно; бизнес-ошибки отдельных позиций возвращаются
         поэлементно в `invoices[]` (created/duplicate/failed), сам батч при этом `201`.
 
@@ -328,7 +333,7 @@ paths:
                   type: array
                   minItems: 1
                   maxItems: 100
-                  description: Список счетов (1–100, env kaspi.bulk_max_invoices).
+                  description: Список счетов (1–100).
                   items:
                     $ref: '#/components/schemas/BulkInvoiceItem'
       responses:
@@ -405,8 +410,7 @@ paths:
         '409':
           description: |
             `duplicate_idempotency_key` (дубль ключа); `kaspi_session_expired` (сессия кассира
-            мертва — QR не создан, нужна переавторизация); либо `superseded` (defensive; при
-            текущем no-op supersede недостижим — оба параллельных запроса получают 201).
+            мертва — QR не создан, нужна переавторизация).
           content:
             application/json:
               schema:
@@ -501,7 +505,7 @@ paths:
       summary: Получить счёт
       description: |
         Полный объект счёта с позициями. Доп. лимит **1000/мин**
-        (`throttle:invoice-show`) вместо общего 200/мин — под поллинг 1С без вебхуков.
+        вместо общего 200/мин — под поллинг 1С без вебхуков.
         Читает из БД/кэша, не бьёт в Kaspi (терминальные статусы кэшируются 24ч).
         Статуса `refunded` не существует — полный возврат оставляет `paid` +
         `is_fully_refunded=true`.
@@ -531,6 +535,57 @@ paths:
                   error:
                     type: string
                     example: Invoice not found
+    patch:
+      tags: [Invoices]
+      summary: Изменить внутреннюю заметку счёта
+      description: |
+        Правит **только** `internal_comment` — внутреннюю заметку мерчанта («кто это /
+        что это»). Заметка в Kaspi не передаётся, плательщик её не видит, в чек она не
+        попадает; на сумму, статус и возвраты не влияет. Другие поля счёта этим методом
+        не редактируются.
+
+        Доступно в **любом** статусе, включая `paid` и `expired`: закрытый счёт всё ещё
+        можно разметить — в том числе счета, приехавшие синком из истории Kaspi.
+
+        `null` или пустая строка стирают заметку. Тело **без ключа** `internal_comment` →
+        `422` (молчаливого «ничего не изменил» нет). Вебхук эта операция не порождает —
+        новое значение уедет со следующим штатным событием по счёту.
+      operationId: updateInvoiceInternalComment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInvoiceInternalCommentRequest'
+      responses:
+        '200':
+          description: Заметка сохранена; в теле — счёт целиком (та же форма, что GET /invoices/{id})
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
+        '404':
+          description: Счёт не найден
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Invoice not found
+        '422':
+          $ref: '#/components/responses/ValidationError'
   "/invoices/{id}/cancel":
     post:
       tags: [Invoices]
@@ -713,7 +768,7 @@ paths:
               properties:
                 invoice_ids:
                   type: array
-                  description: ID счетов для проверки. Cap на количество в коде не enforced.
+                  description: ID счетов для проверки. Отправляйте не более 100 ID за запрос, крупные списки разбивайте на части.
                   items:
                     type: integer
                   example: [42, 43, 44]
@@ -1236,8 +1291,9 @@ paths:
       tags: [Receipts]
       summary: Статус фискального чека
       description: |
-        Возвращает текущий статус чека и его реквизиты (`fpd`, `operation_id`, `link`,
-        `shift_number`). `status`: `pending` | `issued` | `failed`. Чужой `id` → `404`.
+        Возвращает текущий статус чека и его реквизиты (`fpd`, `operation_id`, `link` —
+        публичная страница чека, открывается в обычном браузере, — `shift_number`).
+        `status`: `pending` | `issued` | `failed`. Чужой `id` → `404`.
       operationId: showReceipt
       parameters:
         - name: id
@@ -1263,7 +1319,7 @@ paths:
                   operation_id: {type: string, nullable: true}
                   operation_time: {type: string, nullable: true}
                   shift_number: {type: integer, nullable: true}
-                  link: {type: string, nullable: true, description: "Ссылка на чек на receipt.kaspi.kz."}
+                  link: {type: string, nullable: true, description: "Публичная страница чека — `receipt.kaspi.kz/web/fiscal?i={ФПД}&f={РНМ кассы}&s={сумма}&t={время операции}`, открывается в любом браузере. У чеков песочницы и в редком ответе Kaspi без РНМ кассы здесь остаётся внутренняя страница приложения Kaspi Pay (`/preview/cashier`), которая вне приложения чек не отрисовывает.", example: "https://receipt.kaspi.kz/web/fiscal?i=000000000000&f=000000000000&s=10&t=2026-07-12%2015%3A25%3A43"}
                   error_code: {type: string, nullable: true}
                   error_message: {type: string, nullable: true}
                   created_at: {type: string, format: date-time, nullable: true}
@@ -1656,10 +1712,9 @@ paths:
       description: |
         Остаток **своей** pending-очереди приёма каталога (POST /catalog) со слим-полями +
         блок `queue` с честным ETA в минутах. ETA учитывает общую FIFO-очередь кассира
-        (несколько организаций на одном `kaspi_user_id`). Пагинация **плоская**
+        (несколько организаций на одном кассире). Пагинация **плоская**
         `{current_page, data, total, queue}`. Скоуп — организация ключа (чужие строки
-        недоступны). Rate-limit **600/min per key** (выделенный `catalog-poll`, не жжёт
-        общий лимит 200/min).
+        недоступны). Rate-limit **600/min per key** (не жжёт общий лимит 200/min).
       operationId: getCatalogQueue
       parameters:
         - name: sort_order
@@ -1711,7 +1766,7 @@ paths:
         ошибок (сырые ответы Kaspi не отдаются). Фильтр по периоду **постановки в очередь**
         (`created_at`); при отсутствии `from` — окно **последних 7 дней**. Пагинация
         **плоская** `{current_page, data, total}`. Rate-limit **600/min per key**
-        (выделенный `catalog-poll`).
+        (не жжёт общий лимит 200/min).
       operationId: getCatalogErrors
       parameters:
         - name: from
@@ -1783,7 +1838,7 @@ paths:
         Агрегированный прогресс bulk-батча (POST /catalog с per-item очередью). Скоуп строго
         по организации ключа — чужой/несуществующий/битый UUID → **404** (non-enumeration).
         Итог батча также приходит вебхуком `catalog.batch_processed`. Rate-limit **600/min per
-        key** (выделенный `catalog-poll`).
+        key** (не жжёт общий лимит 200/min).
       operationId: getCatalogBatch
       parameters:
         - name: id
@@ -1832,8 +1887,8 @@ paths:
                       properties:
                         id: {type: string, example: start}
                         label: {type: string, example: Старт}
-                        daily_limit: {type: integer, nullable: true, description: "Лимит счетов в день (null = без лимита).", example: 100}
-                        base_price: {type: integer, example: 5000}
+                        daily_limit: {type: integer, nullable: true, description: "Лимит счетов в день из каталога тарифов; null — лимит в каталоге не задан, объём согласуется индивидуально.", example: 30}
+                        base_price: {type: integer, example: 10000}
                   plans:
                     type: array
                     items:
@@ -1841,10 +1896,10 @@ paths:
                       properties:
                         tier_id: {type: string, example: start}
                         period_months: {type: integer, example: 3}
-                        price: {type: integer, example: 13500}
-                        discount_percent: {type: integer, example: 10}
+                        price: {type: integer, example: 28500}
+                        discount_percent: {type: integer, example: 5}
                         label: {type: string, example: "Старт, 3 месяца"}
-                        price_per_month: {type: number, example: 4500}
+                        price_per_month: {type: number, example: 9500}
         '401':
           $ref: '#/components/responses/Unauthorized'
   "/tariff":
@@ -1904,7 +1959,7 @@ paths:
       tags: [Connections]
       summary: Список кассиров
       description: |
-        Кассиры (KaspiConnection) организации ключа. Требует per-key флаг
+        Кассиры организации ключа. Требует per-key флаг
         `can_manage_cashiers` (иначе `403 cashier_management_disabled`).
       operationId: listConnections
       responses:
@@ -2056,8 +2111,10 @@ paths:
       summary: Старт авторизации кассира
       description: |
         Шаг 1 из 3 self-hosted авторизации. `force=true` — переавторизация поверх живой
-        сессии (при слёте). Лимит **5/мин** (`v1-cashier-auth-soft`). External-mode
-        кассир → `409 external_mode_not_reauthable`.
+        сессии (при слёте). Лимит **5/мин**. External-mode
+        кассир → `409 external_mode_not_reauthable`. Тестовая (sandbox) организация
+        партнёра → `409 test_organization`: реальный кассир к ней не привязывается,
+        песочница проходится мок-контуром Partner API.
       operationId: connectionAuthInit
       parameters:
         - $ref: '#/components/parameters/ConnectionId'
@@ -2086,18 +2143,25 @@ paths:
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
         '409':
-          description: external_mode_not_reauthable — external-кассира нельзя переавторизовать через этот API
+          description: |
+            `external_mode_not_reauthable` — external-кассира нельзя переавторизовать
+            через этот API. `test_organization` — организация тестовая (`is_test`),
+            реальная авторизация кассира для неё запрещена: состояние постоянное,
+            ретрай бессмыслен.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                test_organization:
+                  value: {error: test_organization, message: "Test organization cannot authorize a real Kaspi cashier"}
         '503':
           $ref: '#/components/responses/EntranceAuthDisabled'
   "/connections/{connection}/auth/send-phone":
     post:
       tags: [Connections]
       summary: Отправить телефон кассира (SMS)
-      description: Шаг 2 из 3. Kaspi отправляет OTP на номер кассира. Лимит **5/мин** (`v1-cashier-auth-soft`).
+      description: Шаг 2 из 3. Kaspi отправляет OTP на номер кассира. Лимит **5/мин**.
       operationId: connectionAuthSendPhone
       parameters:
         - $ref: '#/components/parameters/ConnectionId'
@@ -2133,8 +2197,10 @@ paths:
           description: |
             `context_expired` — контекст процесса протух либо Kaspi его закрыл: нужен новый
             `init`, повторять `send-phone` бесполезно. `no_process` — авторизация не начата
-            (или уже закрыта предыдущим терминальным исходом). `org_claim_conflict` —
-            кассир уже привязан к другой организации.
+            (или уже закрыта предыдущим терминальным исходом). `cashier_unavailable` —
+            кассира сейчас нельзя подключить; причина намеренно не раскрывается, повтор
+            не поможет, обратитесь в поддержку. `test_organization` — организация
+            тестовая (`is_test`): реальный кассир к ней не привязывается.
           content:
             application/json:
               schema:
@@ -2142,6 +2208,19 @@ paths:
               examples:
                 context_expired:
                   value: {error: context_expired, message: "Auth session expired — re-initialize"}
+                cashier_unavailable:
+                  value: {error: cashier_unavailable, message: "Cashier is unavailable for connection"}
+        '429':
+          description: |
+            `rate_limited` — превышен суточный лимит попыток подключения кассира.
+            Заголовок `Retry-After` — через сколько секунд повторить.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                rate_limited:
+                  value: {error: rate_limited, message: "Too many cashier connection attempts — retry later"}
         '422':
           description: |
             Ошибка формата `phoneNumber` (стандартная Laravel-форма валидации) либо
@@ -2172,7 +2251,7 @@ paths:
       tags: [Connections]
       summary: Подтвердить OTP кассира
       description: |
-        Шаг 3 из 3 (point of no return). Лимит **10/мин** (`v1-cashier-auth-otp`). При
+        Шаг 3 из 3 (point of no return). Лимит **10/мин**. При
         неверном OTP — `200` с `success:false` (можно повторить). При успехе — `success:true`
         и сессия кассира активирована.
 
@@ -2181,7 +2260,7 @@ paths:
         кассиром. Тогда шаг отдаёт **`422 not_registered`**, а не `200`: сессия
         авторизации закрыта, повторять OTP или слать SMS заново бессмысленно —
         следующий `send-phone` вернёт `409 no_process`. Нужен новый `init` после того,
-        как номер добавлен кассиром в Kaspi Business → Кассиры. Так же терминальны
+        как номер добавлен кассиром в Kaspi Pay → Кассиры. Так же терминальны
         `409 context_expired` (Kaspi потерял контекст → новый `init`) и
         `503 kaspi_busy` (анти-абуз Kaspi → пауза по `Retry-After`, затем новый `init`).
       operationId: connectionAuthVerifyOtp
@@ -2222,7 +2301,8 @@ paths:
           description: |
             Терминально: `context_expired` — Kaspi потерял контекст процесса (нужен новый
             `init`, а не повтор OTP); `no_process` — авторизация не начата либо уже
-            закрыта предыдущим терминальным исходом.
+            закрыта предыдущим терминальным исходом; `test_organization` — организация
+            тестовая (`is_test`), реальная авторизация кассира для неё запрещена.
           content:
             application/json:
               schema:
@@ -2324,8 +2404,7 @@ paths:
 
         **Лимиты targeted (явная ошибка вместо тихого усечения):** суммарное число значений
         по `ntins[]`+`barcodes[]`+`ids[]`+`external_refs[]` ≤200, и число найденных СТРОК
-        соответствий ≤1000. Превышение любого → `422` с `error_code: catalog_match_overflow`
-        (усечения `limit(200)` больше нет).
+        соответствий ≤1000. Превышение любого → `422` с `error_code: catalog_match_overflow`.
 
         Режимы 2–4 отдают **meta-обёртку** `{data, links, meta}` (в keyset `meta` курсорная:
         `next_cursor`/`prev_cursor`, без `total`). Только для организаций с каталогом
@@ -2657,8 +2736,8 @@ paths:
         может вернуть несколько кандидатов (общий gtin, разные ntin). Пустой `data[]` и/или
         `scan_result.code != "ok"` = товар не найден (**это не ошибка**, `200`; создавайте
         товар обычным путём без ntin/gtin). Лимиты: **30/мин + 2000/сутки** на ключ.
-        Circuit-breaker: при троттле Kaspi ~90с сразу возвращается `429 kaspi_throttled`
-        без обращения к Kaspi.
+        При троттле Kaspi возвращается `429 kaspi_throttled`. Дождитесь времени из
+        `retry_after_seconds` (заголовок `Retry-After`) и повторите.
       operationId: scanCatalogBarcode
       requestBody:
         required: true
@@ -2820,11 +2899,11 @@ paths:
         Номер нормализуется к `8XXXXXXXXXX` (77.../87.../+77... с пробелами/дефисами).
 
         **Лимиты:** 60/мин + 10 000/сутки на ключ; 200/мин + 20 000/сутки на организацию;
-        10/мин на кассира (`kaspi_user_id`). При троттле Kaspi — circuit-breaker
-        (`429 scope=kaspi_throttle` + `Retry-After`, ~90с не зовём Kaspi).
+        10/мин на одного кассира. При троттле Kaspi — `429 scope=kaspi_throttle`.
+        Дождитесь времени из `retry_after_seconds` (заголовок `Retry-After`) и повторите.
 
-        ⚠️ **Запрещён массовый перебор** (enumeration). Сервер детектит аномалии (honeypot,
-        conversion-ratio, spike) — при срабатывании ключ деактивируется без предупреждения.
+        ⚠️ **Запрещён массовый перебор** (enumeration). При злоупотреблении ключ
+        деактивируется без предупреждения.
         Sandbox: `87770000001` → true/"Иван И.", `87770000002` → false, иначе false.
       operationId: checkClient
       requestBody:
@@ -3326,7 +3405,7 @@ components:
       name: connection
       in: path
       required: true
-      description: ID кассира (KaspiConnection).
+      description: ID кассира.
       schema:
         type: integer
     SubscriptionPathId:
@@ -3508,8 +3587,7 @@ components:
     SessionExpiredResponse:
       type: object
       description: |
-        Сессия кассира Kaspi мертва — счёт/чек не создан. Раньше такой запрос принимался (201)
-        и молча падал в `error` уже в очереди; теперь отказ приходит синхронно. Лечится ТОЛЬКО
+        Сессия кассира Kaspi мертва — счёт/чек не создан. Отказ приходит синхронно. Лечится ТОЛЬКО
         переавторизацией кассира в кабинете apipay.kz — ретрай не поможет. Состояние видно
         заранее в `GET /account/health` → `connection.needs_reauth`.
       properties:
@@ -3776,6 +3854,16 @@ components:
         description:
           type: string
           maxLength: 500
+        internal_comment:
+          type: string
+          maxLength: 255
+          nullable: true
+          description: |
+            Внутренняя заметка мерчанта («кто это / что это»). **В Kaspi не передаётся,
+            плательщик её не видит** и в чек она не попадает. Возвращается в `GET /invoices`,
+            `GET /invoices/{id}`, в выгрузке кабинета и в вебхуках `invoice.status_changed`
+            и `invoice.qr_scanned` (только если non-null). Ищется подстрокой через `search`.
+            Редактируется после создания — `PATCH /invoices/{id}`, в любом статусе.
         external_order_id:
           type: string
           maxLength: 255
@@ -3793,7 +3881,7 @@ components:
           type: array
           minItems: 1
           maxItems: 100
-          description: Корзина (обязательна для организаций с каталогом).
+          description: Корзина. Для этого эндпоинта необязательна и организации с каталогом — счёт можно выставить одной суммой в amount. Организация без каталога с cart_items получит 422.
           items:
             $ref: '#/components/schemas/CartItem'
         discount_percentage:
@@ -3814,6 +3902,14 @@ components:
           type: string
           maxLength: 100
           description: Наименование позиции в QR-чеке Kaspi (макс 100 — ограничение Kaspi).
+        internal_comment:
+          type: string
+          maxLength: 255
+          nullable: true
+          description: |
+            Внутренняя заметка мерчанта; в Kaspi не уходит и плательщику не видна.
+            Ограничение `description` в 100 символов (лимит Kaspi на наименование позиции
+            в чеке) на это поле **не распространяется** — потолок 255, как в `POST /invoices`.
         external_order_id:
           type: string
           maxLength: 255
@@ -3844,6 +3940,7 @@ components:
         phone_number: {type: string, pattern: '^8\d{10}$', example: "87001234567"}
         amount: {type: number, nullable: true, minimum: 0.01, maximum: 99999999.99}
         description: {type: string, maxLength: 500}
+        internal_comment: {type: string, maxLength: 255, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна."}
         external_order_id: {type: string, maxLength: 255}
         external_order_id_idempotency: {type: string, maxLength: 191}
         cart_items:
@@ -3852,6 +3949,11 @@ components:
           items:
             $ref: '#/components/schemas/CartItem'
         discount_percentage: {type: number, minimum: 1, maximum: 99}
+    UpdateInvoiceInternalCommentRequest:
+      type: object
+      required: [internal_comment]
+      properties:
+        internal_comment: {type: string, maxLength: 255, nullable: true, description: "Новая заметка. `null` или пустая строка стирают её. Ключ обязателен: тело без него → 422."}
     BulkInvoiceResult:
       type: object
       description: |
@@ -3871,7 +3973,7 @@ components:
         message: {type: string, description: "Только status=failed."}
     InvoiceCreated:
       type: object
-      description: Ответ InvoiceResource на создание (status=processing). Условные поля появляются только при наличии значения.
+      description: Ответ на создание счёта (status=processing). Условные поля появляются только при наличии значения.
       properties:
         id: {type: integer, example: 42}
         amount: {type: string, example: "5000.00"}
@@ -3989,7 +4091,7 @@ components:
         kaspi_invoice_id: {type: string, nullable: true, example: "13234689513"}
         phone: {type: string, example: "87001234567"}
         client_name: {type: string, nullable: true, example: Иван Иванов}
-        client_comment: {type: string, nullable: true}
+        internal_comment: {type: string, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна.", example: Айгуль, самовывоз}
         is_sandbox: {type: boolean, example: false}
         is_recurring: {type: boolean, description: "Счёт создан подпиской.", example: false}
         subtotal: {type: string, nullable: true}
@@ -4016,7 +4118,7 @@ components:
         external_order_id: {type: string, nullable: true}
         status: {$ref: '#/components/schemas/InvoiceStatus'}
         client_name: {type: string, nullable: true, example: Иван Иванов}
-        client_comment: {type: string, nullable: true}
+        internal_comment: {type: string, nullable: true, description: "Внутренняя заметка мерчанта (правится через PATCH /invoices/{id})."}
         is_sandbox: {type: boolean, example: false}
         total_refunded: {type: string, example: "0.00"}
         is_fully_refunded: {type: boolean, example: false}
@@ -4195,7 +4297,7 @@ components:
           description: |
             draining — очередь двигается; paused_throttle — пауза из-за троттла Kaspi
             (см. throttle_retry_in_seconds); paused_hold — пауза-накопление (hold);
-            not_connected — организация без kaspi_user_id; sandbox — sandbox-режим.
+            not_connected — у организации нет подключённого кассира; sandbox — sandbox-режим.
           example: draining
         ahead_in_cashier_queue: {type: integer, example: 2200}
         eta_minutes: {type: integer, nullable: true, example: 11}
@@ -4307,7 +4409,7 @@ components:
             status: {type: string, enum: [issued, failed], example: issued}
             fpd: {type: string, nullable: true, example: "000000000000"}
             operation_id: {type: string, nullable: true, example: "KKM00000000"}
-            link: {type: string, nullable: true, example: "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM00000000"}
+            link: {type: string, nullable: true, description: "Публичная страница чека (`receipt.kaspi.kz/web/fiscal`) — открывается в обычном браузере.", example: "https://receipt.kaspi.kz/web/fiscal?i=000000000000&f=000000000000&s=10&t=2026-07-12%2015%3A25%3A43"}
             shift_number: {type: integer, nullable: true, example: 106}
             total_price: {type: string, nullable: true, example: "10.00"}
             error_code: {type: string, nullable: true, example: null}
@@ -4328,7 +4430,7 @@ components:
           type: object
           nullable: true
           properties:
-            amount: {type: integer, example: 13500}
+            amount: {type: integer, example: 71250}
             paid_at: {type: string, format: date-time, nullable: true}
             period_months: {type: integer, example: 3}
             tier: {type: string, example: business}
@@ -4337,7 +4439,7 @@ components:
           type: object
           properties:
             due_at: {type: string, format: date-time, nullable: true, description: "null для expired."}
-            amount: {type: integer, example: 13500}
+            amount: {type: integer, example: 71250}
             tier: {type: string, example: business}
     AccountHealth:
       type: object
@@ -4384,7 +4486,7 @@ components:
             held_since: {type: string, format: date-time, nullable: true}
     Connection:
       type: object
-      description: Кассир (KaspiConnection). kaspi_user_id и cashier_phone маскируются.
+      description: Кассир организации. Поля `kaspi_user_id` и `cashier_phone` маскируются.
       properties:
         id: {type: integer, example: 7}
         label: {type: string, nullable: true, example: Касса №1}
@@ -4397,7 +4499,7 @@ components:
         created_at: {type: string, format: date-time, example: "2026-01-01T09:00:00+00:00"}
     CatalogItem:
       type: object
-      description: Товар каталога (CatalogItemResource). Даты UTC +00:00.
+      description: Товар каталога. Даты UTC +00:00.
       properties:
         id: {type: integer, example: 1}
         kaspi_item_id: {type: string, nullable: true}
@@ -4473,7 +4575,7 @@ components:
         bill_immediately: {type: boolean, default: false}
     Subscription:
       type: object
-      description: Подписка (SubscriptionResource). Даты UTC +00:00.
+      description: Подписка. Даты UTC +00:00.
       properties:
         id: {type: integer, example: 10}
         subscriber_name: {type: string, nullable: true, example: Иван Иванов}
@@ -4512,7 +4614,7 @@ components:
           $ref: '#/components/schemas/Subscription'
     SubscriptionInvoice:
       type: object
-      description: Счёт подписки (SubscriptionInvoiceResource). Даты UTC +00:00.
+      description: Счёт подписки — один расчётный период списания. Даты UTC +00:00.
       properties:
         id: {type: integer, example: 1}
         invoice_id: {type: integer, nullable: true, example: 42}
@@ -4547,6 +4649,7 @@ components:
         client_name: {type: string, nullable: true}
         client_phone: {type: string, nullable: true, description: "null для QR-счетов без номера."}
         is_sandbox: {type: boolean}
+        internal_comment: {type: string, description: "Внутренняя заметка мерчанта. Только если non-null."}
         kaspi_source_type: {type: string, enum: [GOLD, RED, LOAN, BUSINESSACCOUNT, BANKINTEGRATIONACCOUNT], description: "Только если non-null (обычно после оплаты)."}
         kaspi_sale_type: {type: string, enum: [Remote, QR, Static, Restaurant], description: "Только если non-null."}
         subtotal: {type: string, description: "Только со скидкой/корзиной (вместе с discount_sum)."}
@@ -4582,6 +4685,7 @@ components:
             client_name: {type: string, nullable: true}
             client_phone: {type: string, nullable: true}
             is_sandbox: {type: boolean}
+            internal_comment: {type: string, description: "Внутренняя заметка мерчанта. Только если non-null."}
         source: {type: string, nullable: true}
         timestamp: {type: string, format: date-time}
     WebhookInvoiceRefunded:
@@ -4670,6 +4774,11 @@ x-webhooks:
   # User-Agent: Kaspi-Pay-API/1.0, X-Webhook-Signature: sha256=<hmac_sha256(raw_body, webhook_secret)>
   # (если задан секрет — верифицировать по СЫРОМУ телу). Таймауты 3с+5с. Успех = любой 2xx.
   # Ретраятся 5xx/429/сетевые (invoice/refund/subscription 11 попыток; sandbox invoice — 3).
+  # Редиректы: 307/308 поддерживаются (повторяем тот же POST с тем же телом и подписью,
+  # до 2 переходов). 301/302/303 НЕ поддерживаются — по ним клиент обязан сменить метод
+  # на GET и потерять тело, поэтому это недоставка, без ретрая
+  # (error_message: "redirect not followed: HTTP <код>; ..."). 304/305/306 редиректами
+  # не считаются. Указывайте конечный https-адрес — http:// с 301 на https:// доставку сорвёт.
   # Все таймстампы — UTC +00:00. Дедуплицируйте по ключам, указанным в описаниях.
   invoice.status_changed:
     post:
@@ -4678,7 +4787,8 @@ x-webhooks:
       description: |
         Счёт перешёл в уведомляемый статус (`pending`/`paid`/`cancelled`/`expired`/`error`/
         `partially_refunded`). Технические `processing`/`cancelling` вебхуков не порождают.
-        **Один вебхук на реальный переход** (гейт `WebhookStatusGate`), но дубли всё же
+        **Один вебхук на реальный переход** (на стороне сервиса стоит защита от повторной
+        отправки), но дубли всё же
         возможны — дедуп по `(invoice.id, invoice.status)`. Легитимные «странные»
         последовательности (обрабатывайте!): `cancelled→paid`, `expired→paid` (оплата
         выиграла гонку), `error→pending` (реконсиляция), `paid→partially_refunded`.
@@ -4775,9 +4885,9 @@ x-webhooks:
       summary: Позиция каталога обработана
       description: |
         Позиция каталога заведена в Kaspi (`status: active`) либо отвергнута
-        (`status: failed`, причина в `error_code`). Шлётся безусловно — прежний kill-switch
-        env `KASPI_CATALOG_WEBHOOKS_ENABLED` удалён. Отдельная очередь `catalog-webhooks`,
-        `$tries=3`, backoff `[10,60]`. Сверяйте по `external_ref` (ключ маппинга 1С,
+        (`status: failed`, причина в `error_code`). Шлётся всегда, отключить его нельзя.
+        Неуспешная доставка повторяется до трёх раз с нарастающей паузой.
+        Сверяйте по `external_ref` (ключ маппинга 1С,
         UNIQUE per org). При bulk-заливке предпочтителен поллинг targeted-GET
         `GET /catalog?external_refs[]=…`; вебхук равноправен для точечных операций.
         Доставки логируются в `GET /catalog/webhook-logs` (ротация 3 дня).
@@ -4798,10 +4908,8 @@ x-webhooks:
       description: |
         Итог bulk-заливки каталога (POST /catalog инжест-путь): ОДИН агрегированный вебхук
         вместо лавины per-item. Шлётся при завершении батча (все строки финализированы),
-        безусловно — прежние kill-switch'и `KASPI_CATALOG_WEBHOOKS_ENABLED` /
-        `KASPI_CATALOG_BATCH_WEBHOOKS_ENABLED` удалены.
-        Семантика доставки — **exactly-once на реальный переход** processing→terminal, но при
-        ретраях/страховочном sweeper'е возможен **повтор** — дедуплицируйте по
+        всегда — отключить его нельзя.
+        Вебхук шлётся на переход processing→terminal; повторы возможны — дедуплицируйте по
         `(batch_id, status)`. `sample_failed` — до 50 `{external_ref, error_code}` БЕЗ текста
         ошибки (детали — `GET /catalog/errors?batch_id=`). Сценарий: батч `completed`/
         `partially_failed` → при `failed>0` вытяните ошибки через `GET /catalog/errors?batch_id=`,
@@ -4820,9 +4928,10 @@ x-webhooks:
       summary: Фискальный чек выбит
       description: |
         Чек успешно выбит в Kaspi OFD (`POST /receipts`). В `receipt` — `fpd`,
-        `operation_id`, `link` (ссылка на чек), `shift_number`. Шлётся безусловно при
-        терминальном статусе чека. Очередь `webhooks`,
-        `$tries=3`. Дедуп по `(event, receipt.id)`. Равноправен поллингу `GET /receipts/{id}`.
+        `operation_id`, `link` (публичная страница чека — открывается в обычном
+        браузере), `shift_number`. Шлётся безусловно при
+        терминальном статусе чека. Неуспешная доставка повторяется до трёх раз.
+        Дедуп по `(event, receipt.id)`. Равноправен поллингу `GET /receipts/{id}`.
       requestBody:
         content:
           application/json:
@@ -4844,7 +4953,7 @@ x-webhooks:
         `fiscal_receipts_disabled` — запись через целевого кассира приостановлена;
         `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ НЕ создан —
         повтор допустим: после `failed` прежний `client_operation_id` освобождается.
-        Очередь — как у `receipt.issued`.
+        Повторные попытки доставки — как у `receipt.issued`.
         В песочнице воспроизводится параметром `simulate` в `POST /receipts`.
       requestBody:
         content:

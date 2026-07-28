@@ -1,6 +1,6 @@
 # ApiPay.kz — Kaspi Pay REST API
 
-[![API Version](https://img.shields.io/badge/API-v2.0-blue.svg)](https://api.apipay.kz/api/v1)
+[![API Version](https://img.shields.io/badge/API-v2.1.0-blue.svg)](https://api.apipay.kz/api/v1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/en/getting-started.md)
 
@@ -36,10 +36,13 @@ Response:
 {
   "id": 124,
   "amount": "10000.00",
-  "status": "pending",
-  "created_at": "2025-01-15T10:00:00Z"
+  "status": "processing",
+  "phone": "87001234567",
+  "created_at": "2026-01-15T10:00:00+00:00"
 }
 ```
+
+The invoice is created asynchronously: `201` returns `status: "processing"`. The final status (`pending` or `error`) arrives via the `invoice.status_changed` webhook or from `GET /invoices/{id}`. Do not re-create the invoice while it is `processing`.
 
 ## API Overview
 
@@ -54,6 +57,11 @@ Response:
 | `GET /invoices/{id}/refunds` | Invoice refunds |
 | `POST /invoices/status/check` | Check pending invoice statuses |
 | `GET /refunds` | List all refunds |
+| `POST /clients/check` | Check whether a phone number is registered in Kaspi |
+| `POST /receipts` | Issue a fiscal receipt (Kaspi OFD) |
+| `POST /receipts/preview` | Preview a receipt before issuing |
+| `GET /receipts` | List fiscal receipts |
+| `GET /receipts/{id}` | Get fiscal receipt status |
 | `GET /catalog` | List catalog items |
 | `POST /catalog/upload-image` | Upload catalog image |
 | `POST /catalog` | Create catalog items |
@@ -85,6 +93,8 @@ Response:
 - [Catalog](docs/en/catalog.md) — Product catalog management
 - [Refunds](docs/en/refunds.md) — Full and partial refunds
 - [Webhooks](docs/en/webhooks.md) — Real-time payment notifications
+- [Clients](docs/en/clients.md) — Check a phone number before invoicing
+- [Fiscal Receipts](docs/en/receipts.md) — Kaspi OFD receipts for cash and non-Kaspi POS payments
 - [Error Codes](docs/en/errors.md) — HTTP status codes and error handling
 - [Partner API](docs/en/partner-api.md) — For CRM/platform integrators: onboard merchants and issue invoices on their behalf
 
@@ -109,7 +119,7 @@ The [Partner API](docs/en/partner-api.md) has a separate spec: [openapi-partner.
 
 - **WhatsApp**: [+7 708 516 7489](https://wa.me/77085167489)
 - **Dashboard**: [apipay.kz](https://apipay.kz)
-- **Issues**: [GitHub Issues](../../issues)
+- **Issues**: [GitHub Issues](https://github.com/bazarbaykz/apipay-docs/issues)
 
 ## License
 
