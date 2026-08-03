@@ -37,7 +37,7 @@ curl -X POST https://api.apipay.kz/api/v1/catalog/upload-image \
   -F "image=@photo.jpg"
 ```
 
-Формат: `multipart/form-data`. Макс. 10 МБ. Форматы: jpg, png, gif, webp.
+Формат: `multipart/form-data`. Только JPEG и PNG, макс. 6 МБ, стороны 64…6000 px, площадь до 12 Мпикс. Файлы gif, webp, bmp и svg отклоняются (`422 invalid_file_type`) — конвертируйте их на своей стороне. Файл больше 6 МБ — `413 file_too_large`. Лимит: 60 запросов в минуту и 2000 в сутки на ключ.
 
 Ответ: `{"image_id": "550e8400-..."}`.
 

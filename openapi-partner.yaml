@@ -485,12 +485,36 @@ paths:
                 error: sms_failed
                 error_code: sms_failed
                 message: Не удалось отправить SMS.
-        # Заголовок Retry-After на партнёрской поверхности не объявлен намеренно.
+        "429":
+          description: >-
+            `rate_limited` — за сутки с этого аккаунта пробовали слишком много
+            РАЗНЫХ номеров кассиров. ⚠️ Окно СУТОЧНОЕ: `Retry-After` и
+            `retry_after_seconds` содержат секунды до обнуления счётчика (часы,
+            не минуты) — повторять раньше бесполезно. Уже подключённые кассиры
+            этого владельца в счётчик не входят, поэтому переавторизация рабочей
+            точки лимитом не блокируется. Не путать с общим поминутным лимитом
+            запросов к этой ручке: он отдаёт другую форму тела —
+            `{ "message": "Too Many Attempts." }`, без `error_code` (схема `RateLimited`).
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Секунд до обнуления суточного счётчика
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitEnvelope"
+              example:
+                success: false
+                error: rate_limited
+                error_code: rate_limited
+                message: Слишком много запросов. Попробуйте позже.
+                retry_after_seconds: 13159
         "503":
           description: >-
             `kaspi_busy` — Kaspi временно недоступен/троттлит. Заголовок
-            `Retry-After` на партнёрской поверхности **не отдаётся** (в отличие
-            от кабинета/`/api/v1`) — используйте собственный бэкофф, ориентир 60 с.
+            `Retry-After` здесь **не отдаётся** (в отличие от `rate_limited` выше
+            и тарифных лимитов) — используйте собственный бэкофф, ориентир 60 с.
             `entrance_auth_disabled` — подключение кассира временно отключено на
             стороне ApiPay (технические работы); повторите позже.
           content:
@@ -736,6 +760,14 @@ paths:
         авторизации (`init → send-phone → verify-otp`).
 
 
+        ⚠️ **Денежное последствие.** Возвраты по счетам, оплаченным через этого
+        кассира, после отключения через API не проходят: запрос принимается, но
+        возврат завершается статусом `failed` — приходит вебхук
+        `invoice.refunded` со `status: failed`. Такие возвраты мерчант проводит
+        вручную в приложении Kaspi Pay. Предупредите мерчанта и дайте закрыть
+        возвратные обязательства до отключения.
+
+
         **Идемпотентно**: организация без подключённого кассира возвращает `200`,
         а не ошибку. Затрагивается только primary-подключение — другие кассиры
         той же организации (multi-cashier) не трогаются. В Kaspi запрос не идёт,
@@ -929,7 +961,7 @@ paths:
                 tiers:
                   - { id: start, label: Start, daily_limit: 30, base_price: 10000 }
                   - { id: business, label: Business, daily_limit: 100, base_price: 25000 }
-                  - { id: pro, label: Pro, daily_limit: null, base_price: 60000 }
+                  - { id: pro, label: Pro, daily_limit: 300, base_price: 60000 }
                 plans:
                   - { tier_id: business, period_months: 3, price: 71250, discount_percent: 5, label: "Business — 3 месяца", price_per_month: 23750 }
         "401":
@@ -1731,8 +1763,10 @@ components:
           type: integer
           nullable: true
           description: >-
-            Дневной лимит счетов из каталога тарифов. `null` — лимит в каталоге
-            не задан: для тарифа Pro объём согласуется индивидуально.
+            Дневной лимит счетов из каталога тарифов: start 30, business 100,
+            pro 300. `null` — лимит в каталоге не задан, объём согласуется
+            индивидуально; ни у одного из действующих тарифов null не
+            встречается.
           example: 100
         base_price:
           type: integer

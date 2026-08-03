@@ -93,8 +93,8 @@ curl "https://api.apipay.kz/api/v1/refunds?page=1&per_page=20&status[]=completed
 | `per_page` | integer | Items per page (1-100, default: 10) |
 | `status[]` | array | Filter: `pending`, `processing`, `completed`, `failed` |
 | `invoice_id` | integer | Filter by invoice ID |
-| `date_from` | string | Start date (YYYY-MM-DD) |
-| `date_to` | string | End date (YYYY-MM-DD) |
+| `date_from` | string | Window start, inclusive: `YYYY-MM-DD` (= the merchant's whole calendar day) or `YYYY-MM-DD HH:MM`. Timezone — Asia/Almaty; the window applies to the refund operation time |
+| `date_to` | string | Window end, inclusive, same format |
 
 ### Response
 

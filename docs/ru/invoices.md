@@ -249,8 +249,10 @@ curl "https://api.apipay.kz/api/v1/invoices?page=1&per_page=20&status[]=paid&sor
 | `per_page` | integer | 10 | Элементов на странице (1-100) |
 | `search` | string | — | Поиск по описанию/ID заказа |
 | `status[]` | array | — | Фильтр по статусу |
-| `date_from` | string | — | Начальная дата (YYYY-MM-DD) |
-| `date_to` | string | — | Конечная дата (YYYY-MM-DD) |
+| `date_from` | string | — | Начало окна включительно: `YYYY-MM-DD` (= календарные сутки мерчанта целиком) или `YYYY-MM-DD HH:MM` (точная минута). Зона — Asia/Almaty |
+| `date_to` | string | — | Конец окна включительно, тот же формат |
+| `date_field` | string | created_at | По какому полю режется окно: `created_at` или `paid_at` (второй отсекает неоплаченные) |
+| `with_summary` | boolean | false | `1` — добавить в ответ объект `summary` с итогами по всей выборке (продажи, возвраты, выручка) |
 | `sort_by` | string | created_at | Поле сортировки |
 | `sort_order` | string | desc | `asc` или `desc` |
 

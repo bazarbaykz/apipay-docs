@@ -93,8 +93,8 @@ curl "https://api.apipay.kz/api/v1/refunds?page=1&per_page=20&status[]=completed
 | `per_page` | integer | Элементов на странице (1-100, по умолчанию: 10) |
 | `status[]` | array | Фильтр: `pending`, `processing`, `completed`, `failed` |
 | `invoice_id` | integer | Фильтр по ID счёта |
-| `date_from` | string | Начальная дата (YYYY-MM-DD) |
-| `date_to` | string | Конечная дата (YYYY-MM-DD) |
+| `date_from` | string | Начало окна включительно: `YYYY-MM-DD` (= календарные сутки мерчанта целиком) или `YYYY-MM-DD HH:MM`. Зона — Asia/Almaty; окно режется по времени операции возврата |
+| `date_to` | string | Конец окна включительно, тот же формат |
 
 ### Ответ
 

@@ -249,8 +249,10 @@ curl "https://api.apipay.kz/api/v1/invoices?page=1&per_page=20&status[]=paid&sor
 | `per_page` | integer | 10 | Items per page (1-100) |
 | `search` | string | — | Search in description/order ID |
 | `status[]` | array | — | Filter by status |
-| `date_from` | string | — | Start date (YYYY-MM-DD) |
-| `date_to` | string | — | End date (YYYY-MM-DD) |
+| `date_from` | string | — | Window start, inclusive: `YYYY-MM-DD` (= the merchant's whole calendar day) or `YYYY-MM-DD HH:MM` (exact minute). Timezone — Asia/Almaty |
+| `date_to` | string | — | Window end, inclusive, same format |
+| `date_field` | string | created_at | Which field the window applies to: `created_at` or `paid_at` (the latter excludes unpaid invoices) |
+| `with_summary` | boolean | false | `1` — add a `summary` object with totals over the whole result set (sales, refunds, net revenue) |
 | `sort_by` | string | created_at | Sort field |
 | `sort_order` | string | desc | `asc` or `desc` |
 

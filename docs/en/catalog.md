@@ -50,7 +50,7 @@ curl -X POST https://api.apipay.kz/api/v1/catalog/upload-image \
   -F "image=@photo.jpg"
 ```
 
-> Request must use `multipart/form-data`. Max 10 MB. Formats: jpg, png, gif, webp.
+> Request must use `multipart/form-data`. JPEG and PNG only, max 6 MB, sides 64…6000 px, area up to 12 MP. gif, webp, bmp and svg are rejected (`422 invalid_file_type`) — convert them on your side. A file over 6 MB returns `413 file_too_large`. Limit: 60 requests per minute and 2000 per day per key.
 
 ### Response
 

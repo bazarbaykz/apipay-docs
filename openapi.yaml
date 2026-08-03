@@ -46,6 +46,10 @@ info:
     **`GET /tariff`** и **`GET /account/health`** отдают Asia/Almaty, offset `+05:00`
     (историческая несогласованность, не путать).
 
+    Окна фильтров (`date_from`/`date_to`, `start_date`/`end_date`, `from`/`to`) задаются
+    в зоне мерчанта **Asia/Almaty**: голая дата — это его календарные сутки целиком.
+    Явный офсет в значении уважается как указан; в query-строке `+` кодируется как `%2B`.
+
     ## Телефон
 
     Плательщик — формат `8XXXXXXXXXX` (11 цифр, начинается с `8`), регэксп `^8\d{10}$`.
@@ -143,7 +147,19 @@ paths:
       description: |
         Пагинированный список счетов организации с фильтрацией и сортировкой.
         Пагинация — **плоская** `{current_page, data, total}` (не meta-обёртка).
-        Даты — UTC `+00:00`.
+        Даты счетов в ОТВЕТЕ — UTC `+00:00` (как у всех ресурсов, см. «Форматы дат»).
+        В зоне мерчанта (`+05:00`) отдаётся только `summary.period`.
+
+        **Окно `date_from`/`date_to` задаётся в зоне мерчанта (Asia/Almaty)**, а не в UTC:
+
+        - голая дата `2026-08-01` — это КАЛЕНДАРНЫЕ СУТКИ мерчанта целиком
+          (`date_to` растягивается до `23:59:59`);
+        - дата со временем `2026-08-01 11:00` — точная минута; так задаётся смена,
+          переходящая через полночь (`date_from=2026-08-03 11:00&date_to=2026-08-04 03:00`);
+        - явный офсет (`2026-08-01T11:00:00+03:00`, `...Z`) уважается как указано.
+          В query-строке `+` нужно кодировать как `%2B`.
+
+        Обе границы включительные.
       operationId: listInvoices
       parameters:
         - name: search
@@ -154,24 +170,53 @@ paths:
             maxLength: 100
         - name: "status[]"
           in: query
-          description: Фильтр по статусам (можно несколько значений).
+          description: |
+            Фильтр по статусам (можно несколько значений).
+            `partially_refunded` — счёт, по которому уже был частичный возврат: деньги он
+            принял, поэтому фильтр «покажи оплаченные» без него неполон.
+            ⚠️ В `summary.sales` такой счёт учитывается по ПОЛНОЙ сумме счёта, а возвращённая
+            часть вычитается отдельной строкой `summary.refunds`: выручка за окно — это
+            `net_amount`, а не сумма `paid` + `partially_refunded`.
           schema:
             type: array
             items:
               type: string
-              enum: [processing, pending, cancelling, paid, cancelled, expired]
+              enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded]
         - name: date_from
           in: query
-          description: Дата от (Y-m-d).
+          description: Начало окна включительно — `Y-m-d` или `Y-m-d H:i[:ss]` (зона Almaty).
+          example: "2026-08-03 11:00"
           schema:
             type: string
-            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: date_to
           in: query
-          description: Дата до (Y-m-d, должна быть >= date_from).
+          description: Конец окна включительно, тот же формат. Должен быть >= date_from.
+          example: "2026-08-04 03:00"
           schema:
             type: string
-            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
+        - name: date_field
+          in: query
+          description: |
+            По какому времени резать окно.
+            `created_at` — момент выставления счёта (по умолчанию).
+            `paid_at` — момент оплаты; так операции раскладывает по сменам терминал, поэтому
+            для сверки кассы используйте его. Неоплаченные счета при этом отсеиваются.
+          schema:
+            type: string
+            enum: [created_at, paid_at]
+            default: created_at
+        - name: with_summary
+          in: query
+          description: |
+            Добавить в ответ объект `summary` — итоги по всей выборке (не по странице):
+            продажи, возвраты, выручка. По умолчанию выключено: сводка считается по всей
+            выборке и тяжелее обычного листинга — включайте её там, где нужны итоги
+            (закрытие смены, сверка кассы).
+          schema:
+            type: boolean
+            default: false
         - name: sort_by
           in: query
           description: Поле сортировки (невалидное значение → created_at).
@@ -214,7 +259,12 @@ paths:
                       $ref: '#/components/schemas/InvoiceListItem'
                   total:
                     type: integer
+                    description: Всего счетов под фильтром (для пагинации).
                     example: 48
+                  summary:
+                    allOf:
+                      - $ref: '#/components/schemas/InvoiceListSummary'
+                    description: Только при `with_summary=1`.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
@@ -260,7 +310,7 @@ paths:
                 kaspi_session_not_configured:
                   value: {error: "kaspi_session_not_configured", message: "Kaspi session is not configured. Please contact support."}
                 sandbox_invoice_limit:
-                  value: {error: "sandbox_invoice_limit", message: "Maximum sandbox invoices limit reached (500)."}
+                  value: {error: "sandbox_invoice_limit", message: "Maximum sandbox invoices limit reached (1000)."}
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
@@ -437,7 +487,8 @@ paths:
         '429':
           description: |
             `qr_rate_limit` (60/мин на организацию) либо cap-лимит (`trial_daily_limit`/
-            `outstanding_*`/`kyc_daily_limit_reached`) с `retry_after_seconds` и заголовком `Retry-After`.
+            `tariff_limit_reached`/`outstanding_*`/`kyc_daily_limit_reached`) с
+            `retry_after_seconds` и заголовком `Retry-After`.
           content:
             application/json:
               schema:
@@ -464,6 +515,15 @@ paths:
         Агрегированная статистика счетов за период. Укажите **либо** `period`, **либо**
         пару `start_date`+`end_date` (иначе `422`). `pending_*` включает счета в статусе
         `processing`. Поля `total_collected` **нет** — сумма оплаченного это `paid_amount`.
+
+        Границы задаются в зоне мерчанта (Asia/Almaty): голая дата = календарные сутки
+        целиком, `Y-m-d H:i` = точная минута. Окно режется по `created_at`.
+        Явный офсет уважается как указан; в query-строке `+` кодируется как `%2B`.
+
+        ⚠️ `paid_amount`, `paid_invoices` и `conversion_rate` здесь считают только статус
+        `paid` и **не включают** `partially_refunded` — у мерчанта с частичными возвратами
+        конверсия визуально занижена. Для сверки кассы используйте `summary` из
+        [listInvoices](#operation/listInvoices) — там раскладка кассового отчёта.
       operationId: getInvoiceStats
       parameters:
         - name: period
@@ -474,16 +534,18 @@ paths:
             enum: [today, week, month, year]
         - name: start_date
           in: query
-          description: Начало периода (Y-m-d). Требует end_date.
+          description: Начало периода — `Y-m-d` или `Y-m-d H:i[:ss]` (зона Almaty). Требует end_date.
+          example: "2026-08-03 11:00"
           schema:
             type: string
-            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: end_date
           in: query
-          description: Конец периода (Y-m-d, >= start_date).
+          description: Конец периода включительно, тот же формат. Должен быть >= start_date.
+          example: "2026-08-04 03:00"
           schema:
             type: string
-            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
       responses:
         '200':
           description: Статистика
@@ -890,7 +952,7 @@ paths:
   "/static-qr":
     post:
       tags: [Static QR]
-      summary: Создать статический печатный QR (отложенный счёт)
+      summary: Создать печатный QR под сделку (отложенный счёт)
       description: |
         Создаёт печатный лист, привязанный к сделке. Kaspi **не вызывается** — счёт
         материализуется при скане на `qr.apipay.kz/{token}` в контексте вашей организации
@@ -998,7 +1060,7 @@ paths:
                     message: Organization has multiple active connections. Please specify kaspi_connection_id.
     get:
       tags: [Static QR]
-      summary: Список статических QR организации
+      summary: Список печатных QR организации
       description: Печатные листы вашей организации (новые сверху). Плоская пагинация `page`/`per_page` (≤100).
       operationId: listStaticQr
       parameters:
@@ -1028,7 +1090,7 @@ paths:
   "/static-qr/{id}":
     get:
       tags: [Static QR]
-      summary: Получить статический QR
+      summary: Получить печатный QR под сделку
       description: Карточка листа. Чужой id → `404` (non-enumeration).
       operationId: getStaticQr
       parameters:
@@ -1053,7 +1115,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
       tags: [Static QR]
-      summary: Отключить статический QR
+      summary: Отключить печатный QR под сделку
       description: |
         Помечает лист `disabled` — последующие сканы показывают «неактивно», новые счета не
         создаются. Уже созданные счета не трогаются. Чужой id → `404`.
@@ -1466,7 +1528,10 @@ paths:
       summary: Список возвратов
       description: |
         Все возвраты организации (по всем счетам) с фильтрацией. Пагинация — **плоская**
-        `{current_page, data, total}`. Даты — UTC `+00:00`.
+        `{current_page, data, total}`. Даты в ОТВЕТЕ — UTC `+00:00`.
+
+        Окно `date_from`/`date_to` — по времени ОПЕРАЦИИ возврата, в зоне мерчанта
+        (Asia/Almaty): голая дата = календарные сутки целиком, `Y-m-d H:i` = точная минута.
       operationId: listRefunds
       parameters:
         - name: "status[]"
@@ -1484,14 +1549,18 @@ paths:
             type: integer
         - name: date_from
           in: query
+          description: Начало окна включительно — `Y-m-d` или `Y-m-d H:i[:ss]` (зона Almaty).
+          example: "2026-08-03 11:00"
           schema:
             type: string
-            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: date_to
           in: query
+          description: Конец окна включительно, тот же формат. Должен быть >= date_from.
+          example: "2026-08-04 03:00"
           schema:
             type: string
-            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: per_page
           in: query
           schema:
@@ -1887,7 +1956,7 @@ paths:
                       properties:
                         id: {type: string, example: start}
                         label: {type: string, example: Старт}
-                        daily_limit: {type: integer, nullable: true, description: "Лимит счетов в день из каталога тарифов; null — лимит в каталоге не задан, объём согласуется индивидуально.", example: 30}
+                        daily_limit: {type: integer, nullable: true, description: "Лимит счетов в день из каталога тарифов (start 30, business 100, pro 300). null — лимит в каталоге не задан, объём согласуется индивидуально; ни у одного из действующих тарифов null не встречается.", example: 30}
                         base_price: {type: integer, example: 10000}
                   plans:
                     type: array
@@ -2057,7 +2126,13 @@ paths:
     delete:
       tags: [Connections]
       summary: Деактивировать кассира
-      description: Помечает кассира inactive (soft delete). Гарды последнего/primary кассира → 422.
+      description: |
+        Помечает кассира inactive (soft delete). Гарды последнего/primary кассира → 422.
+
+        ⚠️ Денежное последствие. После деактивации возвраты по счетам, оплаченным через этого
+        кассира, через API не проходят: запрос принимается, но возврат завершается статусом
+        `failed` — приходит вебхук `invoice.refunded` со `status: failed`. Такие возвраты
+        проводят вручную в приложении Kaspi Pay. Проведите нужные возвраты до деактивации.
       operationId: deleteConnection
       parameters:
         - $ref: '#/components/parameters/ConnectionId'
@@ -2212,8 +2287,16 @@ paths:
                   value: {error: cashier_unavailable, message: "Cashier is unavailable for connection"}
         '429':
           description: |
-            `rate_limited` — превышен суточный лимит попыток подключения кассира.
-            Заголовок `Retry-After` — через сколько секунд повторить.
+            `rate_limited` — за сутки с этого аккаунта пробовали слишком много РАЗНЫХ
+            номеров кассиров. ⚠️ Окно СУТОЧНОЕ: `Retry-After` содержит секунды до
+            обнуления счётчика (часы, не минуты) — повторять раньше бесполезно.
+            Уже подключённые кассиры этого владельца в счётчик не входят, поэтому
+            переавторизация рабочей точки лимитом не блокируется.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Секунд до обнуления суточного счётчика
           content:
             application/json:
               schema:
@@ -2680,7 +2763,7 @@ paths:
         '403':
           $ref: '#/components/responses/TariffInactive'
         '409':
-          description: "Каталог занят другой операцией (per-org lock match-and-merge не взят за 5с) — повторите запрос"
+          description: "Каталог занят другой операцией — повторите запрос через несколько секунд"
           content:
             application/json:
               schema:
@@ -2698,7 +2781,24 @@ paths:
     post:
       tags: [Catalog]
       summary: Загрузить изображение товара
-      description: Загружает изображение (jpg/png/gif/webp, макс 10 МБ). Дедупликация по MD5. Полученный image_id передаётся в create/update товара.
+      description: |
+        Загружает изображение товара. **Только JPEG и PNG**, максимум 6 МБ, стороны
+        64…6000 px, площадь до 12 Мпикс.
+        Тип определяется по содержимому файла, а не по имени и не по `Content-Type`:
+        файл с расширением `.png`, но иным содержимым, отклоняется (`422 invalid_file_type`).
+
+        Изображение **перекодируется на нашей стороне** (приводится к JPEG ≤512×512), поэтому
+        байты на выходе не совпадают с загруженными. Дедупликация — по MD5 **результата**,
+        внутри организации: повторная загрузка того же изображения вернёт прежний `image_id`.
+
+        ⚠️ Для изображений, загруженных до 01.08.2026, дедуп мог считаться по исходному файлу.
+        Повторная загрузка такого файла один раз не совпадёт и создаст новый `image_id`; прежний
+        продолжает работать, чистить ничего не нужно. Дедупликацию не стоит считать контрактом:
+        при обновлении обработчика изображений хеш может однократно измениться.
+
+        Лимиты: **60/мин + 2000/сутки** на ключ.
+
+        ⚠️ Ранее принимались также gif/webp/bmp/svg — сужено 01.08.2026 (см. changelog).
       operationId: uploadCatalogImage
       requestBody:
         required: true
@@ -2711,7 +2811,7 @@ paths:
                 image:
                   type: string
                   format: binary
-                  description: Файл изображения, макс 10240 KB (10 МБ).
+                  description: "Файл изображения: JPEG или PNG, макс 6144 KB (6 МБ), стороны 64…6000 px, площадь ≤12 Мпикс."
       responses:
         '200':
           description: Изображение загружено
@@ -2725,8 +2825,21 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/TariffInactive'
+        '413':
+          description: "Файл больше 6 МБ (`error_code: file_too_large`). Повтор без уменьшения файла бессмысленен."
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: |
+            `invalid_file_type` — содержимое не JPEG/PNG; `image_rejected` — габариты вне
+            допустимого (стороны 64…6000 px, площадь ≤12 Мпикс) либо файл повреждён;
+            `validation_error` — поле `image` отсутствует.
+        '429':
+          description: "Превышен лимит загрузок (60/мин или 2000/сутки на ключ)."
+        '500':
+          description: |
+            `image_processing_unavailable` — обработка изображений временно недоступна,
+            повторите позже. Изображение при этом **не сохранено** — `image_id` не выдан,
+            повторять запрос безопасно.
+
   "/catalog/scan":
     post:
       tags: [Catalog]
@@ -3502,10 +3615,11 @@ components:
               value: {error: kaspi_busy, message: "Kaspi is busy — retry shortly"}
     RateLimitCap:
       description: |
-        Превышен антифрод/триал-лимит на создание счетов. `error_code` — один из
-        `trial_daily_limit`, `outstanding_recipient_limit`, `outstanding_org_limit`,
-        `recipient_fanout_exceeded`, `kyc_daily_limit_reached` (новый мерчант на проверке —
-        1 счёт/день до ручного одобрения).
+        Превышен антифрод/триал/тарифный лимит на создание счетов. `error_code` — один из
+        `trial_daily_limit`, `tariff_limit_reached` (лимит оплаченного тарифа; `meta.mode`
+        различает суточный потолок и бюджет 30-дневного блока), `outstanding_recipient_limit`,
+        `outstanding_org_limit`, `recipient_fanout_exceeded`, `kyc_daily_limit_reached`
+        (новый мерчант на проверке — 1 счёт/день до ручного одобрения).
       headers:
         Retry-After:
           description: Секунд до повторной попытки.
@@ -3671,6 +3785,7 @@ components:
         - outstanding_org_limit
         - recipient_fanout_exceeded
         - trial_daily_limit
+        - tariff_limit_reached
         - content_rejected
         - kyc_daily_limit_reached
         - kyc_rejected
@@ -4107,6 +4222,65 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InvoiceItem'
+    InvoiceMoneyGroup:
+      type: object
+      description: Количество операций и сумма по группе.
+      properties:
+        count: {type: integer, example: 50}
+        amount: {type: string, description: "Строка с двумя знаками — не float.", example: "554342.00"}
+    InvoiceListSummary:
+      type: object
+      description: |
+        Итоги по ВСЕЙ выборке (не по текущей странице) — «сверка смены».
+        Раскладка повторяет кассовый отчёт: продажи, возвраты отдельной строкой,
+        выручка = продажи − возвраты.
+
+        Суммы — строки с двумя знаками, чтобы по ним можно было сводить кассу.
+      properties:
+        count:
+          type: integer
+          description: Всего счетов под фильтром.
+          example: 57
+        sales:
+          type: object
+          description: |
+            Принятые деньги: счета в статусах `paid` и `partially_refunded`, по ПОЛНОЙ сумме
+            счёта. Частично возвращённый счёт деньги принял, поэтому он здесь.
+          properties:
+            count: {type: integer, example: 50}
+            amount: {type: string, example: "554342.00"}
+            refunded_later:
+              type: string
+              description: |
+                Сколько по счетам ЭТОЙ выборки вернули когда-либо (в том числе в другую смену).
+                Это НЕ `refunds.amount` — служит для объяснения расхождения.
+              example: "12000.00"
+        refunds:
+          allOf:
+            - $ref: '#/components/schemas/InvoiceMoneyGroup'
+          description: |
+            Завершённые операции возврата, СОВЕРШЁННЫЕ В ЭТОМ ОКНЕ — так же «Возврат прихода»
+            попадает в ту смену, когда его оформили, а не в смену исходной продажи.
+
+            ⚠️ Блок считается по окну и организации: фильтры `search` и `status[]` к нему
+            не применяются, потому что возврат может относиться к счёту вне выборки.
+        net_amount:
+          type: string
+          description: Выручка за окно = `sales.amount` − `refunds.amount`. Может быть отрицательной.
+          example: "530910.00"
+        cancelled: {$ref: '#/components/schemas/InvoiceMoneyGroup'}
+        expired: {$ref: '#/components/schemas/InvoiceMoneyGroup'}
+        pending:
+          allOf:
+            - $ref: '#/components/schemas/InvoiceMoneyGroup'
+          description: Неоконченные счета — `processing`, `pending`, `cancelling`.
+        period:
+          type: object
+          description: Эхо фактически применённых границ в зоне мерчанта. `null`, если границы не заданы.
+          properties:
+            from: {type: string, nullable: true, example: "2026-08-03T11:00:00+05:00"}
+            to: {type: string, nullable: true, example: "2026-08-04T03:00:00+05:00"}
+            field: {type: string, enum: [created_at, paid_at], example: created_at}
     Invoice:
       type: object
       description: Полный объект счёта (GET /invoices/{id}). Даты UTC +00:00.
@@ -4150,10 +4324,12 @@ components:
         conversion_rate: {type: number, description: "paid/total*100, округл. до 2 знаков (0 если счетов нет).", example: 75.0}
         period:
           type: object
-          description: Присутствует, когда диапазон резолвится.
+          description: |
+            Присутствует, когда диапазон резолвится. Эхо фактически применённых границ
+            в зоне мерчанта (ISO-8601 с офсетом `+05:00`).
           properties:
-            start: {type: string, format: date, example: "2026-01-01"}
-            end: {type: string, format: date, example: "2026-01-31"}
+            start: {type: string, example: "2026-08-03T11:00:00+05:00"}
+            end: {type: string, example: "2026-08-04T03:00:00+05:00"}
     CreateRefundRequest:
       type: object
       properties:
