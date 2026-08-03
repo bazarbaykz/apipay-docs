@@ -91,9 +91,9 @@ function finishOnboarding($orgId, $otp, $webhookUrl) {
 
     $reviewStatus = $key['webhook_review_status'] ?? 'approved';
     if ($reviewStatus !== 'approved') {
-        echo "\nWebhook status: {$reviewStatus} — notifications are NOT delivered until the\n";
-        echo "address is approved. Point the webhook at your own domain to get 'approved'\n";
-        echo "immediately, then re-issue the key.\n";
+        echo "\nWebhook status: {$reviewStatus} — notifications are held until the address\n";
+        echo "is approved. Use a webhook URL on a domain you control; if the status does not\n";
+        echo "change, contact support.\n";
     }
 
     echo "\nStore the key securely — it is shown only once.\n";

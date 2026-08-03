@@ -4206,7 +4206,7 @@ components:
         kaspi_invoice_id: {type: string, nullable: true, example: "13234689513"}
         phone: {type: string, example: "87001234567"}
         client_name: {type: string, nullable: true, example: Иван Иванов}
-        internal_comment: {type: string, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна.", example: Айгуль, самовывоз}
+        internal_comment: {type: string, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна.", example: "Айгуль, самовывоз"}
         is_sandbox: {type: boolean, example: false}
         is_recurring: {type: boolean, description: "Счёт создан подпиской.", example: false}
         subtotal: {type: string, nullable: true}
