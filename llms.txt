@@ -452,7 +452,7 @@ There is no `refunded` status — a full refund keeps the invoice `paid` with `i
 ## Quick Start
 
 1. Войдите в личный кабинет: https://apipay.kz/login
-2. Подключите кассира: https://apipay.kz/connect-cashier (или напишите в WhatsApp: +7 708 516 74 89)
+2. Подключите кассира: https://apipay.kz/connect-cashier (или напишите в WhatsApp: +7 700 307 65 12)
 3. Дождитесь, пока кассир подтвердит подключение кодом из SMS — статус виден в кабинете
 4. POST /api/v1/invoices для создания счёта
 5. Клиент получит уведомление в Kaspi и оплатит там
@@ -553,4 +553,4 @@ Full examples in all languages: see apipay-api-docs.md
 ## Optional
 
 - [Login](https://apipay.kz/login): Войти в личный кабинет
-- [WhatsApp Support](https://wa.me/77085167489): Техподдержка
+- [WhatsApp Support](https://wa.me/77003076512): Техподдержка

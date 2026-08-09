@@ -39,5 +39,5 @@ Any other information that might be helpful.
 ---
 
 For API issues (not documentation), please contact support:
-- WhatsApp: https://wa.me/77085167489
+- WhatsApp: https://wa.me/77003076512
 - Dashboard: https://apipay.kz

@@ -81,7 +81,7 @@ info:
     цикла (тег `Sandbox`). В вебхуках sandbox-события помечены `is_sandbox: true`.
   contact:
     name: ApiPay.kz Support
-    url: https://wa.me/77085167489
+    url: https://wa.me/77003076512
 servers:
   - url: https://api.apipay.kz/api/v1
     description: Production API

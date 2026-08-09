@@ -20,7 +20,7 @@ Before creating invoices, you must connect your Kaspi cashier:
 2. [Connect your Kaspi cashier](https://apipay.kz/connect-cashier) yourself in the dashboard (Settings → Kaspi Authorization) — a 2–3 minute wizard: add an employee with the **"Cashier"** role in the Kaspi Pay app, enter that number, confirm the SMS code. The connection is instant.
 3. Get your API key from Settings → Connection
 
-> Do not sign in to the Kaspi Pay app with the cashier's number afterwards — it breaks the connection. If the wizard does not work for you, [WhatsApp support](https://wa.me/77085167489) can connect it manually.
+> Do not sign in to the Kaspi Pay app with the cashier's number afterwards — it breaks the connection. If the wizard does not work for you, [WhatsApp support](https://wa.me/77003076512) can connect it manually.
 
 ### 2. Create Invoice
 
@@ -117,7 +117,7 @@ The [Partner API](docs/en/partner-api.md) has a separate spec: [openapi-partner.
 
 ## Support
 
-- **WhatsApp**: [+7 708 516 7489](https://wa.me/77085167489)
+- **WhatsApp**: [+7 700 307 6512](https://wa.me/77003076512)
 - **Dashboard**: [apipay.kz](https://apipay.kz)
 - **Issues**: [GitHub Issues](https://github.com/bazarbaykz/apipay-docs/issues)
 

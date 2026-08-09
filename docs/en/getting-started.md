@@ -10,7 +10,7 @@ Before using the ApiPay.kz API, you need to:
 
 > **Important:** after linking, do not sign in to the Kaspi Pay app with the cashier's number — the session will break and you will have to connect the cashier again.
 >
-> If the wizard does not work for you, we can connect it manually: [WhatsApp support (+7 708 516 74 89)](https://wa.me/77085167489).
+> If the wizard does not work for you, we can connect it manually: [WhatsApp support (+7 700 307 65 12)](https://wa.me/77003076512).
 
 ## Configuration
 
