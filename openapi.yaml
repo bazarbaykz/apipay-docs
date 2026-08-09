@@ -48,6 +48,10 @@ info:
 
     Окна фильтров (`date_from`/`date_to`, `start_date`/`end_date`, `from`/`to`) задаются
     в зоне мерчанта **Asia/Almaty**: голая дата — это его календарные сутки целиком.
+    Каждая ступень точности опциональна — `2026-08-01`, `2026-08-01 11`, `2026-08-01 11:30`,
+    `2026-08-01 11:30:15`. Периодом является ТОЛЬКО голая дата: как только указано время,
+    граница означает ровно этот момент (`…18` и `…18:00` эквивалентны, час до конца часа
+    не растягивается).
     Явный офсет в значении уважается как указан; в query-строке `+` кодируется как `%2B`.
 
     ## Телефон
@@ -154,12 +158,15 @@ paths:
 
         - голая дата `2026-08-01` — это КАЛЕНДАРНЫЕ СУТКИ мерчанта целиком
           (`date_to` растягивается до `23:59:59`);
-        - дата со временем `2026-08-01 11:00` — точная минута; так задаётся смена,
-          переходящая через полночь (`date_from=2026-08-03 11:00&date_to=2026-08-04 03:00`);
+        - дата со временем — точный момент; минуты и секунды опциональны, поэтому
+          `2026-08-01 11`, `2026-08-01 11:00` и `2026-08-01 11:00:00` означают одно и то же.
+          Так задаётся смена, переходящая через полночь
+          (`date_from=2026-08-03 11&date_to=2026-08-04 03`);
         - явный офсет (`2026-08-01T11:00:00+03:00`, `...Z`) уважается как указано.
           В query-строке `+` нужно кодировать как `%2B`.
 
-        Обе границы включительные.
+        Обе границы включительные. ⚠️ Растягивается до конца периода ТОЛЬКО голая дата:
+        `date_to=2026-08-01 18` — это `18:00:00`, а не конец восемнадцатого часа.
       operationId: listInvoices
       parameters:
         - name: search
@@ -184,18 +191,18 @@ paths:
               enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded]
         - name: date_from
           in: query
-          description: Начало окна включительно — `Y-m-d` или `Y-m-d H:i[:ss]` (зона Almaty).
+          description: Начало окна включительно — `Y-m-d` или `Y-m-d H[:ii[:ss]]` (зона Almaty).
           example: "2026-08-03 11:00"
           schema:
             type: string
-            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: date_to
           in: query
-          description: Конец окна включительно, тот же формат. Должен быть >= date_from.
+          description: Конец окна включительно, тот же формат. Голая дата = конец суток, время = ровно этот момент. Должен быть >= date_from.
           example: "2026-08-04 03:00"
           schema:
             type: string
-            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: date_field
           in: query
           description: |
@@ -432,9 +439,13 @@ paths:
         **Синхронный**: ответ `201` сразу со `status: "pending"` и QR-полями
         (pending-вебхука для QR нет). Покупатель сканирует QR приложением Kaspi.
 
-        Жизненный цикл QR — **минуты**, не 24ч; момент истечения диктует Kaspi
-        (`qr_expires_at` справочно), терминальный статус (`paid`/`cancelled`/`expired`)
-        приходит вебхуком. QR-счета **сосуществуют**: создание нового QR на той же кассе
+        Жизненный цикл QR — **минуты**, не 24ч. `qr_expires_at` — момент, до которого
+        QR ещё можно **отсканировать**; длительность окна считайте из ответа, а не
+        константой. ⚠️ Окно ограничивает только скан: как только покупатель отсканировал
+        QR и попал на экран оплаты, операция живёт дольше, и оплата, начатая под конец
+        окна, завершится уже после `qr_expires_at`.
+        Терминальный статус (`paid`/`cancelled`/`expired`) ставит Kaspi и приносит вебхук —
+        **ориентируйтесь на него, а не на локальный отсчёт**. QR-счета **сосуществуют**: создание нового QR на той же кассе
         НЕ отменяет прежние — старый остаётся `pending` и мониторится до своего терминала.
         Реагируйте по каждому `invoice.id` отдельно. `cancelled` по QR = реальная отмена
         клиентом. Когда клиент отсканировал QR — приходит событие `invoice.qr_scanned`
@@ -534,18 +545,18 @@ paths:
             enum: [today, week, month, year]
         - name: start_date
           in: query
-          description: Начало периода — `Y-m-d` или `Y-m-d H:i[:ss]` (зона Almaty). Требует end_date.
+          description: Начало периода — `Y-m-d` или `Y-m-d H[:ii[:ss]]` (зона Almaty). Требует end_date.
           example: "2026-08-03 11:00"
           schema:
             type: string
-            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: end_date
           in: query
-          description: Конец периода включительно, тот же формат. Должен быть >= start_date.
+          description: Конец периода включительно, тот же формат. Голая дата = конец суток, время = ровно этот момент. Должен быть >= start_date.
           example: "2026-08-04 03:00"
           schema:
             type: string
-            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
       responses:
         '200':
           description: Статистика
@@ -1311,7 +1322,8 @@ paths:
         - name: from
           in: query
           description: |
-            Нижняя граница `created_at` (дата или дата-время). Голая дата и дата-время без
+            Нижняя граница `created_at` (дата или дата-время; минуты и секунды опциональны —
+            `2026-07-13`, `2026-07-13 10`, `2026-07-13 10:30`). Голая дата и дата-время без
             смещения трактуются в **Asia/Almaty** (+05:00) — календарный день мерчанта;
             явное смещение (`2026-07-13T10:00:00+03:00`, `...Z`) берётся как есть.
           schema: {type: string}
@@ -1319,8 +1331,9 @@ paths:
           in: query
           description: |
             Верхняя граница `created_at`; должна быть >= `from`, иначе `422`. Голая дата
-            (`2026-07-13`) включает весь день целиком **по Asia/Almaty**; дата-время без
-            смещения трактуется в Asia/Almaty, с явным смещением — берётся как есть.
+            (`2026-07-13`) включает весь день целиком **по Asia/Almaty**; дата-время (минуты
+            и секунды опциональны) означает ровно этот момент — `10` это `10:00:00`, а не
+            конец часа. Без смещения трактуется в Asia/Almaty, с явным — берётся как есть.
           schema: {type: string}
         - name: per_page
           in: query
@@ -1549,18 +1562,18 @@ paths:
             type: integer
         - name: date_from
           in: query
-          description: Начало окна включительно — `Y-m-d` или `Y-m-d H:i[:ss]` (зона Almaty).
+          description: Начало окна включительно — `Y-m-d` или `Y-m-d H[:ii[:ss]]` (зона Almaty).
           example: "2026-08-03 11:00"
           schema:
             type: string
-            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: date_to
           in: query
-          description: Конец окна включительно, тот же формат. Должен быть >= date_from.
+          description: Конец окна включительно, тот же формат. Голая дата = конец суток, время = ровно этот момент. Должен быть >= date_from.
           example: "2026-08-04 03:00"
           schema:
             type: string
-            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$'
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
         - name: per_page
           in: query
           schema:
@@ -1842,6 +1855,7 @@ paths:
           in: query
           description: |
             Начало окна (включительно), по created_at. Default — now-7d при отсутствии.
+            Минуты и секунды опциональны (`2026-07-13`, `2026-07-13 10`, `2026-07-13 10:30`).
             Голая дата и дата-время без смещения трактуются в **Asia/Almaty** (+05:00) —
             календарный день мерчанта; явное смещение берётся как есть.
           schema:
@@ -1851,8 +1865,9 @@ paths:
           in: query
           description: |
             Конец окна (включительно). Должен быть >= from, иначе 422. Голая дата
-            (`2026-07-13`) включает весь день целиком **по Asia/Almaty**; дата-время без
-            смещения трактуется в Asia/Almaty, с явным смещением — берётся как есть.
+            (`2026-07-13`) включает весь день целиком **по Asia/Almaty**; дата-время (минуты
+            и секунды опциональны) означает ровно этот момент — `10` это `10:00:00`, а не
+            конец часа. Без смещения трактуется в Asia/Almaty, с явным — берётся как есть.
           schema:
             type: string
             format: date-time
@@ -2253,6 +2268,15 @@ paths:
                   pattern: '^7\d{10}$'
                   description: Телефон кассира, формат 7XXXXXXXXXX.
                   example: "77001234567"
+                confirm_duplicate:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Подтверждение осознанной перепривязки: этот кассир уже подключён к
+                    ДРУГОЙ организации того же владельца. Без флага такой запрос
+                    отбивается `409 duplicate_cashier_confirm` с описанием
+                    существующей организации. Флаг действует только на организации
+                    того же владельца.
       responses:
         '200':
           description: SMS отправлена
@@ -2276,6 +2300,11 @@ paths:
             кассира сейчас нельзя подключить; причина намеренно не раскрывается, повтор
             не поможет, обратитесь в поддержку. `test_organization` — организация
             тестовая (`is_test`): реальный кассир к ней не привязывается.
+            `duplicate_cashier_confirm` — кассир уже подключён к ДРУГОЙ
+            организации ТОГО ЖЕ владельца; это не блокировка, а подтверждение:
+            повторите запрос с `confirm_duplicate: true`, если перепривязка намеренная.
+            Тело содержит `can_override` и `existing_organization`
+            (`connection_status` — статус коннекшна: active|inactive|pending|error).
           content:
             application/json:
               schema:
@@ -2285,6 +2314,16 @@ paths:
                   value: {error: context_expired, message: "Auth session expired — re-initialize"}
                 cashier_unavailable:
                   value: {error: cashier_unavailable, message: "Cashier is unavailable for connection"}
+                duplicate_cashier_confirm:
+                  value:
+                    error: duplicate_cashier_confirm
+                    message: "Cashier is already linked to another organization of yours"
+                    can_override: true
+                    existing_organization:
+                      id: 42
+                      name: "ТОО Example"
+                      connection_status: inactive
+                      invoices_count: 12
         '429':
           description: |
             `rate_limited` — за сутки с этого аккаунта пробовали слишком много РАЗНЫХ
@@ -2374,6 +2413,27 @@ paths:
                   org_name: {type: string, nullable: true, description: "Только при success=true."}
                   phone: {type: string, description: "Маскированный телефон кассира (при success=true).", example: "770****4567"}
                   sandbox_mode: {type: boolean, example: false}
+                  catalog_block_reason:
+                    type: string
+                    nullable: true
+                    enum: [idn_conflict, no_idn, no_kaspi_org_id, no_tradepoint]
+                    example: null
+                    description: |
+                      Почему каталог товаров этой организации не заработает; `null` — блокировки нет
+                      (или каталог организации не нужен). Отдаётся только при `success=true`.
+
+                      `idn_conflict` — БИН организации уже закреплён за другой организацией;
+                      решается поддержкой.
+                      `no_idn` — Kaspi не вернул БИН организации.
+                      `no_kaspi_org_id` — не получен контекст организации Kaspi.
+                      `no_tradepoint` — код торговой точки организации в Kaspi определить
+                      не удалось.
+
+                      Во всех четырёх случаях каталог останется пустым до вмешательства поддержки:
+                      `GET /catalog` будет отдавать `200` с пустым списком.
+
+                      ⚠️ Список значений ОТКРЫТ и может пополняться. Обрабатывайте неизвестный код
+                      общей веткой («каталог недоступен»), а не `switch` без `default`.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2385,7 +2445,16 @@ paths:
             Терминально: `context_expired` — Kaspi потерял контекст процесса (нужен новый
             `init`, а не повтор OTP); `no_process` — авторизация не начата либо уже
             закрыта предыдущим терминальным исходом; `test_organization` — организация
-            тестовая (`is_test`), реальная авторизация кассира для неё запрещена.
+            тестовая (`is_test`), реальная авторизация кассира для неё запрещена;
+            `org_transferred` — организация этого кассира уже заведена в ApiPay и по
+            итогам подтверждения закреплена за вашим аккаунтом.
+
+            ⚠️ У `org_transferred` в теле есть ДОПОЛНИТЕЛЬНЫЕ поля рядом с `error` и
+            `message`: `organization_id` и `organization_name` — организация, в которой
+            теперь надо работать. Кассира нужно подключить уже в ней: новый `init` →
+            `send-phone` → `verify-otp` по её `connection`, список организаций перечитайте
+            из `GET /api/users/me`. Повтор OTP на прежнем подключении бессмыслен, а
+            организация, из которой вы делали запрос, осталась пустой.
           content:
             application/json:
               schema:
@@ -2395,6 +2464,12 @@ paths:
                   value: {error: context_expired, message: "Auth session expired — re-initialize"}
                 no_process:
                   value: {error: no_process, message: "Auth session is not initialized"}
+                org_transferred:
+                  value:
+                    error: org_transferred
+                    message: "Organization ownership transferred — connect the cashier there"
+                    organization_id: 42
+                    organization_name: "ТОО Example"
         '422':
           description: |
             Ошибка формата `otp` (стандартная Laravel-форма валидации) либо терминальный
@@ -4113,8 +4188,8 @@ components:
         created_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
         is_qr_token: {type: boolean, example: true}
         qr_token_url: {type: string, description: "Ссылка Kaspi для QR.", example: "https://qr.kaspi.kz/..."}
-        qr_image_url: {type: string, nullable: true, description: "PNG QR на нашем хранилище."}
-        qr_expires_at: {type: string, format: date-time, description: "Справочно; истечение диктует Kaspi.", example: "2026-01-10T12:05:00+00:00"}
+        qr_image_url: {type: string, nullable: true, description: "PNG QR на нашем хранилище. Живёт до `qr_expires_at + 60 сек`, дальше `404` — перевыпустите QR, а не перезагружайте картинку."}
+        qr_expires_at: {type: string, format: date-time, description: "Крайний момент, когда QR ещё можно ОТСКАНИРОВАТЬ. Длительность окна задаёт Kaspi — считайте её из этого поля, не константой. Начатая до него оплата завершается и позже. Терминальный статус диктует Kaspi — ждите вебхук.", example: "2026-01-10T12:03:00+00:00"}
     CreateStaticQrRequest:
       type: object
       description: |

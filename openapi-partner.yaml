@@ -421,6 +421,16 @@ paths:
                     Это телефон кассира Kaspi, НЕ телефон плательщика.
                   pattern: ^7\d{10}$
                   example: "7XXXXXXXXXX"
+                confirm_duplicate:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Подтверждение осознанной перепривязки: этот кассир уже подключён к
+                    ДРУГОЙ организации того же владельца (для партнёрских организаций
+                    владелец — сам партнёр, то есть речь о ваших же организациях). Без
+                    флага такой запрос отбивается
+                    `409 duplicate_cashier_confirm`. Флаг действует только на
+                    организации того же владельца.
       responses:
         "200":
           description: SMS отправлено
@@ -448,16 +458,40 @@ paths:
             Конфликт процесса: `no_process` (авторизация не начата — вызовите
             `init`), `context_expired` (Kaspi-контекст протух, ~10 мин — вызовите
             `init` заново), `cashier_unavailable` (подключить этого кассира
-            сейчас нельзя; повтор запроса не поможет).
+            сейчас нельзя; повтор запроса не поможет),
+            `duplicate_cashier_confirm` (кассир уже подключён к ДРУГОЙ
+            организации того же владельца — не блокировка, а подтверждение:
+            повторите с `confirm_duplicate: true`; тело содержит `can_override` и
+            `existing_organization` с `connection_status` и `invoices_count`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
-              example:
-                success: false
-                error: context_expired
-                error_code: context_expired
-                message: Сессия авторизации истекла, начните заново.
+              examples:
+                context_expired:
+                  value:
+                    success: false
+                    error: context_expired
+                    error_code: context_expired
+                    message: Сессия авторизации истекла, начните заново.
+                duplicate_cashier_confirm:
+                  summary: Дубль кассира — нужно подтверждение
+                  description: >-
+                    ⚠️ `can_override` и `existing_organization` лежат РЯДОМ со служебными
+                    ключами конверта, а не внутри них.
+                  value:
+                    success: false
+                    error: duplicate_cashier_confirm
+                    error_code: duplicate_cashier_confirm
+                    message: >-
+                      Этот кассир уже подключён к другой вашей организации.
+                      Повторите с confirm_duplicate=true, если это намеренно.
+                    can_override: true
+                    existing_organization:
+                      id: 42
+                      name: ТОО Example
+                      connection_status: inactive
+                      invoices_count: 12
         "422":
           description: >-
             `invalid_phone` (неверный формат — также возможна стандартная
@@ -632,6 +666,10 @@ paths:
             (подключить этого кассира сейчас нельзя; повтор не поможет),
             `context_expired` (Kaspi потерял контекст процесса — нужен новый
             `init`, а не повтор OTP).
+
+
+            ⚠️ Кода `org_transferred` на партнёрских поверхностях нет: организация
+            в партнёрском контуре автоматически к другому владельцу не переходит.
           content:
             application/json:
               schema:
