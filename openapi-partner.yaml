@@ -971,9 +971,9 @@ paths:
       tags: [Tariff]
       summary: Каталог тарифов
       description: >-
-        Общий каталог тарифов ApiPay (без привязки к организации): 3 тарифа
-        (start/business/pro) и 12 планов (3 тарифа × периоды 1/3/6/12 мес со
-        скидками).
+        Общий каталог тарифов ApiPay (без привязки к организации): 4 тарифа
+        (start/business/pro/pro_max) и 16 планов (4 тарифа × периоды 1/3/6/12
+        мес со скидками).
       operationId: partnerTariffPlans
       responses:
         "200":
@@ -1000,6 +1000,7 @@ paths:
                   - { id: start, label: Start, daily_limit: 30, base_price: 10000 }
                   - { id: business, label: Business, daily_limit: 100, base_price: 25000 }
                   - { id: pro, label: Pro, daily_limit: 300, base_price: 60000 }
+                  - { id: pro_max, label: Pro Max, daily_limit: 600, base_price: 90000 }
                 plans:
                   - { tier_id: business, period_months: 3, price: 71250, discount_percent: 5, label: "Business — 3 месяца", price_per_month: 23750 }
         "401":
@@ -1067,7 +1068,7 @@ paths:
               properties:
                 tier_id:
                   type: string
-                  enum: [start, business, pro]
+                  enum: [start, business, pro, pro_max]
                   example: business
                 period_months:
                   type: integer
@@ -1240,7 +1241,7 @@ paths:
               properties:
                 tier_id:
                   type: string
-                  enum: [start, business, pro]
+                  enum: [start, business, pro, pro_max]
                   example: business
                 period_months:
                   type: integer
@@ -1802,7 +1803,7 @@ components:
           nullable: true
           description: >-
             Дневной лимит счетов из каталога тарифов: start 30, business 100,
-            pro 300. `null` — лимит в каталоге не задан, объём согласуется
+            pro 300, pro_max 600. `null` — лимит в каталоге не задан, объём согласуется
             индивидуально; ни у одного из действующих тарифов null не
             встречается.
           example: 100
