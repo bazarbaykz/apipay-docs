@@ -814,6 +814,88 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           description: Счёт не найден
+  "/invoices/{id}/receipt":
+    get:
+      tags: [Invoices]
+      summary: Чек Kaspi по оплаченному счёту
+      description: |
+        Ссылки на чек Kaspi по оплаченному счёту: `share_link` — то, что отдают
+        покупателю, `download_link` — прямой PDF (обе несут секретный `hash`),
+        `receipt_link` — фискальная форма чека, секрета не несёт.
+
+        Это чек Kaspi по оплате счёта. Фискальные чеки за наличные и POS другого банка —
+        отдельный раздел `/receipts` (Kaspi OFD), к этой ручке отношения он не имеет.
+
+        **Ответ асинхронный.** Первый вызов ставит задачу и отдаёт `202 {status:"pending"}` —
+        повторите запрос через `poll_after` секунд. Как только чек получен, тот же URL
+        отдаёт `200 {status:"ready"}`. Результат кэшируется: чек неизменен, поэтому
+        повторный вызов по тому же счёту отвечает сразу.
+
+        Доступно по счетам в статусе `paid` и `partially_refunded` (частичный возврат —
+        это по-прежнему оплаченный счёт). Тот же `409` приходит, если у оплаченного счёта
+        ещё нет числового идентификатора Kaspi. В песочнице возвращаются детерминированные
+        ссылки-заглушки, помеченные `sandbox=1`.
+
+        ⚠️ `download_link` и `share_link` содержат секретный параметр `hash` — по нему
+        чек откроет кто угодно. Не публикуйте их и не кладите в логи. Выданную ссылку
+        отозвать нельзя: если она утекла, закрыть доступ нечем.
+
+        ⚠️ У ручки отдельный минутный лимит — он строже общего.
+      operationId: getInvoiceReceipt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Чек получен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceReceipt'
+        '202':
+          description: Чек запрашивается — повторите запрос через poll_after секунд
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: pending}
+                  poll_after: {type: integer, description: "Через сколько секунд повторить.", example: 2}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TariffInactive'
+        '404':
+          description: Счёт не найден
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Invoice not found
+        '409':
+          description: Счёт не оплачен либо сессия кассира недоступна
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Слишком много запросов чеков
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Kaspi не отдал чек
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   "/invoices/status/check":
     post:
       tags: [Invoices]
@@ -4122,6 +4204,9 @@ components:
         - cashbox_report_unavailable
         - cashbox_toggle_in_progress
         - cashbox_toggle_unavailable
+        - receipt_not_available_for_status
+        - receipt_unavailable
+        - receipt_rate_limited
     QrRefundSession:
       type: object
       description: Снимок сессии QR-возврата. Kaspi наружу не течёт (нет QrReturnId/ExtTranId).
@@ -4532,6 +4617,7 @@ components:
         external_order_id: {type: string, nullable: true, example: order-123}
         status: {$ref: '#/components/schemas/InvoiceStatus'}
         kaspi_invoice_id: {type: string, nullable: true, example: "13234689513"}
+        kaspi_qr_link: {type: string, nullable: true, description: "Ссылка на оплату этого счёта по QR — нарисуйте из неё QR-код покупателю. Вычисляется из kaspi_invoice_id, не хранится. `null`, пока Kaspi не присвоил идентификатор (статус `processing`), и всегда `null` в песочнице. Не путать с `qr_token_url` — то отдельный механизм QR-token счетов.", example: "https://kaspi.kz/qr/pay?tranId=QR13234689513"}
         phone: {type: string, example: "87001234567"}
         client_name: {type: string, nullable: true, example: Иван Иванов}
         internal_comment: {type: string, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна.", example: "Айгуль, самовывоз"}
@@ -4566,6 +4652,7 @@ components:
         total_refunded: {type: string, example: "0.00"}
         is_fully_refunded: {type: boolean, example: false}
         kaspi_invoice_id: {type: string, nullable: true, example: "13234689513"}
+        kaspi_qr_link: {type: string, nullable: true, description: "Ссылка на оплату этого счёта по QR — нарисуйте из неё QR-код покупателю. Вычисляется из kaspi_invoice_id, не хранится. `null`, пока Kaspi не присвоил идентификатор (статус `processing`), и всегда `null` в песочнице. Не путать с `qr_token_url` — то отдельный механизм QR-token счетов.", example: "https://kaspi.kz/qr/pay?tranId=QR13234689513"}
         error_message: {type: string, nullable: true}
         error_code: {$ref: '#/components/schemas/ErrorCode'}
         items:
@@ -4577,6 +4664,32 @@ components:
         discount_percentage: {type: string, description: "Только если передан."}
         paid_at: {type: string, format: date-time, nullable: true}
         created_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
+    InvoiceReceipt:
+      type: object
+      description: Ссылки на чек Kaspi по оплаченному счёту (GET /invoices/{id}/receipt).
+      properties:
+        status: {type: string, enum: [ready], example: ready}
+        receipt_link:
+          type: string
+          nullable: true
+          description: "Фискальная форма чека. Секрета не несёт."
+          example: "https://receipt.kaspi.kz/web/fiscal?i=000000000000&f=000000000000&s=10&t=2026-01-10%2012%3A00%3A00.000000"
+        download_link:
+          type: string
+          nullable: true
+          description: "Прямая ссылка на PDF. ⚠️ Содержит секретный `hash` — не публикуйте и не логируйте."
+          example: "https://receipt.kaspi.kz/api/v3/receipt/download?extTranId=QR00000000000&sale_date=…&hash=…&locale=ru"
+        share_link:
+          type: string
+          nullable: true
+          description: "Ссылка для покупателя. ⚠️ Содержит тот же секретный `hash`."
+          example: "https://receipt.kaspi.kz/web?extTranId=QR00000000000&hash=…"
+        sale_date:
+          type: string
+          nullable: true
+          description: "Время продажи в том виде, как его отдал Kaspi (микросекунды значащие)."
+          example: "2026-01-10 12:00:00.000000"
+        fetched_at: {type: string, format: date-time, nullable: true, description: "Когда чек был получен от Kaspi."}
     InvoiceStats:
       type: object
       properties:
