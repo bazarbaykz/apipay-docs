@@ -23,6 +23,7 @@ info:
     - `POST /invoices/bulk` — 20/мин;
     - `POST /invoices/qr` — 60/мин на организацию;
     - `POST /catalog/scan` — 30/мин + 2000/сутки;
+    - касса (`/cashbox/*`) — 30/мин;
     - `POST /clients/check` — 60/мин + 10 000/сутки на ключ, 200/мин + 20 000/сутки на
       организацию, 10/мин на одного кассира;
     - авторизация кассира: `auth/init` и `auth/send-phone` — 5/мин, `auth/verify-otp` —
@@ -116,6 +117,8 @@ tags:
     description: Рекуррентные подписки с автоматическим перевыставлением счетов.
   - name: Sandbox
     description: Симуляция жизненного цикла счетов и подписок (только при sandbox_mode=true).
+  - name: Cashbox
+    description: Касса Kaspi — смены, сводка по наличным, сверка наших счетов с кассой, PDF-отчёт, тумблеры (автозакрытие/автоизъятие) и async-закрытие смены. У кассовых эндпоинтов отдельный минутный лимит — 30 запросов/мин на ключ. В песочнице касса отвечает детерминированными данными по вашим sandbox-счетам, к Kaspi не обращается и подключённого кассира не требует — идентификаторы смен там синтетические.
   - name: Webhooks
     description: Исходящие вебхук-события (секция x-webhooks) + read-only логи их доставки (/webhook-logs). HMAC-подпись по сырому телу, таймстампы UTC +00:00.
 paths:
@@ -152,7 +155,9 @@ paths:
         Пагинированный список счетов организации с фильтрацией и сортировкой.
         Пагинация — **плоская** `{current_page, data, total}` (не meta-обёртка).
         Даты счетов в ОТВЕТЕ — UTC `+00:00` (как у всех ресурсов, см. «Форматы дат»).
-        В зоне мерчанта (`+05:00`) отдаётся только `summary.period`.
+
+        Итоги по смене (продажи/возвраты/выручка и сверка с цифрами Kaspi) отдаёт
+        отдельный `GET /api/v1/cashbox/reconciliation`.
 
         **Окно `date_from`/`date_to` задаётся в зоне мерчанта (Asia/Almaty)**, а не в UTC:
 
@@ -181,9 +186,9 @@ paths:
             Фильтр по статусам (можно несколько значений).
             `partially_refunded` — счёт, по которому уже был частичный возврат: деньги он
             принял, поэтому фильтр «покажи оплаченные» без него неполон.
-            ⚠️ В `summary.sales` такой счёт учитывается по ПОЛНОЙ сумме счёта, а возвращённая
-            часть вычитается отдельной строкой `summary.refunds`: выручка за окно — это
-            `net_amount`, а не сумма `paid` + `partially_refunded`.
+            ⚠️ Для сверки кассы фильтруйте по обоим статусам сразу
+            (`status[]=paid&status[]=partially_refunded`) либо берите итоги из
+            `GET /api/v1/cashbox/reconciliation`.
           schema:
             type: array
             items:
@@ -214,16 +219,6 @@ paths:
             type: string
             enum: [created_at, paid_at]
             default: created_at
-        - name: with_summary
-          in: query
-          description: |
-            Добавить в ответ объект `summary` — итоги по всей выборке (не по странице):
-            продажи, возвраты, выручка. По умолчанию выключено: сводка считается по всей
-            выборке и тяжелее обычного листинга — включайте её там, где нужны итоги
-            (закрытие смены, сверка кассы).
-          schema:
-            type: boolean
-            default: false
         - name: sort_by
           in: query
           description: Поле сортировки (невалидное значение → created_at).
@@ -268,10 +263,6 @@ paths:
                     type: integer
                     description: Всего счетов под фильтром (для пагинации).
                     example: 48
-                  summary:
-                    allOf:
-                      - $ref: '#/components/schemas/InvoiceListSummary'
-                    description: Только при `with_summary=1`.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
@@ -533,8 +524,9 @@ paths:
 
         ⚠️ `paid_amount`, `paid_invoices` и `conversion_rate` здесь считают только статус
         `paid` и **не включают** `partially_refunded` — у мерчанта с частичными возвратами
-        конверсия визуально занижена. Для сверки кассы используйте `summary` из
-        [listInvoices](#operation/listInvoices) — там раскладка кассового отчёта.
+        конверсия визуально занижена. Для сверки кассы используйте
+        `GET /api/v1/cashbox/reconciliation` — там раскладка кассового отчёта и сверка
+        с цифрами Kaspi.
       operationId: getInvoiceStats
       parameters:
         - name: period
@@ -3581,6 +3573,254 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Подписка не найдена
+  "/cashbox/summary":
+    get:
+      tags: [Cashbox]
+      summary: Сводка по наличным за день
+      description: |
+        Кассовая сводка по наличным за календарный день (зона Asia/Almaty). Данные
+        читаются с кассы Kaspi и кэшируются примерно на 60 секунд. Все суммы — строки
+        `"N.NN"` в тенге. Флаг `available_cashbox_actions=false` означает «Kaspi запретил операции
+        на кассе» — на чтении не роняется, отдаётся в данных, чтобы UI выключил
+        тумблеры/закрытие.
+      operationId: getCashboxSummary
+      parameters:
+        - {name: date, in: query, required: false, schema: {type: string}, description: "`Y-m-d` или `Y-m-d H:i` (Almaty). По умолчанию — сегодня. Будущая дата → 422."}
+        - {name: kaspi_connection_id, in: query, required: false, schema: {type: integer, nullable: true}, description: Касса; по умолчанию primary-коннекшн организации.}
+      responses:
+        '200':
+          description: Сводка по наличным
+          content: {application/json: {schema: {$ref: '#/components/schemas/CashboxDaySummary'}}}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "tariff_inactive / cashbox_disabled — кассовые операции для организации недоступны (в песочнице этот отказ не приходит)"}
+        '409': {description: "kaspi_session_not_configured / rfo_missing"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+        '503': {description: "cashbox_unavailable — касса Kaspi временно недоступна"}
+  "/cashbox/reconciliation":
+    get:
+      tags: [Cashbox]
+      summary: Сверка наших счетов с кассой Kaspi
+      description: |
+        Показывает ОБЕ цифры рядом — нашу выручку по счетам (`ours`:
+        продажи, возвраты и их разность) и цифру кассы Kaspi (`kaspi`) — и структурные причины, по которым
+        их **нельзя приравнять** (`discrepancies`). ⛔ Это НЕ доказательство равенства: касса
+        Kaspi и счета ApiPay — разные леджеры (Kaspi видит в том числе наличные и офлайн-продажи,
+        а наша половина — только оплаты по счетам ApiPay), а разбивки наличные/безнал Kaspi не отдаёт. Поэтому
+        `comparable=false` и `verdict="not_comparable"` — текущее нормальное состояние;
+        `delta`, `explained_amount` и `unexplained_amount` приходят `null` — это штатное
+        состояние контракта, а не ошибка сверки. `mode=shift` активной сессии кассира не требует;
+        `mode=day` запрашивает у Kaspi дневную сводку, поэтому сессия нужна.
+      operationId: getCashboxReconciliation
+      parameters:
+        - {name: mode, in: query, required: false, schema: {type: string, enum: [shift, day], default: shift}}
+        - {name: shift_id, in: query, required: false, schema: {type: integer}, description: "Обязателен при `mode=shift` (kaspi_shift_id из GET /cashbox/shifts)."}
+        - {name: date, in: query, required: false, schema: {type: string}, description: "Обязателен при `mode=day`. `Y-m-d`/`Y-m-d H:i` (Almaty). Будущая дата → 422."}
+        - {name: kaspi_connection_id, in: query, required: false, schema: {type: integer, nullable: true}}
+      responses:
+        '200':
+          description: Результат сверки
+          content: {application/json: {schema: {$ref: '#/components/schemas/CashboxReconciliation'}}}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: tariff_inactive}
+        '404': {description: "cashbox_shift_not_found — смена с таким id недоступна"}
+        '409': {description: "kaspi_session_not_configured (mode=day) / rfo_missing"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+        '503': {description: cashbox_unavailable}
+  "/cashbox/shifts":
+    get:
+      tags: [Cashbox]
+      summary: Список кассовых смен
+      description: |
+        Смены за окно `[date_from..date_to]` (глубина ≤ 31 дня). Данные читаются с кассы
+        Kaspi и кэшируются примерно на 60 секунд. Суммы — строки `"N.NN"`;
+        `total_income_raw` — исходное форматирование Kaspi (`"89 000 ₸"`), только для показа.
+      operationId: listCashboxShifts
+      parameters:
+        - {name: date_from, in: query, required: true, schema: {type: string}, description: "`Y-m-d`/`Y-m-d H:i` (Almaty)."}
+        - {name: date_to, in: query, required: true, schema: {type: string}, description: "≥ date_from; окно ≤ 31 дня, иначе 422."}
+        - {name: kaspi_connection_id, in: query, required: false, schema: {type: integer, nullable: true}}
+      responses:
+        '200':
+          description: Список смен
+          content: {application/json: {schema: {$ref: '#/components/schemas/CashboxShiftList'}}}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '409': {description: "kaspi_session_not_configured / cashbox_kkm_unknown"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+        '503': {description: cashbox_unavailable}
+  "/cashbox/shifts/close":
+    post:
+      tags: [Cashbox]
+      summary: Закрыть смену (async)
+      description: |
+        Ставит закрытие смены в очередь и сразу отвечает `202` со `status: pending`. Итог —
+        через `GET /cashbox/operations/{id}` (поле `poll_url` в ответе) или вебхук
+        `cashbox.shift_closed` / `cashbox.shift_close_failed`.
+
+        **Идемпотентность:** `client_operation_id` уникален на организацию — повтор с тем же
+        ключом даёт `409 cashbox_duplicate_operation` (с `operation_id`/`status` уже принятой
+        операции). ⛔ Ключ **не освобождается даже у `failed`**: повторное закрытие безопасно,
+        но повтор ТЕМ ЖЕ ключом — дубль; повторяйте
+        закрытие **новым** `client_operation_id`. «Уже закрыта» трактуется как успех
+        (`completed`) — целевое состояние достигнуто.
+      operationId: closeCashboxShift
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_operation_id, shift_number]
+              properties:
+                client_operation_id: {type: string, minLength: 8, maxLength: 191, pattern: '^[A-Za-z0-9._:-]+$', description: "Ключ идемпотентности (уникален на организацию)."}
+                shift_number: {type: integer, description: "Номер смены Kaspi для закрытия."}
+                kaspi_connection_id: {type: integer, nullable: true}
+      responses:
+        '202':
+          description: Закрытие принято в обработку
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: integer}
+                  status: {type: string, example: pending}
+                  client_operation_id: {type: string}
+                  poll_url: {type: string, description: "GET-адрес статуса операции (…/cashbox/operations/{id})."}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '409': {description: "kaspi_session_not_configured / cashbox_kkm_unknown / cashbox_duplicate_operation"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+  "/cashbox/operations/{id}":
+    get:
+      tags: [Cashbox]
+      summary: Статус кассовой операции (поллинг)
+      description: |
+        Читает данные ApiPay, к кассе Kaspi не обращается: отдельный лимит кассовых
+        запросов не расходует и остаётся доступной при неактивном тарифе — уже принятую
+        операцию всегда можно довести до терминального статуса. Чужой `id` → `404`
+        (scope по организации, non-enumeration). `resolution.safe_to_retry=true` только при
+        `status=failed` — повторяйте закрытие новым `client_operation_id`.
+      operationId: getCashboxOperation
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200':
+          description: Статус операции
+          content: {application/json: {schema: {$ref: '#/components/schemas/CashboxOperation'}}}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {description: "cashbox_operation_not_found (в т.ч. чужой id)"}
+  "/cashbox/shifts/{shift}/report":
+    get:
+      tags: [Cashbox]
+      summary: Ссылка на PDF-отчёт по смене
+      description: |
+        Возвращает временную подписанную ссылку (`url`) на PDF-отчёт по смене и её срок
+        (`expires_at`, TTL ~15 мин). Файл скачивается по этой ссылке напрямую, ключ API
+        для скачивания не нужен.
+
+        ⚠️ Ссылка сама по себе даёт доступ к отчёту: пока не истёк `expires_at`, файл
+        скачает любой, кто её получил. Не публикуйте её, не кладите в логи и не передавайте
+        по открытым каналам — при необходимости запросите новую.
+      operationId: getCashboxShiftReport
+      parameters:
+        - {name: shift, in: path, required: true, schema: {type: integer}, description: "kaspi_shift_id."}
+      responses:
+        '200':
+          description: Подписанная ссылка на отчёт
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: {type: string}
+                  expires_at: {type: string, format: date-time}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '409': {description: kaspi_session_not_configured}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+        '503': {description: "cashbox_report_unavailable — не удалось получить отчёт"}
+  "/cashbox/settings":
+    get:
+      tags: [Cashbox]
+      summary: Текущие тумблеры кассы
+      description: |
+        Сохранённое состояние обоих тумблеров. Значения tri-state: `null` = живое
+        значение с кассы ещё не читали.
+      operationId: getCashboxSettings
+      responses:
+        '200':
+          description: Состояние тумблеров
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  auto_close_shift: {type: boolean, nullable: true}
+                  auto_withdrawal: {type: boolean, nullable: true}
+                  kaspi_connection_id: {type: integer, nullable: true}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "access_denied (не-owner без API-ключа) / cashbox_disabled"}
+  "/cashbox/settings/auto-close":
+    put:
+      tags: [Cashbox]
+      summary: Тумблер автозакрытия смены
+      description: |
+        Синхронное переключение. Идемпотентно: если ЖИВОЕ значение в Kaspi уже равно
+        запрошенному — `changed:false` без обращения к кассе. Доступен API-ключу; человеку без ключа
+        (SPA) — только owner организации.
+      operationId: setCashboxAutoClose
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CashboxToggleRequest'}
+      responses:
+        '200':
+          description: Результат переключения
+          content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "access_denied / tariff_inactive / cashbox_disabled"}
+        '409': {description: "kaspi_session_not_configured / rfo_missing"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+        '503': {description: "cashbox_toggle_in_progress — переключение уже выполняется, повторите позже / cashbox_toggle_unavailable — текущее значение на кассе проверить не удалось, переключение не выполнено"}
+  "/cashbox/settings/auto-withdrawal":
+    put:
+      tags: [Cashbox]
+      summary: Тумблер автоизъятия наличных
+      description: |
+        Автоизъятие наличных после закрытия смены. Поведение идентично `auto-close`
+        (синхронный write, лок, идемпотентность по живому значению, owner-only на SPA).
+      operationId: setCashboxAutoWithdrawal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CashboxToggleRequest'}
+      responses:
+        '200':
+          description: Результат переключения
+          content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
+        '400': {description: organization_required}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "access_denied / tariff_inactive / cashbox_disabled"}
+        '409': {description: "kaspi_session_not_configured / rfo_missing"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+        '503': {description: "cashbox_toggle_in_progress — переключение уже выполняется / cashbox_toggle_unavailable — текущее значение на кассе проверить не удалось"}
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -3869,6 +4109,19 @@ components:
         - qr_refund_completed
         - operation_not_returnable
         - refund_amount_exceeds_available
+        - cashbox_disabled
+        - cashbox_kkm_unknown
+        - cashbox_no_open_shift
+        - cashbox_shift_already_closed
+        - cashbox_shift_not_found
+        - cashbox_operation_not_found
+        - cashbox_duplicate_operation
+        - cashbox_busy
+        - cashbox_operation_failed
+        - cashbox_unavailable
+        - cashbox_report_unavailable
+        - cashbox_toggle_in_progress
+        - cashbox_toggle_unavailable
     QrRefundSession:
       type: object
       description: Снимок сессии QR-возврата. Kaspi наружу не течёт (нет QrReturnId/ExtTranId).
@@ -4297,65 +4550,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InvoiceItem'
-    InvoiceMoneyGroup:
-      type: object
-      description: Количество операций и сумма по группе.
-      properties:
-        count: {type: integer, example: 50}
-        amount: {type: string, description: "Строка с двумя знаками — не float.", example: "554342.00"}
-    InvoiceListSummary:
-      type: object
-      description: |
-        Итоги по ВСЕЙ выборке (не по текущей странице) — «сверка смены».
-        Раскладка повторяет кассовый отчёт: продажи, возвраты отдельной строкой,
-        выручка = продажи − возвраты.
-
-        Суммы — строки с двумя знаками, чтобы по ним можно было сводить кассу.
-      properties:
-        count:
-          type: integer
-          description: Всего счетов под фильтром.
-          example: 57
-        sales:
-          type: object
-          description: |
-            Принятые деньги: счета в статусах `paid` и `partially_refunded`, по ПОЛНОЙ сумме
-            счёта. Частично возвращённый счёт деньги принял, поэтому он здесь.
-          properties:
-            count: {type: integer, example: 50}
-            amount: {type: string, example: "554342.00"}
-            refunded_later:
-              type: string
-              description: |
-                Сколько по счетам ЭТОЙ выборки вернули когда-либо (в том числе в другую смену).
-                Это НЕ `refunds.amount` — служит для объяснения расхождения.
-              example: "12000.00"
-        refunds:
-          allOf:
-            - $ref: '#/components/schemas/InvoiceMoneyGroup'
-          description: |
-            Завершённые операции возврата, СОВЕРШЁННЫЕ В ЭТОМ ОКНЕ — так же «Возврат прихода»
-            попадает в ту смену, когда его оформили, а не в смену исходной продажи.
-
-            ⚠️ Блок считается по окну и организации: фильтры `search` и `status[]` к нему
-            не применяются, потому что возврат может относиться к счёту вне выборки.
-        net_amount:
-          type: string
-          description: Выручка за окно = `sales.amount` − `refunds.amount`. Может быть отрицательной.
-          example: "530910.00"
-        cancelled: {$ref: '#/components/schemas/InvoiceMoneyGroup'}
-        expired: {$ref: '#/components/schemas/InvoiceMoneyGroup'}
-        pending:
-          allOf:
-            - $ref: '#/components/schemas/InvoiceMoneyGroup'
-          description: Неоконченные счета — `processing`, `pending`, `cancelling`.
-        period:
-          type: object
-          description: Эхо фактически применённых границ в зоне мерчанта. `null`, если границы не заданы.
-          properties:
-            from: {type: string, nullable: true, example: "2026-08-03T11:00:00+05:00"}
-            to: {type: string, nullable: true, example: "2026-08-04T03:00:00+05:00"}
-            field: {type: string, enum: [created_at, paid_at], example: created_at}
     Invoice:
       type: object
       description: Полный объект счёта (GET /invoices/{id}). Даты UTC +00:00.
@@ -5020,6 +5214,174 @@ components:
             kaspi_sale_type: {type: string, example: Remote}
         source: {type: string, nullable: true}
         timestamp: {type: string, format: date-time}
+    CashboxDaySummary:
+      type: object
+      description: |
+        Сводка по наличным за день (`GET /cashbox/summary`). Все суммы — строки `"N.NN"` тенге.
+      properties:
+        date: {type: string, example: "2026-08-10"}
+        current_cash_balance: {type: string, nullable: true, example: "12500.00"}
+        replenishment_sum: {type: string, nullable: true, example: "0.00"}
+        withdrawal_sum: {type: string, nullable: true, example: "0.00"}
+        sale_cash_amt: {type: string, nullable: true, example: "8900.00"}
+        sale_return_cash_amt: {type: string, nullable: true, example: "0.00"}
+        cash_amount_on_opening: {type: string, nullable: true, example: "3600.00"}
+        sale_cash_cnt: {type: integer, nullable: true, example: 12}
+        sale_return_cash_cnt: {type: integer, nullable: true, example: 0}
+        auto_withdrawal: {type: boolean, nullable: true, example: false}
+        available_cashbox_actions: {type: boolean, nullable: true, description: "false = Kaspi запретил кассовые операции на этой кассе (UI выключает тумблеры/закрытие).", example: true}
+    CashboxShiftList:
+      type: object
+      description: Список смен за окно (`GET /cashbox/shifts`).
+      properties:
+        auto_close_shift: {type: boolean, example: false}
+        shifts:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: integer, description: kaspi_shift_id, example: 5012}
+              shift_number: {type: integer, example: 106}
+              start_date: {type: string, nullable: true, example: "2026-08-10"}
+              is_current: {type: boolean, example: true}
+              total_income: {type: string, nullable: true, description: "Нормализованная сумма `\"N.NN\"`.", example: "89000.00"}
+              total_income_raw: {type: string, nullable: true, description: "Исходное форматирование Kaspi — только для показа.", example: "89 000 ₸"}
+              transactions_count: {type: integer, nullable: true, example: 12}
+    CashboxReconciliation:
+      type: object
+      description: |
+        Сверка наших счетов с кассой Kaspi (`GET /cashbox/reconciliation`). ⛔ Показывает обе
+        цифры и причины расхождения, но НЕ доказывает равенство: `comparable=false` /
+        `verdict="not_comparable"` — текущее нормальное состояние (Kaspi не отдаёт безналичную
+        часть).
+      properties:
+        mode: {type: string, enum: [shift, day]}
+        comparable: {type: boolean, description: "Kaspi безналичную часть не отдаёт, поэтому значение false.", example: false}
+        verdict: {type: string, enum: [reconciled, explained, unexplained, not_comparable], example: not_comparable}
+        is_sandbox: {type: boolean, example: false}
+        window:
+          type: object
+          properties:
+            from: {type: string, format: date-time}
+            to: {type: string, format: date-time}
+            timezone: {type: string, example: "Asia/Almaty"}
+            source: {type: string, enum: [shift, day]}
+        ours:
+          $ref: '#/components/schemas/CashboxInvoiceTotals'
+        kaspi:
+          type: object
+          description: "Цифра кассы Kaspi. Форма зависит от mode (shift → итог смены; day → дневная сводка по наличным). `non_cash_amount` всегда null."
+          properties:
+            available: {type: boolean, example: true}
+            source: {type: string, enum: [shift, day]}
+            total_income: {type: string, nullable: true, description: "mode=shift: итог смены."}
+            total_income_raw: {type: string, nullable: true}
+            transactions_count: {type: integer, nullable: true}
+            is_current: {type: boolean, nullable: true}
+            sale_cash_amt: {type: string, nullable: true, description: "mode=day: продажи наличными."}
+            sale_return_cash_amt: {type: string, nullable: true}
+            current_cash_balance: {type: string, nullable: true}
+            auto_withdrawal: {type: boolean, nullable: true}
+            available_cashbox_actions: {type: boolean, nullable: true}
+            non_cash_amount: {type: string, nullable: true, description: "Безналичная часть — Kaspi её не отдаёт, всегда null.", example: null}
+            snapshot:
+              type: object
+              properties:
+                synced_at: {type: string, format: date-time, nullable: true}
+                fetched_at: {type: string, format: date-time, nullable: true}
+                stale: {type: boolean}
+        comparison:
+          type: object
+          properties:
+            comparable_pair: {type: object, nullable: true, description: "null пока comparable=false."}
+            delta: {type: string, nullable: true, description: "null пока comparable=false."}
+            explained_amount: {type: string, nullable: true}
+            unexplained_amount: {type: string, nullable: true}
+            tolerance_tenge: {type: integer, example: 1}
+        discrepancies:
+          type: array
+          description: "Структурные причины, по которым цифры нельзя приравнять (не дефекты)."
+          items:
+            type: object
+            properties:
+              code: {type: string, enum: [shift_not_calendar_day, kaspi_income_includes_offline_sales, open_shift_moving_target, paid_at_timezone_boundary, invoices_without_connection, kaspi_snapshot_stale]}
+              source: {type: string, enum: [kaspi, ours, window]}
+              message: {type: string}
+              amount: {type: string, nullable: true, description: "Всегда null — причина неквантифицируема из одной суммы Kaspi."}
+              count: {type: integer, description: "Только у invoices_without_connection."}
+    CashboxInvoiceTotals:
+      type: object
+      description: |
+        НАША половина сверки — итоги по счетам за окно. Суммы — строки `"N.NN"`.
+        Окно режется по `paid_at`, поэтому неоплаченных групп (отменённые, просроченные,
+        в ожидании) здесь нет — у таких счетов даты оплаты не существует.
+      properties:
+        count: {type: integer}
+        sales:
+          type: object
+          description: "Принятые деньги: paid + partially_refunded."
+          properties:
+            count: {type: integer}
+            amount: {type: string, example: "89000.00"}
+            refunded_later: {type: string, description: "Сколько из этих счетов вернули когда-либо (объясняет разницу, не прячет)."}
+        refunds:
+          type: object
+          description: "Возвраты, СОВЕРШЁННЫЕ в этом окне (по времени операции). Без connection-фильтра — по всей организации."
+          properties:
+            count: {type: integer}
+            amount: {type: string}
+        net_amount: {type: string, description: "sales − refunds — «итого» из терминала.", example: "89000.00"}
+        coverage:
+          type: object
+          properties:
+            invoices_without_connection: {type: integer, description: "Строк окна с пустым kaspi_connection_id (выпадают из sales при фильтре по кассе)."}
+        period:
+          type: object
+          properties:
+            from: {type: string, nullable: true}
+            to: {type: string, nullable: true}
+            field: {type: string, example: paid_at}
+    CashboxOperation:
+      type: object
+      description: Статус кассовой операции (`GET /cashbox/operations/{id}`).
+      properties:
+        id: {type: integer}
+        status: {type: string, enum: [pending, sending, completed, failed]}
+        operation_type: {type: string, example: close_shift}
+        shift_number: {type: integer, nullable: true}
+        error_code: {type: string, nullable: true, description: "Заполнен при failed (слаг cashbox_*)."}
+        error_message: {type: string, nullable: true}
+        resolution:
+          type: object
+          properties:
+            safe_to_retry: {type: boolean, description: "true только при status=failed — повторяйте НОВЫМ client_operation_id."}
+    CashboxToggleRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+        kaspi_connection_id: {type: integer, nullable: true}
+    CashboxToggleResult:
+      type: object
+      properties:
+        changed: {type: boolean, description: "false = живое значение в Kaspi уже равнялось запрошенному (no-op)."}
+        new_value: {type: boolean}
+    WebhookCashboxEvent:
+      type: object
+      description: |
+        Payload вебхуков cashbox.shift_closed / cashbox.shift_close_failed. Таймстамп UTC +00:00.
+        Дедуп по `(event, operation.id)`. При failed — причина в `operation.error_code`.
+      properties:
+        event: {type: string, enum: [cashbox.shift_closed, cashbox.shift_close_failed], example: cashbox.shift_closed}
+        operation:
+          type: object
+          properties:
+            id: {type: integer, example: 812}
+            operation_type: {type: string, example: close_shift}
+            status: {type: string, enum: [completed, failed], example: completed}
+            shift_number: {type: integer, nullable: true, example: 106}
+            error_code: {type: string, nullable: true, description: "Только при close_failed (слаг cashbox_*).", example: null}
+        timestamp: {type: string, format: date-time, example: "2026-08-10T16:25:43+00:00"}
 x-webhooks:
   # Исходящие POST на webhook_url API-ключа. Заголовки: Content-Type: application/json,
   # User-Agent: Kaspi-Pay-API/1.0, X-Webhook-Signature: sha256=<hmac_sha256(raw_body, webhook_secret)>
@@ -5338,6 +5700,42 @@ x-webhooks:
           application/json:
             schema:
               $ref: '#/components/schemas/WebhookTest'
+      responses:
+        '200':
+          description: Принято.
+  cashbox.shift_closed:
+    post:
+      tags: [Webhooks]
+      summary: Смена закрыта
+      description: |
+        Async-закрытие смены завершилось успехом (`POST /cashbox/shifts/close` →
+        `operation.status: completed`). «Уже закрыта» тоже приходит как `shift_closed` —
+        целевое состояние достигнуто. Шлётся на терминальный переход, но дубли возможны —
+        дедуплицируйте по `(event, operation.id)`. Равноправно поллингу
+        `GET /cashbox/operations/{id}`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookCashboxEvent'
+      responses:
+        '200':
+          description: Принято.
+  cashbox.shift_close_failed:
+    post:
+      tags: [Webhooks]
+      summary: Не удалось закрыть смену
+      description: |
+        Закрытие смены не выполнено. Причина — в `operation.error_code` (`cashbox_no_open_shift`,
+        `cashbox_busy`, `cashbox_operation_failed`, `cashbox_disabled`, `kaspi_session_expired`,
+        `kaspi_session_not_configured`). Закрытие идемпотентно-безопасно — повторяйте **новым**
+        `client_operation_id` (прежний ключ у `failed` не освобождается). Доставка и подпись — как
+        у остальных вебхук-событий.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookCashboxEvent'
       responses:
         '200':
           description: Принято.
