@@ -26,7 +26,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `amount` | number | Conditional | Amount in KZT (100 - 1,000,000). Not required when `cart_items` provided |
+| `amount` | number | Conditional | Amount in KZT (100 - 1,000,000), **whole tenge only**. Not required when `cart_items` provided |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `billing_period` | string | Yes | Billing cycle (see table below) |
 | `billing_day` | integer | No | Day of billing (1-28) |
@@ -41,6 +41,8 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `webhook_id` | number | No | Specific webhook ID from dashboard |
 | `cart_items` | array | Conditional | Cart items `[{ catalog_item_id, count }]`, 1–100 items. **Required** for catalog organizations — the amount is computed server-side and `amount` is ignored. Non-catalog organizations must **not** send it: the request returns `422` |
 | `bill_immediately` | boolean | No | If `true` — first invoice is created immediately. Default: `false` (first invoice on schedule) |
+
+> ⛔ **The charged amount must be whole tenge.** A subscription charge is issued as a phone-number invoice, so a fractional amount (either `amount` or the `cart_items` total after discounts) lands in the `error` status with `error_code: amount_must_be_whole_tenge` — on **every** charge. Subscription creation does not reject it: check the amounts of your active subscriptions and the prices of catalog items.
 
 ### Billing Periods
 
