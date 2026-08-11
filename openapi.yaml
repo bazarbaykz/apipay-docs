@@ -3685,20 +3685,18 @@ paths:
       tags: [Cashbox]
       summary: Сверка наших счетов с кассой Kaspi
       description: |
-        Показывает ОБЕ цифры рядом — нашу выручку по счетам (`ours`:
+        Сверка по одной смене. Показывает ОБЕ цифры рядом — нашу выручку по счетам (`ours`:
         продажи, возвраты и их разность) и цифру кассы Kaspi (`kaspi`) — и структурные причины, по которым
         их **нельзя приравнять** (`discrepancies`). ⛔ Это НЕ доказательство равенства: касса
         Kaspi и счета ApiPay — разные леджеры (Kaspi видит в том числе наличные и офлайн-продажи,
-        а наша половина — только оплаты по счетам ApiPay), а разбивки наличные/безнал Kaspi не отдаёт. Поэтому
-        `comparable=false` и `verdict="not_comparable"` — текущее нормальное состояние;
-        `delta`, `explained_amount` и `unexplained_amount` приходят `null` — это штатное
-        состояние контракта, а не ошибка сверки. `mode=shift` активной сессии кассира не требует;
-        `mode=day` запрашивает у Kaspi дневную сводку, поэтому сессия нужна.
+        а наша половина — только оплаты по счетам ApiPay), а итог смены приходит единой суммой,
+        где эти части не выделены. Поэтому разницу мы не вычисляем: в ответе только обе цифры и
+        причины расхождения. Активной сессии кассира ручка не требует — она работает по смене,
+        уже полученной через `GET /cashbox/shifts`. Смены, которую ещё не листали, для сверки
+        не существует.
       operationId: getCashboxReconciliation
       parameters:
-        - {name: mode, in: query, required: false, schema: {type: string, enum: [shift, day], default: shift}}
-        - {name: shift_id, in: query, required: false, schema: {type: integer}, description: "Обязателен при `mode=shift` (kaspi_shift_id из GET /cashbox/shifts)."}
-        - {name: date, in: query, required: false, schema: {type: string}, description: "Обязателен при `mode=day`. `Y-m-d`/`Y-m-d H:i` (Almaty). Будущая дата → 422."}
+        - {name: shift_id, in: query, required: true, schema: {type: integer}, description: "kaspi_shift_id из GET /cashbox/shifts."}
         - {name: kaspi_connection_id, in: query, required: false, schema: {type: integer, nullable: true}}
       responses:
         '200':
@@ -3707,8 +3705,8 @@ paths:
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: tariff_inactive}
-        '404': {description: "cashbox_shift_not_found — смена с таким id недоступна"}
-        '409': {description: "kaspi_session_not_configured (mode=day) / rfo_missing"}
+        '404': {description: "cashbox_shift_not_found — смена с таким id недоступна (не листали GET /cashbox/shifts)"}
+        '409': {description: "rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
         '503': {description: cashbox_unavailable}
@@ -5363,14 +5361,12 @@ components:
     CashboxReconciliation:
       type: object
       description: |
-        Сверка наших счетов с кассой Kaspi (`GET /cashbox/reconciliation`). ⛔ Показывает обе
-        цифры и причины расхождения, но НЕ доказывает равенство: `comparable=false` /
-        `verdict="not_comparable"` — текущее нормальное состояние (Kaspi не отдаёт безналичную
-        часть).
+        Сверка наших счетов с кассой Kaspi по одной смене (`GET /cashbox/reconciliation`).
+        ⛔ Показывает обе цифры и причины расхождения, но НЕ доказывает равенство и не
+        считает разницу: итог смены — единая сумма, продажи наличными и продажи мимо ApiPay
+        в ней не выделены, поэтому вычитать одну цифру из другой было бы неверно.
       properties:
-        mode: {type: string, enum: [shift, day]}
-        comparable: {type: boolean, description: "Kaspi безналичную часть не отдаёт, поэтому значение false.", example: false}
-        verdict: {type: string, enum: [reconciled, explained, unexplained, not_comparable], example: not_comparable}
+        mode: {type: string, enum: [shift]}
         is_sandbox: {type: boolean, example: false}
         window:
           type: object
@@ -5378,39 +5374,27 @@ components:
             from: {type: string, format: date-time}
             to: {type: string, format: date-time}
             timezone: {type: string, example: "Asia/Almaty"}
-            source: {type: string, enum: [shift, day]}
+            source: {type: string, enum: [shift]}
         ours:
           $ref: '#/components/schemas/CashboxInvoiceTotals'
         kaspi:
           type: object
-          description: "Цифра кассы Kaspi. Форма зависит от mode (shift → итог смены; day → дневная сводка по наличным). `non_cash_amount` всегда null."
+          description: "Итог смены по данным кассы Kaspi — единая сумма, продажи наличными и продажи мимо ApiPay в ней не выделены."
           properties:
             available: {type: boolean, example: true}
-            source: {type: string, enum: [shift, day]}
-            total_income: {type: string, nullable: true, description: "mode=shift: итог смены."}
+            source: {type: string, enum: [shift]}
+            shift_id: {type: integer}
+            shift_number: {type: integer}
+            total_income: {type: string, nullable: true, description: "Итог смены."}
             total_income_raw: {type: string, nullable: true}
             transactions_count: {type: integer, nullable: true}
             is_current: {type: boolean, nullable: true}
-            sale_cash_amt: {type: string, nullable: true, description: "mode=day: продажи наличными."}
-            sale_return_cash_amt: {type: string, nullable: true}
-            current_cash_balance: {type: string, nullable: true}
-            auto_withdrawal: {type: boolean, nullable: true}
-            available_cashbox_actions: {type: boolean, nullable: true}
-            non_cash_amount: {type: string, nullable: true, description: "Безналичная часть — Kaspi её не отдаёт, всегда null.", example: null}
+            non_cash_amount: {type: string, nullable: true, description: "Всегда null: итог смены не разделён на наличную и безналичную части.", example: null}
             snapshot:
               type: object
               properties:
                 synced_at: {type: string, format: date-time, nullable: true}
-                fetched_at: {type: string, format: date-time, nullable: true}
-                stale: {type: boolean}
-        comparison:
-          type: object
-          properties:
-            comparable_pair: {type: object, nullable: true, description: "null пока comparable=false."}
-            delta: {type: string, nullable: true, description: "null пока comparable=false."}
-            explained_amount: {type: string, nullable: true}
-            unexplained_amount: {type: string, nullable: true}
-            tolerance_tenge: {type: integer, example: 1}
+                stale: {type: boolean, description: "Снимок зеркала старше 15 минут — обновите список смен."}
         discrepancies:
           type: array
           description: "Структурные причины, по которым цифры нельзя приравнять (не дефекты)."

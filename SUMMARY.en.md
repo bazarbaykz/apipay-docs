@@ -11,6 +11,7 @@
 * [Catalog](docs/en/catalog.md)
 * [Refunds](docs/en/refunds.md)
 * [Fiscal Receipts](docs/en/receipts.md)
+* [Cash register](docs/en/cashbox.md)
 * [Webhooks](docs/en/webhooks.md)
 * [Errors](docs/en/errors.md)
 * [Partner API](docs/en/partner-api.md)
