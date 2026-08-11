@@ -282,6 +282,14 @@ paths:
         получит `422 This organization does not support catalog.`
         Для `POST /invoices/qr` и `POST /static-qr` правило другое — там у организации
         с каталогом корзина обязательна.
+
+        ⛔ **Сумма — только целые тенге.** Счёт на номер телефона принимает
+        исключительно целое число тенге; дробная сумма (`175.74`) отбивается сразу с
+        `422 amount_must_be_whole_tenge`, и это относится и к итогу корзины. Проверяется
+        **итог после скидок**: `discount_percentage` считается построчно, поэтому даже при
+        целых ценах итог может стать дробным (`999 ₸` со скидкой `10 %` → `899.10`) —
+        округляйте цены позиций или процент скидки. Минимальная сумма — `1`. Нужны тиыны —
+        выставляйте через `POST /invoices/qr`: там дробные суммы принимаются и оплачиваются.
       operationId: createInvoice
       requestBody:
         required: true
@@ -326,7 +334,9 @@ paths:
           description: |
             Ошибка валидации. Особые случаи: `connection_ambiguous` (>1 активной connection
             без primary, укажите `kaspi_connection_id`); ошибки скидки/каталога;
-            `content_rejected` (контент-скрин, только в режиме block).
+            `content_rejected` (контент-скрин, только в режиме block);
+            `amount_must_be_whole_tenge` (сумма с тиынами по телефонному счёту не
+            принимается; округлите либо используйте `POST /invoices/qr`).
           content:
             application/json:
               schema:
@@ -364,6 +374,10 @@ paths:
         ⚠️ **Неактивный тариф — исключение из поэлементной модели:** `tariff_inactive`
         отбивает **весь запрос** `403`, а не приходит в `failed[]`. Причина не в конкретной
         позиции, а в самой организации, поэтому запрос закрывается на входе.
+
+        ⛔ **Сумма — только целые тенге** (как и в `POST /invoices`). Позиция с тиынами
+        приходит в `invoices[]` как `failed` с `error_code: amount_must_be_whole_tenge`;
+        остальные позиции батча создаются нормально.
       operationId: createInvoicesBulk
       requestBody:
         required: true
@@ -663,6 +677,13 @@ paths:
         `invoice_already_cancelled`/`invoice_not_found_in_kaspi`). Если Kaspi отказал
         (обычно счёт уже оплачен) — счёт тихо вернётся в `pending`, реальный статус
         (обычно `paid`) доставит sync.
+
+        ⛔ **Отмена QR-счёта (`is_qr_token: true`) не поддерживается — `409 qr_cancel_unsupported`.**
+        Запрос отклоняется сразу: статус счёта не меняется, в Kaspi ничего не уходит.
+        QR перестаёт быть оплачиваемым по истечении окна на скан и уезжает в `expired` —
+        точный момент указан в поле `expires_at` ответа, длительность окна константой не
+        зашивайте. Нужен другой счёт — просто выставьте новый: QR сосуществуют, старый
+        не мешает.
       operationId: cancelInvoice
       parameters:
         - name: id
@@ -702,6 +723,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: |
+            `qr_cancel_unsupported` — счёт выставлен по QR, отмена для него не
+            поддерживается. Статус счёта не изменён. Дождитесь `expired` (момент — в
+            `expires_at`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - type: object
+                    properties:
+                      expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+                        description: >-
+                          Момент, после которого QR перестанет быть оплачиваемым; совпадает
+                          с `qr_expires_at` счёта. Если пришёл `null` — ориентируйтесь на
+                          вебхук перехода в `expired`, а не на локальный отсчёт.
+                        example: "2026-08-11T08:00:41+00:00"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1058,6 +1100,12 @@ paths:
         `POST /invoices/qr`, который в sandbox кассира не резолвит вовсе. Это сделано
         намеренно: лист с чужим или неоднозначным адресатом сломался бы при скане, и
         песочница нужна ровно для того, чтобы увидеть это до печати.
+
+        ⚠️ **Оплата с листа по номеру телефона требует целой суммы.** QR-ветка тиыны
+        принимает, телефонная — нет: лист с дробной `amount` или дробным итогом `cart_items`
+        покупателю по номеру телефона выставить не удастся (`422 amount_must_be_whole_tenge`),
+        а переиздать напечатанный лист нельзя. Для листов, где нужна оплата по номеру,
+        задавайте целую сумму.
       operationId: createStaticQr
       requestBody:
         required: true
@@ -3284,6 +3332,12 @@ paths:
         **без каталога** — `amount` обязателен (100–1 000 000), `cart_items` запрещён;
         **с каталогом** — `cart_items` обязателен (сумма считается сервером), `amount` игнорируется.
         `bill_immediately=true` — первый счёт сразу; иначе по расписанию в `next_billing_at`.
+
+        ⛔ **Сумма списания — только целые тенге.** Списание выставляется счётом на номер
+        телефона, поэтому дробная сумма (и голая `amount`, и итог `cart_items` после скидок)
+        уходит в статус `error` с `error_code: amount_must_be_whole_tenge` — вебхуком
+        `invoice.status_changed`, и так при КАЖДОМ списании. Проверьте суммы действующих
+        подписок и цены каталожных позиций, из которых считается итог.
       operationId: createSubscription
       requestBody:
         required: true
@@ -4155,6 +4209,8 @@ components:
         - invoice_already_paid
         - invoice_already_cancelled
         - invoice_not_found_in_kaspi
+        - amount_must_be_whole_tenge
+        - qr_cancel_unsupported
         - organization_not_configured
         - cart_items_mismatch
         - qr_render_failed
@@ -4373,9 +4429,13 @@ components:
           example: "87001234567"
         amount:
           type: number
-          minimum: 0.01
+          minimum: 1
+          multipleOf: 1
           maximum: 99999999.99
-          description: Сумма в тенге. Обязательна, если нет cart_items. Игнорируется при наличии cart_items.
+          description: >-
+            Сумма в тенге, только целая. Обязательна, если нет cart_items. Игнорируется при
+            наличии cart_items — там проверяется итог корзины после скидок. Дробная сумма →
+            `422 amount_must_be_whole_tenge`.
           example: 5000
         description:
           type: string
@@ -4464,7 +4524,7 @@ components:
       required: [phone_number]
       properties:
         phone_number: {type: string, pattern: '^8\d{10}$', example: "87001234567"}
-        amount: {type: number, nullable: true, minimum: 0.01, maximum: 99999999.99}
+        amount: {type: number, nullable: true, minimum: 1, multipleOf: 1, maximum: 99999999.99, description: "Только целые тенге; дробная → позиция failed с amount_must_be_whole_tenge."}
         description: {type: string, maxLength: 500}
         internal_comment: {type: string, maxLength: 255, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна."}
         external_order_id: {type: string, maxLength: 255}
@@ -4879,7 +4939,8 @@ components:
       description: |
         Агрегат bulk-батча приёма каталога (POST /catalog инжест-путь · GET /catalog/batches/{id}).
         Инвариант по завершении: `total = created + updated + skipped + failed`. `skipped` включает
-        идемпотентные skip'ы (совпадение с Kaspi-зеркалом) + intra-batch дубли + matched-без-работы.
+        идемпотентные skip'ы (позиция уже такая же, как в каталоге Kaspi) + intra-batch дубли +
+        matched-без-работы.
       properties:
         batch_id: {type: string, format: uuid, example: "8f14e45f-ceea-467e-9a2c-0000000000aa"}
         status:
@@ -5394,7 +5455,7 @@ components:
               type: object
               properties:
                 synced_at: {type: string, format: date-time, nullable: true}
-                stale: {type: boolean, description: "Снимок зеркала старше 15 минут — обновите список смен."}
+                stale: {type: boolean, description: "Данные кассы получены больше 15 минут назад — обновите список смен."}
         discrepancies:
           type: array
           description: "Структурные причины, по которым цифры нельзя приравнять (не дефекты)."

@@ -47,7 +47,7 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `amount` | number | Yes* | Amount in KZT (0.01 - 99,999,999.99). *Not required with cart_items. |
+| `amount` | number | Yes* | Amount in KZT, **whole tenge only**: 1 - 99,999,999. A fractional value → `422 amount_must_be_whole_tenge`; both `amount` and the `cart_items` total after discounts are checked. If you need tiyn, use `POST /invoices/qr`. *Not required with cart_items. |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `description` | string | No | Payment description (max 500 chars) |
 | `external_order_id` | string | No | Your order ID (max 255 chars) |
@@ -271,6 +271,8 @@ curl https://api.apipay.kz/api/v1/invoices/42 \
 **Endpoint:** `POST /invoices/{id}/cancel`
 
 Invoices with `status: "pending"` or `"processing"` can be cancelled. In sandbox returns `200 OK` (synchronous), in production returns `202 Accepted` with status `cancelling` (async processing via Kaspi).
+
+> ⛔ **A QR invoice (`is_qr_token: true`) cannot be cancelled** — the request answers `409 qr_cancel_unsupported` and the invoice status does not change. The response body carries `expires_at`, the moment after which the QR stops being payable. Wait for `expired` or issue a new invoice.
 
 ```bash
 curl -X POST https://api.apipay.kz/api/v1/invoices/42/cancel \

@@ -79,6 +79,7 @@ echo ""
 
 echo "5. Cancel Invoice"
 echo "-----------------"
+echo "# Only phone invoices can be cancelled. A QR invoice answers 409 qr_cancel_unsupported and expires on its own."
 echo 'curl -X POST $BASE_URL/invoices/42/cancel \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""

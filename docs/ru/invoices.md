@@ -47,7 +47,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 
 | Поле | Тип | Обязательно | Описание |
 |------|-----|-------------|----------|
-| `amount` | number | Да* | Сумма в тенге (0.01 - 99 999 999.99). *Не обязательно при наличии cart_items. |
+| `amount` | number | Да* | Сумма в тенге, **только целая**: 1 - 99 999 999. Дробная → `422 amount_must_be_whole_tenge`; проверяется и `amount`, и итог `cart_items` после скидок. Нужны тиыны — используйте `POST /invoices/qr`. *Не обязательно при наличии cart_items. |
 | `phone_number` | string | Да | Телефон клиента (формат: 8XXXXXXXXXX) |
 | `description` | string | Нет | Описание платежа (макс. 500 символов) |
 | `external_order_id` | string | Нет | Ваш ID заказа для сопоставления (макс. 255 символов) |
@@ -271,6 +271,8 @@ curl https://api.apipay.kz/api/v1/invoices/42 \
 **Эндпоинт:** `POST /invoices/{id}/cancel`
 
 Можно отменить счета со статусом `pending` или `processing`. В sandbox возвращает `200 OK` (синхронно), в production — `202 Accepted` со статусом `cancelling` (асинхронная обработка через Kaspi).
+
+> ⛔ **QR-счёт (`is_qr_token: true`) отменить нельзя** — запрос отвечает `409 qr_cancel_unsupported`, статус счёта не меняется. В теле ответа приходит `expires_at` — момент, после которого QR перестанет быть оплачиваемым. Дождитесь `expired` или выставьте новый счёт.
 
 ```bash
 curl -X POST https://api.apipay.kz/api/v1/invoices/42/cancel \

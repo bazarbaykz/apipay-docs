@@ -115,6 +115,8 @@ ApiPay.kz использует стандартные HTTP коды статус
 | `kaspi_scan_unavailable` | 503 | sync | Нацкаталог Kaspi временно недоступен при `POST /catalog/scan`. Повторите позже. |
 | `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | Истёк срок возврата (~14 дней) или возврат уже сделан. Не повторяйте. |
 | `Invoice cannot be cancelled` | 400 | sync | Отменить можно только счёт в статусе `pending` или `processing`. |
+| `qr_cancel_unsupported` | 409 | sync | QR-счёт (`is_qr_token: true`) отменить нельзя: статус не меняется, в теле приходит `expires_at`. Дождитесь `expired` или выставьте новый счёт. |
+| `amount_must_be_whole_tenge` | 422 | sync (в `POST /invoices/bulk` — по позиции) | Сумма счёта на номер телефона должна быть целой: проверяется и `amount`, и итог корзины после скидок. Округлите сумму или выставьте счёт через `POST /invoices/qr`. |
 | `Invoice is not refundable` | 400 | sync | Возврат возможен только по оплаченному счёту, ещё не возвращённому полностью. |
 | `Refund amount exceeds available amount` | 400 | sync | Сумма возврата больше доступной. Смотрите `available_for_refund` в `GET /invoices/{id}`. |
 | `Organization not verified` | 403 | sync | Подписки в рабочем режиме доступны только верифицированной организации. |

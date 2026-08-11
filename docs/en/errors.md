@@ -116,6 +116,8 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `kaspi_scan_unavailable` | 503 | sync | Kaspi's National Catalog is temporarily unavailable on `POST /catalog/scan`. Retry later. |
 | `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | The refund window expired (~14 days) or the refund was already made. Don't retry. |
 | `Invoice cannot be cancelled` | 400 | sync | Only invoices in `pending` or `processing` status can be cancelled. |
+| `qr_cancel_unsupported` | 409 | sync | A QR invoice (`is_qr_token: true`) cannot be cancelled: the status does not change and the body carries `expires_at`. Wait for `expired` or issue a new invoice. |
+| `amount_must_be_whole_tenge` | 422 | sync (per item in `POST /invoices/bulk`) | The amount of a phone-number invoice must be whole: both `amount` and the cart total after discounts are checked. Round the amount or issue the invoice through `POST /invoices/qr`. |
 | `Invoice is not refundable` | 400 | sync | Refunds are possible only for a paid invoice that is not yet fully refunded. |
 | `Refund amount exceeds available amount` | 400 | sync | The refund amount is larger than available. See `available_for_refund` in `GET /invoices/{id}`. |
 | `Organization not verified` | 403 | sync | Subscriptions in production mode are available only to a verified organization. |
