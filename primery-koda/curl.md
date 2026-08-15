@@ -69,6 +69,39 @@ curl "https://api.apipay.kz/api/v1/cashbox/shifts/118275707/report" \
 `GET /cashbox/reconciliation?shift_id=118275707`; она требует, чтобы список смен был запрошен
 заранее. Подробности — [Касса](../docs/ru/cashbox.md).
 
+## Каталог: полная синхронизация из 1С
+
+```bash
+# Шаг 1 — залейте каталог, передавая ОДИН И ТОТ ЖЕ sync_token во всех запросах прогона.
+curl -X POST "https://api.apipay.kz/api/v1/catalog" \
+  -H "X-API-Key: $APIPAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sync_token": "run-2026-08-15-a",
+    "items": [
+      {"name": "Кофе латте", "selling_price": 1500, "unit_id": 1, "external_ref": "SKU-LATTE"}
+    ]
+  }'
+
+# Шаг 2 — разведка: сколько позиций уйдёт под удаление.
+curl -X POST "https://api.apipay.kz/api/v1/catalog/bulk-delete" \
+  -H "X-API-Key: $APIPAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"filter": {"sync_token_not": "run-2026-08-15-a"}, "dry_run": true}'
+
+# Шаг 3 — подтверждение с числом из разведки.
+curl -X POST "https://api.apipay.kz/api/v1/catalog/bulk-delete" \
+  -H "X-API-Key: $APIPAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"filter": {"sync_token_not": "run-2026-08-15-a"}, "expected_count": 6870}'
+```
+
+Ключ должен быть выпущен **владельцем** организации, иначе придёт `403 catalog_delete_owner_key_required`.
+Ответ `202` означает «принято в работу», а не «удалено»: снятие идёт фоном и на большом каталоге
+занимает сутки с небольшим. Итог придёт вебхуком `catalog.batch_processed` с `kind: delete`.
+Позиции без метки вовсе под фильтр не попадают — для них нужен явный `filter.include_never_stamped: true`.
+Подробности и коды отказов — [Каталог → Массовое удаление](../docs/ru/catalog.md#массовое-удаление).
+
 ## Больше примеров
 
 Готовый скрипт со всеми операциями (счета, возвраты, каталог, подписки) — [`examples/curl/`](../examples/curl/).

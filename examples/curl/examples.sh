@@ -162,11 +162,31 @@ echo 'curl -X DELETE $BASE_URL/catalog/101 \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
+echo "15. Bulk Delete: dry run (how many items would go)"
+echo "--------------------------------------------------"
+echo "# Upload the whole feed first, sending the same sync_token in every request."
+echo "# The key must be issued by the organization owner."
+echo 'curl -X POST $BASE_URL/catalog/bulk-delete \'
+echo '  -H "X-API-Key: $API_KEY" \'
+echo '  -H "Content-Type: application/json" \'
+echo '  -d '\''{"filter": {"sync_token_not": "run-2026-08-15-a"}, "dry_run": true}'\'
+echo ""
+
+echo "16. Bulk Delete: confirm with the number from the dry run"
+echo "---------------------------------------------------------"
+echo "# 202 means accepted, not deleted: watch poll_url or the"
+echo "# catalog.batch_processed webhook with kind: delete."
+echo 'curl -X POST $BASE_URL/catalog/bulk-delete \'
+echo '  -H "X-API-Key: $API_KEY" \'
+echo '  -H "Content-Type: application/json" \'
+echo '  -d '\''{"filter": {"sync_token_not": "run-2026-08-15-a"}, "expected_count": 6870}'\'
+echo ""
+
 # =====================================================
 # SUBSCRIPTIONS
 # =====================================================
 
-echo "15. Create Subscription"
+echo "17. Create Subscription"
 echo "-----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions \'
 echo '  -H "X-API-Key: $API_KEY" \'
@@ -181,25 +201,25 @@ echo '    "description": "Monthly subscription"'
 echo '  }'\'
 echo ""
 
-echo "16. List Subscriptions"
+echo "18. List Subscriptions"
 echo "----------------------"
 echo 'curl "$BASE_URL/subscriptions?status=active" \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
-echo "17. Pause Subscription"
+echo "19. Pause Subscription"
 echo "----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions/1/pause \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
-echo "18. Resume Subscription"
+echo "20. Resume Subscription"
 echo "-----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions/1/resume \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
-echo "19. Cancel Subscription"
+echo "21. Cancel Subscription"
 echo "-----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions/1/cancel \'
 echo '  -H "X-API-Key: $API_KEY"'

@@ -52,6 +52,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 | `POST /invoices/qr` | Создание QR-счёта (на экране кассы) |
 | `GET /invoices` | Список счетов |
 | `GET /invoices/{id}` | Получение счёта |
+| `GET /invoices/{id}/receipt` | Чек Kaspi по оплаченному счёту |
 | `POST /invoices/{id}/cancel` | Отмена счёта |
 | `POST /invoices/{id}/refund` | Возврат по счёту |
 | `GET /invoices/{id}/refunds` | Возвраты по счёту |
@@ -63,6 +64,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 | `POST /catalog` | Создание товаров |
 | `PATCH /catalog/{id}` | Обновление товара |
 | `DELETE /catalog/{id}` | Удаление товара |
+| `POST /catalog/bulk-delete` | Массовое удаление позиций каталога |
 | `GET /catalog/units` | Единицы измерения |
 | `POST /subscriptions` | Создание подписки |
 | `GET /subscriptions` | Список подписок |
@@ -76,6 +78,11 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 | `POST /receipts` | Выбить фискальный чек |
 | `GET /receipts` | История фискальных чеков |
 | `GET /receipts/{id}` | Получение фискального чека |
+| `GET /cashbox/summary` | Сводка по наличным за день |
+| `GET /cashbox/shifts` | Список кассовых смен |
+| `POST /cashbox/shifts/close` | Закрытие кассовой смены |
+| `GET /cashbox/reconciliation` | Сверка счетов со сменой |
+| `GET /cashbox/settings` | Настройки кассы |
 
 ## Конфигурация
 
@@ -95,6 +102,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 - [Webhooks](docs/ru/webhooks.md) — Уведомления о платежах в реальном времени
 - [Клиенты](docs/ru/clients.md) — Проверка номера перед выставлением счёта
 - [Фискальные чеки](docs/ru/receipts.md) — Чеки Kaspi OFD для оплат наличными и через POS другого банка
+- [Касса](docs/ru/cashbox.md) — Кассовые смены Kaspi, наличные, сверка и отчёты
 - [Коды ошибок](docs/ru/errors.md) — HTTP коды и обработка ошибок
 - [Partner API](docs/ru/partner-api.md) — Для CRM-интеграторов: подключайте мерчантов и выставляйте счета от их имени
 

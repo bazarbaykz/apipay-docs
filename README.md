@@ -52,6 +52,7 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 | `POST /invoices/qr` | Create QR invoice (cashier display) |
 | `GET /invoices` | List invoices |
 | `GET /invoices/{id}` | Get invoice details |
+| `GET /invoices/{id}/receipt` | Kaspi receipt for a paid invoice |
 | `POST /invoices/{id}/cancel` | Cancel pending invoice |
 | `POST /invoices/{id}/refund` | Refund paid invoice |
 | `GET /invoices/{id}/refunds` | Invoice refunds |
@@ -67,6 +68,7 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 | `POST /catalog` | Create catalog items |
 | `PATCH /catalog/{id}` | Update catalog item |
 | `DELETE /catalog/{id}` | Delete catalog item |
+| `POST /catalog/bulk-delete` | Bulk-delete catalog items |
 | `GET /catalog/units` | List measurement units |
 | `POST /subscriptions` | Create subscription |
 | `GET /subscriptions` | List subscriptions |
@@ -76,6 +78,11 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 | `POST /subscriptions/{id}/resume` | Resume subscription |
 | `POST /subscriptions/{id}/cancel` | Cancel subscription |
 | `GET /subscriptions/{id}/invoices` | Subscription invoices |
+| `GET /cashbox/summary` | Cash summary for the day |
+| `GET /cashbox/shifts` | List cash register shifts |
+| `POST /cashbox/shifts/close` | Close a cash register shift |
+| `GET /cashbox/reconciliation` | Reconcile invoices against a shift |
+| `GET /cashbox/settings` | Cash register settings |
 
 ## Configuration
 
@@ -95,6 +102,7 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 - [Webhooks](docs/en/webhooks.md) — Real-time payment notifications
 - [Clients](docs/en/clients.md) — Check a phone number before invoicing
 - [Fiscal Receipts](docs/en/receipts.md) — Kaspi OFD receipts for cash and non-Kaspi POS payments
+- [Cash register](docs/en/cashbox.md) — Kaspi shifts, cash, reconciliation and reports
 - [Error Codes](docs/en/errors.md) — HTTP status codes and error handling
 - [Partner API](docs/en/partner-api.md) — For CRM/platform integrators: onboard merchants and issue invoices on their behalf
 

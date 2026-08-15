@@ -36,8 +36,15 @@ function uploadImage($filePath) {
     return $result;
 }
 
-function createItems($items) {
+function createItems($items, $syncToken = null) {
     global $API_KEY, $API_BASE_URL;
+
+    // sync_token marks every item the request mentions, including the ones that
+    // needed no work. It is what a later bulk-delete uses to find the remainder.
+    $payload = ['items' => $items];
+    if ($syncToken !== null) {
+        $payload['sync_token'] = $syncToken;
+    }
 
     $ch = curl_init("{$API_BASE_URL}/catalog");
     curl_setopt_array($ch, [
@@ -46,7 +53,7 @@ function createItems($items) {
             "X-API-Key: {$API_KEY}",
             'Content-Type: application/json'
         ],
-        CURLOPT_POSTFIELDS => json_encode(['items' => $items]),
+        CURLOPT_POSTFIELDS => json_encode($payload),
         CURLOPT_RETURNTRANSFER => true
     ]);
 
@@ -61,6 +68,69 @@ function createItems($items) {
     }
 
     return $result;
+}
+
+function bulkDelete($body) {
+    global $API_KEY, $API_BASE_URL;
+
+    $ch = curl_init("{$API_BASE_URL}/catalog/bulk-delete");
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_HTTPHEADER => [
+            "X-API-Key: {$API_KEY}",
+            'Content-Type: application/json'
+        ],
+        CURLOPT_POSTFIELDS => json_encode($body),
+        CURLOPT_RETURNTRANSFER => true
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $result = json_decode($response, true);
+
+    if ($httpCode >= 400) {
+        // reason narrows catalog_delete_filter_invalid / catalog_delete_scope_required.
+        // The list of reason values is open - keep a generic branch.
+        $code = $result['error_code'] ?? $result['error'] ?? 'unknown';
+        $reason = isset($result['reason']) ? " ({$result['reason']})" : '';
+        throw new Exception("Bulk delete error: {$code}{$reason}");
+    }
+
+    return $result;
+}
+
+/**
+ * Upload the whole feed under one run marker, then remove what it did not touch.
+ *
+ * The deletion is a background operation that can run for a day: 202 means
+ * "accepted", not "deleted" - watch poll_url or the catalog.batch_processed
+ * webhook with kind: delete.
+ *
+ * The API key must be issued by the organization owner, otherwise the call is
+ * refused with 403 catalog_delete_owner_key_required.
+ */
+function fullSync($syncToken, $items) {
+    // 1. Upload every chunk of the run with the SAME sync_token.
+    foreach (array_chunk($items, 100) as $chunk) {
+        createItems($chunk, $syncToken);
+    }
+
+    // 2. Scout: how many items would be removed, and which ones.
+    //    include_never_stamped also removes items that never took part in any run -
+    //    those added by hand at the till or pulled in from the Kaspi catalog.
+    $filter = ['sync_token_not' => $syncToken, 'include_never_stamped' => false];
+    $preview = bulkDelete(['filter' => $filter, 'dry_run' => true]);
+    echo "Would delete: {$preview['would_delete']}\n";
+
+    if ($preview['would_delete'] === 0) {
+        return null;
+    }
+
+    // 3. Confirm with the number from the dry run. A mismatch means the catalog
+    //    changed in between: 409 catalog_bulk_delete_mismatch carries actual_count.
+    return bulkDelete(['filter' => $filter, 'expected_count' => $preview['would_delete']]);
 }
 
 function listItems($page = 1, $perPage = 50) {
@@ -106,6 +176,10 @@ try {
     }
     // Production: позиции создаются в статусе pending, синхронизация в Kaspi асинхронная.
     // Sandbox: позиции активны сразу. Итог сверяйте через GET /catalog?external_refs[]=...
+
+    // Full synchronization. Use one marker per run - a timestamp or a job id.
+    // $sync = fullSync('run-2026-08-15-a', $wholeFeed);
+    // if ($sync) { echo "Queued for removal: {$sync['queued']}\n"; }
 
 } catch (Exception $e) {
     echo "Error: {$e->getMessage()}\n";
