@@ -974,6 +974,15 @@ paths:
         Общий каталог тарифов ApiPay (без привязки к организации): 4 тарифа
         (start/business/pro/pro_max) и 16 планов (4 тарифа × периоды 1/3/6/12
         мес со скидками).
+
+
+        Каталог отдаётся **глазами вашего партнёрского аккаунта**: если админ ApiPay
+        назначил вам сетку лимитов (white-label), в `tiers[].daily_limit` и
+        `tiers[].label` приходят ВАШИ значения, а `tiers[].limits_source` показывает
+        источник (`partner_grid` — сетка, `config` — глобальный каталог). Сетку
+        назначает только ApiPay; изменить её через API нельзя. **Цены сетка не
+        меняет никогда** — `base_price` и `plans[].price` всегда глобальные. Чужая
+        сетка не отдаётся ни при каких условиях.
       operationId: partnerTariffPlans
       responses:
         "200":
@@ -997,10 +1006,10 @@ paths:
               example:
                 success: true
                 tiers:
-                  - { id: start, label: Start, daily_limit: 30, base_price: 10000 }
-                  - { id: business, label: Business, daily_limit: 100, base_price: 25000 }
-                  - { id: pro, label: Pro, daily_limit: 300, base_price: 60000 }
-                  - { id: pro_max, label: Pro Max, daily_limit: 600, base_price: 90000 }
+                  - { id: start, label: "Базовый", daily_limit: 60, base_price: 10000, limits_source: partner_grid }
+                  - { id: business, label: Business, daily_limit: 100, base_price: 25000, limits_source: config }
+                  - { id: pro, label: Pro, daily_limit: 300, base_price: 60000, limits_source: config }
+                  - { id: pro_max, label: Pro Max, daily_limit: 600, base_price: 90000, limits_source: config }
                 plans:
                   - { tier_id: business, period_months: 3, price: 71250, discount_percent: 5, label: "Business — 3 месяца", price_per_month: 23750 }
         "401":
@@ -1133,6 +1142,10 @@ paths:
           description: >-
             `tariff_payment_pending` — у организации уже есть живой неоплаченный
             счёт тарифа (в теле — объект `payment` существующего счёта).
+            `custom_tariff_locked` — у организации ИНДИВИДУАЛЬНЫЕ («Custom») условия,
+            и запрошен тариф, отличный от её базового: сменить его может только
+            поддержка. ⛔ Продление СВОЕГО базового тарифа не блокируется — это
+            оплата, а не смена условий.
           content:
             application/json:
               schema:
@@ -1205,6 +1218,172 @@ paths:
                 error_code: tariff_payment_unavailable
                 message: Не удалось создать счёт. Попробуйте позже.
                 retry_after_seconds: 30
+  /organizations/{organization}/tariff/assign:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Tariff]
+      summary: Назначить тариф мерчанту бесплатно (режим assignment)
+      description: >-
+        Партнёр в режиме `tariff_billing_mode = assignment` НАЗНАЧАЕТ тариф своему
+        мерчанту бесплатно: деньги он берёт с мерчанта сам и платит ApiPay по договору
+        одним счётом в месяц. Тариф активируется СИНХРОННО — счёта в Kaspi нет,
+        телефон плательщика не нужен, вебхука не будет.
+
+
+        ⛔ Режим переключает только ApiPay (админ). Партнёр в дефолтном режиме
+        `payment` получает `403 assignment_not_enabled` и платит через
+        `POST .../tariff/pay` либо `.../tariff/invoice` по глобальному прайсу.
+
+
+        ⛔ Вебхук `tariff.activated` на СВОЁ назначение партнёру НЕ отправляется —
+        это эхо на его собственный запрос. Результат целиком в ответе
+        (`payment.expires_at`) и в `GET .../tariff`.
+
+
+        ⛔ Отзыва назначения у партнёра нет: снимает тариф ApiPay по обращению.
+
+
+        Суточный лимит назначенного тарифа берётся из **сетки партнёра**
+        (`partner_tier_limits`), если она задана, — см. `GET /tariff-plans`.
+      operationId: partnerTariffAssign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier_id, period_months]
+              properties:
+                tier_id:
+                  type: string
+                  enum: [start, business, pro, pro_max]
+                  description: >-
+                    Если у партнёра задана сетка лимитов — допустимы ТОЛЬКО тиры,
+                    присутствующие в ней (иначе `422 tier_not_in_partner_grid`).
+                  example: business
+                period_months:
+                  type: integer
+                  enum: [1, 3, 6, 12]
+                  example: 3
+      responses:
+        "201":
+          description: Тариф назначен, срок продлён
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  already_assigned:
+                    type: boolean
+                    description: Всегда `false` на 201 (новое назначение).
+                    example: false
+                  payment:
+                    $ref: "#/components/schemas/Payment"
+              example:
+                success: true
+                already_assigned: false
+                payment:
+                  id: 91
+                  amount: 0
+                  status: completed
+                  tier: business
+                  period_months: 3
+                  self_api_invoice_id: null
+                  external_id: null
+                  paid_at: "2026-06-20T10:00:00+05:00"
+                  expires_at: "2026-09-20T10:00:00+05:00"
+                  created_at: "2026-06-20T10:00:00+05:00"
+                  failure_reason: null
+        "200":
+          description: >-
+            Запрошенный горизонт УЖЕ покрыт назначением того же тарифа — срок не
+            продлевается, второго платежа не создаётся. В теле — существующий платёж
+            и `already_assigned: true`. Идемпотентность считается ПОКРЫТИЕМ (дата
+            истечения ≥ запрошенного горизонта), а не временным окном, поэтому
+            безопасна для ретраев CRM.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  already_assigned:
+                    type: boolean
+                    example: true
+                  payment:
+                    $ref: "#/components/schemas/Payment"
+              example:
+                success: true
+                already_assigned: true
+                payment:
+                  id: 91
+                  amount: 0
+                  status: completed
+                  tier: business
+                  period_months: 3
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            `assignment_not_enabled` — партнёр работает в режиме `payment`, бесплатное
+            назначение ему не выдано; `partner_not_active` — партнёрский аккаунт
+            отключён; `production_access_required` — боевая организация у
+            sandbox-партнёра; `forbidden` — ключ не operating.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: assignment_not_enabled
+                error_code: assignment_not_enabled
+                message: "Назначение тарифа недоступно: партнёр работает в режиме оплаты."
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "409":
+          description: >-
+            `test_organization` — организация тестовая (`is_test`): реальных активов
+            она не копит, апрув production удаляет её каскадом. `hard_limited_org` — у
+            организации действует жёсткое тарифное ограничение; снимает его ApiPay по
+            обращению, назначением оно не амнистируется. `custom_tariff_locked` — у
+            организации индивидуальные условия, и запрошен не её базовый тариф.
+            `tariff_payment_pending` — по организации висит живой неоплаченный счёт
+            тарифа (или параллельно идёт другая тарифная операция).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: hard_limited_org
+                error_code: hard_limited_org
+                message: >-
+                  У организации действует жёсткое тарифное ограничение — снимает
+                  поддержка.
+        "422":
+          description: >-
+            `tier_not_in_partner_grid` — запрошенный тир отсутствует в сетке лимитов
+            партнёра (сетка задана, значит она и есть перечень доступного);
+            `assignment_horizon_exceeded` — назначение увело бы дату истечения дальше
+            чем на 12 месяцев вперёд от сегодня; либо стандартная Laravel-форма при
+            нарушении правил FormRequest (tier_id/period_months).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/LaravelValidationError"
+              example:
+                success: false
+                error: tier_not_in_partner_grid
+                error_code: tier_not_in_partner_grid
+                message: Этот тариф не входит в вашу тарифную сетку.
   /organizations/{organization}/tariff/invoice:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
@@ -1266,6 +1445,17 @@ paths:
                   nullable: true
                   maxLength: 255
                   example: Договор №42
+                upgrade:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Счёт на ПЕРЕХОД между тарифами: сумма = разница базовых цен
+                    (Start → Business = 15 000 ₸, а не 25 000), `period_months`
+                    обязан быть `1`, `tier_id` — целевой тариф. «С какого тарифа»
+                    определяет сервер по активному платному тарифу организации;
+                    передать это значение нельзя. Оплата по телефону
+                    (`tariff/pay`) апгрейда не знает — там всегда полная цена плана.
+                  example: false
       responses:
         "201":
           description: Счёт выписан, PDF готов
@@ -1299,7 +1489,19 @@ paths:
             `invoice_locked` — другая операция выписки счёта для этой организации
             ещё в процессе, повторите запрос. `test_organization` —
             организация тестовая (`is_test`): счёт на реальные деньги не
-            выписывается, ретрай бессмыслен.
+            выписывается, ретрай бессмыслен. `organization_deleted` — организация
+            удалена. `no_paid_tariff` (только при `upgrade`) — у организации нет
+            активного платного тарифа, переходить не с чего. `upgrade_invoice_pending`
+            (только при `upgrade`) — по организации уже висит неоплаченный счёт на
+            переход, второй не выписывается; он же приходит в поле `invoice`.
+            ⛔ `invoice_pdf_failed` — счёт ВЫПИСАН, но PDF не собрался: строки в БД
+            созданы, номер выделен, **повторять запрос нельзя** (ретрай напечатает
+            второй бухгалтерский документ). В теле — `invoice` с `payment_id` и
+            `number`, без `download_url`. Заберите `number` и обратитесь в поддержку —
+            PDF перевыпустят. `custom_tariff_locked` — у организации
+            индивидуальные («Custom») условия: обычная выписка блокируется на ЧУЖОЙ
+            тариф, счёт на переход (`upgrade=true`) — целиком, независимо от целевого
+            тарифа.
           content:
             application/json:
               schema:
@@ -1309,12 +1511,27 @@ paths:
                 error: invoice_locked
                 error_code: invoice_locked
                 message: Другая операция выписки счёта в процессе, повторите.
+        "400":
+          description: >-
+            `downgrade_not_supported` (только при `upgrade`) — целевой тариф не выше
+            текущего. Понижение оформляется через поддержку.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: downgrade_not_supported
+                error_code: downgrade_not_supported
+                message: Понижение тарифа не поддерживается.
         "422":
           description: >-
-            `invalid_tariff_plan` — неизвестная пара tier_id/period_months
+            `invalid_tariff_plan` — неизвестная пара tier_id/period_months;
+            `invalid_upgrade_plan` — такой ступени перехода нет в прайсе;
+            `upgrade_period_not_supported` — при `upgrade` период обязан быть 1
             (конверт `ErrorEnvelope`); либо стандартная Laravel-форма при
             нарушении правил FormRequest (tier_id/period_months/buyer_bin/
-            buyer_name/buyer_address/contract).
+            buyer_name/buyer_address/contract/upgrade).
           content:
             application/json:
               schema:
@@ -1346,18 +1563,7 @@ paths:
                 message: Слишком много выписанных счетов. Попробуйте позже.
                 retry_after_seconds: 3600
         "503":
-          description: >-
-            `invoice_pdf_failed` — не удалось отрендерить PDF счёта (счёт-строка
-            остаётся, можно повторить). Партнёр ретраит позже.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorEnvelope"
-              example:
-                success: false
-                error: invoice_pdf_failed
-                error_code: invoice_pdf_failed
-                message: Не удалось сформировать PDF счёта. Попробуйте позже.
+          description: "Зарезервировано. `invoice_pdf_failed` приходит как `409`."
   /organizations/{organization}/tariff/payments:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
@@ -1368,7 +1574,7 @@ paths:
         Платежи тарифа организации (payment_method `self_api` или `invoice`) по
         убыванию даты. Триальные журнальные записи (amount=0) намеренно исключены.
         У платежей `payment_method=invoice` присутствует под-объект `invoice`
-        (`number`, `download_url`, `buyer_name`).
+        (`number`, `download_url`, `buyer_name`, `upgrade_from`).
       operationId: partnerTariffPaymentsIndex
       responses:
         "200":
@@ -1647,6 +1853,11 @@ components:
         buyer_name:
           type: string
           example: ТОО "Ромашка"
+        upgrade_from:
+          type: string
+          nullable: true
+          description: Тариф, с которого выполнен переход; `null` у обычного плана.
+          example: null
     TariffInvoiceIssued:
       type: object
       description: Выписанный «Счёт на оплату» тарифа (INVOICE).
@@ -1664,9 +1875,19 @@ components:
           example: 25000
         tier:
           type: string
+          description: Целевой тариф (у перехода — тот, НА который переходим).
           example: business
+        upgrade_from:
+          type: string
+          nullable: true
+          description: >-
+            Тариф, С которого выполнен переход, либо `null` у обычного плана. Без него
+            счёт на переход неотличим от месяца целевого тарифа со скидкой: сумма — это
+            разница базовых цен.
+          example: null
         period_months:
           type: integer
+          description: У перехода всегда 1.
           example: 1
         status:
           type: string
@@ -1797,16 +2018,29 @@ components:
           example: business
         label:
           type: string
+          description: >-
+            Витринное имя тарифа. При назначенной вам сетке — ваше white-label имя
+            (`limits_source: "partner_grid"`), иначе глобальное («Start», «Pro Max»).
           example: Business
         daily_limit:
           type: integer
           nullable: true
           description: >-
-            Дневной лимит счетов из каталога тарифов: start 30, business 100,
-            pro 300, pro_max 600. `null` — лимит в каталоге не задан, объём согласуется
+            Дневной лимит счетов: из глобального каталога (start 30, business 100,
+            pro 300, pro_max 600) либо из назначенной вам сетки — см.
+            `limits_source`. `null` — лимит в каталоге не задан, объём согласуется
             индивидуально; ни у одного из действующих тарифов null не
-            встречается.
+            встречается, и сетка выразить null не может вовсе.
           example: 100
+        limits_source:
+          type: string
+          enum: [partner_grid, config]
+          description: >-
+            Откуда взяты `daily_limit` и `label` этого тарифа: `partner_grid` —
+            назначенная вам ApiPay сетка (действует на ваших managed-мерчантов),
+            `config` — глобальный каталог. ⚠️ На цену не влияет ни при каком
+            значении: `base_price` и `plans[].price` всегда глобальные.
+          example: config
         base_price:
           type: integer
           example: 25000

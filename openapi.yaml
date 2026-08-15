@@ -23,14 +23,32 @@ info:
     - `POST /invoices/bulk` — 20/мин;
     - `POST /invoices/qr` — 60/мин на организацию;
     - `POST /catalog/scan` — 30/мин + 2000/сутки;
+    - `POST /catalog/bulk-delete` — 10/мин;
+    - `POST /catalog/upload-image` — 60/мин, 2000/сутки на пару (ключ, организация) и
+      6000/сутки на ключ;
     - касса (`/cashbox/*`) — 30/мин;
     - `POST /clients/check` — 60/мин + 10 000/сутки на ключ, 200/мин + 20 000/сутки на
       организацию, 10/мин на одного кассира;
     - авторизация кассира: `auth/init` и `auth/send-phone` — 5/мин, `auth/verify-otp` —
       10/мин (на пару ключ+кассир).
 
-    Превышение → `429` с заголовком `Retry-After` (для cap-лимитов также поле
-    `retry_after_seconds` в теле).
+    ### Заголовки лимита
+
+    Каждый ответ v1 несёт `X-RateLimit-Limit` и `X-RateLimit-Remaining`; на `429` к ним
+    добавляются `Retry-After` и `X-RateLimit-Reset`.
+
+    ⚠️ **Заголовки описывают тот бакет, где осталось МЕНЬШЕ ВСЕГО, а не лимит конкретной
+    ручки.** К запросу применяется несколько лимитеров сразу (общий на ключ + свой у
+    эндпоинта), и наружу выходит самый дефицитный из них. Поэтому на одном и том же роуте
+    знаменатель может меняться между запросами — сравнивайте `Remaining` с `Limit` из ТОГО ЖЕ
+    ответа, а не с числом из этой таблицы.
+
+    ### Превышение
+
+    `429`. Поминутные лимитеры отдают `error_code: request_rate_limited` и поля `limit`,
+    `remaining`, `reset_at`, `retry_after_seconds`; ⚠️ поле `message` при этом осталось
+    прежним — `"Too Many Attempts."`, разбор строки не сломан.
+    Квотные (cap) лимиты — свои `error_code` (см. `RateLimitCap`) и `retry_after_seconds`.
 
     ## Конверт ошибок
 
@@ -118,7 +136,7 @@ tags:
   - name: Sandbox
     description: Симуляция жизненного цикла счетов и подписок (только при sandbox_mode=true).
   - name: Cashbox
-    description: Касса Kaspi — смены, сводка по наличным, сверка наших счетов с кассой, PDF-отчёт, тумблеры (автозакрытие/автоизъятие) и async-закрытие смены. У кассовых эндпоинтов отдельный минутный лимит — 30 запросов/мин на ключ. В песочнице касса отвечает детерминированными данными по вашим sandbox-счетам, к Kaspi не обращается и подключённого кассира не требует — идентификаторы смен там синтетические.
+    description: Касса Kaspi — смены, сводка по наличным, сверка наших счетов с кассой, PDF-отчёт, тумблеры (автозакрытие/автоизъятие) и async-закрытие смены. Работают у организаций, к аккаунту Kaspi Pay которых подключена касса Kaspi (ОФД) — та же связка, что включает каталог товаров; без неё GET /cashbox/shifts и POST /cashbox/shifts/close отвечают 409 cashbox_kkm_unknown, а GET /cashbox/summary и оба тумблера — 409 rfo_missing. У кассовых эндпоинтов отдельный минутный лимит — 30 запросов/мин на ключ. В песочнице касса отвечает детерминированными данными по вашим sandbox-счетам, к Kaspi не обращается, подключённого кассира и кассы Kaspi не требует — идентификаторы смен там синтетические, поэтому интеграцию, прошедшую в песочнице, проверяйте и на боевой организации.
   - name: Webhooks
     description: Исходящие вебхук-события (секция x-webhooks) + read-only логи их доставки (/webhook-logs). HMAC-подпись по сырому телу, таймстампы UTC +00:00.
 paths:
@@ -1147,8 +1165,8 @@ paths:
             «этот лист сможет материализоваться», выполняемые до печати:
 
             * мерчант **с** каталогом без `cart_items` либо **без** каталога с `cart_items` —
-              тело несёт только `message` (`This organization requires cart items…` /
-              `This organization does not support catalog…`), как на `POST /invoices/qr`;
+              тело несёт `message` и `error_code` (`catalog_requires_cart_items` /
+              `catalog_not_supported`), но **без** `errors`, как на `POST /invoices/qr`;
             * `cart_items.*.catalog_item_id` не принадлежит вашей организации, удалён или без
               цены — `errors["cart_items.0.catalog_item_id"]` с тем же текстом, что вернуло бы
               создание счёта (`Catalog item does not belong to your organization.` /
@@ -1164,7 +1182,9 @@ paths:
             же тело**, что чужой: ответ намеренно не различает «нет такого id» и «id чужой»,
             иначе по нему перебирались бы чужие сущности.
 
-            Новых `error_code` ветка не вводит.
+            Коды ветки: `catalog_requires_cart_items` и `catalog_not_supported` —
+            те же, что на `POST /invoices/qr` (добавлены 11.08.2026 аддитивно,
+            `message` не менялся).
           content:
             application/json:
               # anyOf, а НЕ oneOf: обе схемы открыты (нет required, additionalProperties не
@@ -1183,9 +1203,10 @@ paths:
                     errors:
                       cart_items.0.catalog_item_id: [Catalog item does not belong to your organization.]
                 cart_parity:
-                  summary: Паритет has_catalog ↔ cart_items (только message)
+                  summary: Паритет has_catalog ↔ cart_items (message + error_code, без errors)
                   value:
                     message: This organization requires cart items. Include cart_items in request.
+                    error_code: catalog_requires_cart_items
                 connection_ambiguous:
                   summary: Больше одного активного кассира без primary
                   value:
@@ -1426,7 +1447,8 @@ paths:
 
         **Чтение истории не гейтится ничем**: список уже выбитых чеков остаётся доступен
         всегда. `403 fiscal_receipts_disabled` бывает только на `POST /receipts`
-        и `POST /receipts/preview` (пауза записи через кассира).
+        и `POST /receipts/preview` — когда выбивание чеков через этого кассира
+        приостановлено.
       operationId: listReceipts
       parameters:
         - name: status
@@ -1917,7 +1939,7 @@ paths:
         Остаток **своей** pending-очереди приёма каталога (POST /catalog) со слим-полями +
         блок `queue` с честным ETA в минутах. ETA учитывает общую FIFO-очередь кассира
         (несколько организаций на одном кассире). Пагинация **плоская**
-        `{current_page, data, total, queue}`. Скоуп — организация ключа (чужие строки
+        `{current_page, data, total, deleting, queue}`. Скоуп — организация ключа (чужие строки
         недоступны). Rate-limit **600/min per key** (не жжёт общий лимит 200/min).
       operationId: getCatalogQueue
       parameters:
@@ -1955,6 +1977,14 @@ paths:
                     items:
                       $ref: '#/components/schemas/CatalogQueueItem'
                   total: {type: integer, example: 1234}
+                  deleting:
+                    type: integer
+                    description: >-
+                      Позиции, ожидающие СНЯТИЯ в Kaspi (очередь массового удаления).
+                      Считается отдельно: `data`/`total` описывают только приём, и без этого
+                      счётчика ответ выглядел бы «очередь пуста», пока тысячи позиций ждут
+                      удаления. Подробности — GET /catalog/batches/{id}.
+                    example: 0
                   queue:
                     $ref: '#/components/schemas/CatalogQueueBlock'
         '401':
@@ -2106,6 +2136,22 @@ paths:
                         discount_percent: {type: integer, example: 5}
                         label: {type: string, example: "Старт, 3 месяца"}
                         price_per_month: {type: number, example: 9500}
+                  is_custom:
+                    type: boolean
+                    description: |
+                      true — у организации индивидуальные условия. Строка её тарифа в
+                      `tiers[]` и планы этого тарифа в `plans[]` уже пересчитаны по
+                      договорённости (имя, `daily_limit`, `base_price`, `price`); остальные
+                      тарифы остаются каталожными. Скидок за длинный период у индивидуальной
+                      цены нет: цена периода = цена месяца × месяцев.
+                    example: false
+                  can_change_tier:
+                    type: boolean
+                    description: |
+                      false — сменить тариф самостоятельно нельзя, оплата другого тарифа
+                      отдаст `409 custom_tariff_locked`. Продление своего тарифа работает
+                      как обычно.
+                    example: true
         '401':
           $ref: '#/components/responses/Unauthorized'
   "/tariff":
@@ -2882,7 +2928,24 @@ paths:
                   type: string
                   maxLength: 191
                   nullable: true
-                  description: "Ключ идемпотентности (эквивалент заголовка Idempotency-Key). Повтор → тот же батч (200)."
+                  description: >-
+                    Ключ идемпотентности (эквивалент заголовка Idempotency-Key). Повтор → тот же батч (200).
+                    ⚠️ Пространство ключей ОБЩЕЕ с массовым удалением: ключ, уже занятый операцией
+                    другого типа, отдаёт `409 idempotency_key_conflict`.
+                sync_token:
+                  type: string
+                  maxLength: 64
+                  pattern: '^[A-Za-z0-9._:-]+$'
+                  description: >-
+                    Метка прогона полной синхронизации. Проставляется на КАЖДУЮ упомянутую позицию —
+                    включая те, по которым работы не было (совпадение с каталогом Kaspi). Нужна, чтобы
+                    потом удалить остаток «всё, чего в этой заливке не было». Заливка из нескольких
+                    запросов шлёт один и тот же токен во всех.
+                    ⚠️ Повтор с тем же `idempotency_key` токен НЕ обновляет — берите точку отсчёта
+                    ДО первого запроса прогона.
+                    ⛔ Не заменяйте это фильтром по времени изменения: `updated_at` не двигается у
+                    позиций, совпавших с каталогом, и двигается у тронутых синхронизацией — фильтр по
+                    времени удалил бы живое и пощадил мёртвое.
                 items:
                   type: array
                   minItems: 1
@@ -2960,20 +3023,279 @@ paths:
         '403':
           $ref: '#/components/responses/TariffInactive'
         '409':
-          description: "Каталог занят другой операцией — повторите запрос через несколько секунд"
+          description: |
+            `catalog_busy` — каталог занят другой операцией, повторите через несколько секунд.
+            `idempotency_key_conflict` — этот `Idempotency-Key` уже занят операцией ДРУГОГО типа
+            (например, массовым удалением): пространство ключей общее, поэтому чужой батч не
+            отдаётся, возьмите новый ключ. Повторять с тем же ключом бесполезно.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   error: {type: string, example: catalog_busy}
+                  error_code: {$ref: '#/components/schemas/ErrorCode'}
                   message: {type: string, example: "Каталог занят другой операцией, повторите запрос через несколько секунд."}
+              examples:
+                catalog_busy:
+                  value: {error: catalog_busy, message: "Каталог занят другой операцией, повторите запрос через несколько секунд."}
+                idempotency_key_conflict:
+                  value: {error: idempotency_key_conflict, error_code: idempotency_key_conflict, message: "Этот Idempotency-Key уже использован операцией другого типа. Возьмите новый ключ."}
         '422':
           $ref: '#/components/responses/ValidationError'
         '502':
           description: Ошибка Kaspi API
         '503':
           description: Kaspi сессия истекла
+  "/catalog/bulk-delete":
+    post:
+      tags: [Catalog]
+      summary: Массовое удаление позиций каталога
+      description: |
+        Снимает с продажи много позиций одним запросом. **POST, а не DELETE** — тело у
+        `DELETE` плохо поддержано HTTP-клиентами 1С.
+
+        **Два взаимоисключающих режима** (ровно один, иначе `422`):
+          * **список** — `ids[]` либо `external_refs[]` (оба ключа уникальны в пределах
+            организации, поэтому одно значение = не больше одной позиции). Лимит значений —
+            **200**, превышение → `422 catalog_match_overflow`.
+            ⛔ `barcodes[]` не принимается: штрихкод не уникален, и одно значение могло бы
+            снести сотни позиций. Штрихкоды — только через фильтр, где есть `dry_run`;
+          * **фильтр** — `filter.sync_token_not`: «удали всё, чего не было в моей заливке».
+            Обязателен `expected_count` — множество большое и необратимое.
+
+        ⚠️ **Это фоновая операция на СУТКИ.** Позиции снимаются с продажи по одной, и во
+        время массового удаления заливка каталога идёт медленнее — обе операции работают в
+        одной очереди. Порядок величин: 500 позиций — около двух часов, несколько тысяч — около
+        суток с небольшим; при параллельной заливке умножьте примерно вчетверо.
+        Ответ `202` — это «принято в работу», а не «удалено»: следите
+        за прогрессом по `poll_url`, итог придёт вебхуком `catalog.batch_processed`
+        (`kind: delete`). ⛔ Не ставьте на этот запрос HTTP-таймаут в расчёте на завершение.
+
+        **Рекомендуемый порядок полной синхронизации из 1С:**
+        1. залейте актуальный каталог через `POST /catalog`, передавая один и тот же
+           `sync_token` во всех запросах прогона;
+        2. вызовите этот эндпоинт с `dry_run: true` — узнаете, сколько позиций попадёт под
+           удаление, и увидите образец;
+        3. повторите без `dry_run`, передав полученное число в `expected_count`;
+        4. дождитесь вебхука либо опрашивайте `poll_url`.
+
+        ⚠️ Позицию, попавшую в очередь удаления по ошибке, можно **вернуть**: пришлите её
+        обычным `POST /catalog` — удаление отменится, и если товар ещё не снят в Kaspi, он
+        просто останется на месте. Если снятие уже прошло, позиция заводится заново: по
+        `external_ref` вернётся та же строка (тот же `id`), а у позиции без `external_ref`,
+        штрихкода и НТИН в каталоге появится новая строка.
+
+        ⛔ Два случая, когда возврат НЕ сработает:
+        1. если у позиции нет `external_ref`, а её штрихкод совпадает с ДРУГИМ, живым товаром —
+           присланная позиция сольётся с живым товаром, а приговорённая уйдёт по вашему плану.
+           Возврат по `external_ref` однозначен всегда;
+        2. если удаление именно этой позиции уже отправлено в Kaspi — придёт
+           `catalog_delete_in_progress` (в `rejected[]` у `POST /catalog`, `409` у
+           `PATCH /catalog/{id}`). Повторите через несколько секунд: если позиция снялась,
+           она будет заведена заново.
+      operationId: bulkDeleteCatalogItems
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: {type: string, maxLength: 191}
+          description: "Повтор с тем же ключом возвращает существующий батч (200), ничего не удаляя."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items: {type: integer}
+                  description: "Режим списка: id позиций из GET /catalog."
+                external_refs:
+                  type: array
+                  items: {type: string, maxLength: 191}
+                  description: "Режим списка: клиентские ссылки (1С)."
+                filter:
+                  type: object
+                  description: "Режим фильтра."
+                  properties:
+                    sync_token_not:
+                      type: string
+                      maxLength: 64
+                      pattern: '^[A-Za-z0-9._:-]+$'
+                      description: >-
+                        Удалить позиции, помеченные ДРУГИМ sync_token. Позиции без метки вовсе
+                        (заведённые в кассе вручную, пришедшие из каталога Kaspi, залитые без
+                        sync_token) под фильтр НЕ попадают — для них нужен явный
+                        include_never_stamped.
+                    include_never_stamped:
+                      type: boolean
+                      default: false
+                      description: >-
+                        Включить в удаление и позиции, не участвовавшие ни в одном прогоне.
+                        Нужен не только в первый раз: такие позиции появляются постоянно —
+                        добавленные в кассе вручную, пришедшие из каталога Kaspi, залитые без
+                        sync_token.
+                expected_count:
+                  type: integer
+                  description: "Обязателен в режиме фильтра. Возьмите из dry_run. Расхождение → 409."
+                dry_run:
+                  type: boolean
+                  description: "true — только посчитать и показать образец, ничего не менять и не расходовать Idempotency-Key."
+                idempotency_key: {type: string, maxLength: 191}
+            examples:
+              targeted:
+                summary: Список идентификаторов
+                value: {ids: [101, 102, 103]}
+              full_sync:
+                summary: Полная синхронизация из 1С
+                value: {filter: {sync_token_not: "run-2026-08-13-A"}, expected_count: 6870}
+      responses:
+        '200':
+          description: |
+            Четыре РАЗНЫХ тела под одним кодом — различайте по наличию ключей:
+            `dry_run: true` — разведка; `batch` без `queued` — повтор по `Idempotency-Key`;
+            `queued: 0` — удалять нечего; `deleted` — песочница (удалено синхронно).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    title: DryRun
+                    properties:
+                      dry_run: {type: boolean, example: true}
+                      would_delete: {type: integer, example: 412}
+                      sample:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: {type: integer}
+                            external_ref: {type: string, nullable: true}
+                            name: {type: string}
+                      already_queued:
+                        type: integer
+                        description: "⚠️ Здесь ЧИСЛО (историческая форма). В остальных телах — массив id."
+                      already_queued_count: {type: integer}
+                  - type: object
+                    title: IdempotentReplay
+                    properties:
+                      batch: {$ref: '#/components/schemas/CatalogBatch'}
+                  - type: object
+                    title: NothingToDelete
+                    properties:
+                      message: {type: string, example: Nothing to delete}
+                      queued: {type: integer, example: 0}
+                      already_queued: {type: array, items: {type: integer}}
+                      already_queued_count: {type: integer}
+                  - type: object
+                    title: SandboxDeleted
+                    properties:
+                      message: {type: string, example: Catalog items deleted}
+                      deleted: {type: integer}
+                      already_queued: {type: array, items: {type: integer}}
+                      already_queued_count: {type: integer}
+                      batch: {$ref: '#/components/schemas/CatalogBatch'}
+        '202':
+          description: "Позиции приняты в очередь удаления"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch: {$ref: '#/components/schemas/CatalogBatch'}
+                  queued: {type: integer, example: 6870}
+                  already_queued:
+                    type: array
+                    items: {type: integer}
+                    description: "Позиции, которые уже стояли в очереди удаления — их не переклеймливаем."
+        '400':
+          description: |
+            `catalog_not_supported` — у организации не включён каталог. ⚠️ Именно 400, а не 422:
+            это предусловие организации, а не ошибка тела запроса.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: catalog_not_supported}
+                  error_code: {$ref: '#/components/schemas/ErrorCode'}
+                  message: {type: string}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            `tariff_inactive` — тариф не активен.
+            `catalog_delete_owner_key_required` — ключ выпущен не владельцем организации.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: catalog_delete_owner_key_required}
+                  error_code: {$ref: '#/components/schemas/ErrorCode'}
+                  message: {type: string}
+        '404':
+          description: |
+            Организация не найдена либо не верифицирована. ⚠️ Тело исторически без
+            `error_code`: `{"error": "Verified organization not found"}`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: Verified organization not found}
+        '429':
+          $ref: '#/components/responses/RateLimitWindow'
+        '409':
+          description: |
+            `catalog_bulk_delete_mismatch` — `expected_count` разошёлся с фактом (тело несёт
+            `actual_count`), каталог изменился между разведкой и командой: повторите `dry_run`.
+            `idempotency_key_conflict` — ключ занят операцией другого типа.
+            `catalog_multi_tradepoint` — у организации несколько торговых точек.
+            `catalog_busy` — каталог занят другой операцией, повторите через несколько секунд.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: catalog_bulk_delete_mismatch}
+                  error_code: {$ref: '#/components/schemas/ErrorCode'}
+                  message: {type: string}
+                  expected_count: {type: integer, example: 6870}
+                  actual_count: {type: integer, example: 6868}
+        '422':
+          description: |
+            `catalog_delete_scope_required` — `reason: mode_required` (не задан ни один режим
+            либо задано несколько) или `reason: expected_count_required` (в режиме фильтра нет
+            `expected_count`).
+            `catalog_delete_filter_invalid` — фильтру нельзя верить: `reason: token_never_used`
+            (этим `sync_token` не отмечена ни одна позиция — обычно опечатка) либо
+            `reason: coverage_too_low` (прогон пометил слишком малую часть каталога — похоже,
+            заливка не завершилась; тело несёт `stamped` и `visible`). Во втором случае
+            повторите прогон целиком и вызовите удаление снова.
+            `catalog_match_overflow` — слишком много значений в списке.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: catalog_delete_scope_required}
+                  error_code: {$ref: '#/components/schemas/ErrorCode'}
+                  message: {type: string}
+                  reason:
+                    type: string
+                    description: >-
+                      Уточнение причины в пределах одного error_code. Список ОТКРЫТ —
+                      неизвестное значение обрабатывайте общей веткой.
+                    example: coverage_too_low
+                  stamped:
+                    type: integer
+                    description: "Только при coverage_too_low: сколько позиций пометил прогон."
+                  visible:
+                    type: integer
+                    description: "Только при coverage_too_low: сколько живых позиций в каталоге."
   "/catalog/upload-image":
     post:
       tags: [Catalog]
@@ -3138,6 +3460,14 @@ paths:
                 barcode: {type: string, nullable: true, maxLength: 32}
                 ntin: {type: string, maxLength: 50, description: "⚠️ Затирает идентичность Нацкаталога — только при реальном изменении."}
                 gtin: {type: string, maxLength: 50, description: "⚠️ То же предупреждение, что и для ntin."}
+                sync_token:
+                  type: string
+                  maxLength: 64
+                  pattern: '^[A-Za-z0-9._:-]+$'
+                  description: >-
+                    Та же метка прогона, что у POST /catalog. Нужна, если позицию вы ведёте ТОЛЬКО
+                    через PATCH: без неё она будет считаться неупомянутой в прогоне и попадёт под
+                    удаление остатка. Проставляется независимо от того, менялись ли поля.
       responses:
         '200':
           description: "Sandbox: товар обновлён синхронно"
@@ -3172,7 +3502,17 @@ paths:
     delete:
       tags: [Catalog]
       summary: Удалить товар каталога
-      description: "Sandbox → 200 (hard delete). Production → 202 (статус → deleting, удаление в Kaspi джобом)."
+      description: |
+        Sandbox → `200` (hard delete). Production → `202`: статус позиции становится
+        `deleting`, а в Kaspi она снимается фоновой обработкой.
+
+        ⚠️ **Ответ приходит раньше, чем товар исчезает из кассы.** Обычно позиция снимается
+        за считаные секунды, но если параллельно идёт массовая операция с каталогом, очередь
+        загружена и снятие займёт дольше. Проверяйте результат чтением `GET /catalog?statuses[]=deleted`, а не сразу
+        после ответа.
+
+        ⚠️ Позиция остаётся в `deleting` и после временного сбоя — сервис вернётся к ней
+        сам, повторный запрос слать не нужно.
       operationId: deleteCatalogItem
       parameters:
         - name: id
@@ -3198,6 +3538,18 @@ paths:
           $ref: '#/components/responses/TariffInactive'
         '404':
           description: Товар не найден
+        '409':
+          description: |
+            `catalog_multi_tradepoint` — у организации несколько торговых точек, и удаление
+            каталога через API для неё недоступно. Обратитесь в поддержку.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: catalog_multi_tradepoint}
+                  error_code: {$ref: '#/components/schemas/ErrorCode'}
+                  message: {type: string, example: "У организации несколько торговых точек — удаление каталога недоступно. Обратитесь в поддержку."}
   "/clients/check":
     post:
       tags: [Clients]
@@ -3256,14 +3608,35 @@ paths:
                   message: {type: string, example: "Phone must be normalizable to 8XXXXXXXXXX (11 digits)."}
         '429':
           description: |
-            Превышен лимит. `scope=minute` (rate) — тело `{"message":"Too Many Requests"}`;
-            `scope=kaspi_throttle` (circuit-breaker) — тело содержит retry_after, заголовок Retry-After.
+            Превышен лимит. Два РАЗНЫХ источника, тела похожи, но различаются полем `scope`:
+
+            * **наш лимитер** — `scope` одно из `minute`, `day`, `org_minute`, `org_day`,
+              `cashier_minute`; список открыт, неизвестное значение обрабатывайте общей веткой.
+              ⚠️ Часть окон СУТОЧНЫЕ (`*_day`) — ориентируйтесь на `retry_after`, а не на
+              «подожду минуту»;
+            * **троттл Kaspi** — `scope: kaspi_throttle` (сработал circuit-breaker).
+
+            Оба тела несут `retry_after` (секунды) и заголовок `Retry-After`.
+            ⚠️ Поля `error_code` здесь нет намеренно: единый поминутный код сюда не подходит —
+            окна разные.
+          headers:
+            Retry-After:
+              description: Секунд до повторной попытки.
+              schema: {type: integer}
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message: {type: string, example: Too Many Requests}
+                  error: {type: string, example: Too many requests}
+                  message: {type: string, example: "Lookup rate limit exceeded."}
+                  retry_after: {type: integer, example: 42}
+                  scope: {type: string, example: minute}
+              examples:
+                our_limiter:
+                  value: {error: "Too many requests", message: "Lookup rate limit exceeded.", retry_after: 42, scope: "day"}
+                kaspi_throttle:
+                  value: {error: "Too many requests", message: "Lookup throttled, retry later.", retry_after: 120, scope: "kaspi_throttle"}
         '503':
           description: Kaspi session unavailable — нет активной сессии кассира
           content:
@@ -3759,8 +4132,7 @@ paths:
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: tariff_inactive}
-        '404': {description: "cashbox_shift_not_found — смена с таким id недоступна (не листали GET /cashbox/shifts)"}
-        '409': {description: "rfo_missing"}
+        '404': {description: "cashbox_shift_not_found — смена с таким id недоступна (не листали GET /cashbox/shifts). Организация без кассы Kaspi (ОФД) приходит сюда же: смен ей не отдаёт и сам листинг"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
         '503': {description: cashbox_unavailable}
@@ -4083,6 +4455,52 @@ components:
               error_code: {$ref: '#/components/schemas/ErrorCode'}
               message: {type: string, example: "Слишком много неоплаченных счетов на этот номер."}
               retry_after_seconds: {type: integer, example: 60}
+              meta:
+                type: object
+                nullable: true
+                description: >-
+                  Присутствует у `tariff_limit_reached` и `kyc_daily_limit_reached`.
+                  ⚠️ У `trial_daily_limit`, `outstanding_*` и `recipient_fanout_exceeded`
+                  поля НЕТ — один компонент описывает две разные формы.
+                properties:
+                  mode: {type: string, enum: [daily, monthly], example: daily}
+                  limit: {type: integer, example: 100}
+                  used: {type: integer, example: 100}
+                  reset_at: {type: string, format: date-time}
+    RateLimitWindow:
+      description: |
+        Превышен ПОМИНУТНЫЙ лимит запросов (`error_code: request_rate_limited`).
+
+        ⚠️ Поле `message` намеренно осталось прежним — `"Too Many Attempts."`: интеграции,
+        разбиравшие строку, продолжают работать. Всё машиночитаемое добавлено рядом.
+
+        ⚠️ `limit`/`X-RateLimit-Limit` — это бакет, где осталось меньше всего, а не лимит
+        конкретной ручки (к запросу применяется несколько лимитеров сразу).
+      headers:
+        Retry-After:
+          description: Секунд до повторной попытки.
+          schema: {type: integer}
+        X-RateLimit-Limit:
+          description: Потолок самого дефицитного бакета этого запроса.
+          schema: {type: integer}
+        X-RateLimit-Remaining:
+          description: Остаток в нём (на 429 — всегда 0).
+          schema: {type: integer}
+        X-RateLimit-Reset:
+          description: Unix-время обнуления окна.
+          schema: {type: integer}
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: {type: string, example: "Too Many Attempts."}
+              error: {type: string, example: request_rate_limited}
+              error_code: {$ref: '#/components/schemas/ErrorCode'}
+              limit: {type: integer, example: 200}
+              remaining: {type: integer, example: 0}
+              reset_at: {type: string, format: date-time, nullable: true}
+              retry_after_seconds: {type: integer, example: 37}
     KycRejected:
       description: |
         Мерчант отклонён на KYC-модерации — выставление счетов заблокировано полностью
@@ -4211,6 +4629,8 @@ components:
         - invoice_not_found_in_kaspi
         - amount_must_be_whole_tenge
         - qr_cancel_unsupported
+        - catalog_requires_cart_items
+        - catalog_not_supported
         - organization_not_configured
         - cart_items_mismatch
         - qr_render_failed
@@ -4218,6 +4638,7 @@ components:
         - kaspi_session_unavailable
         - kaspi_session_expired
         - tariff_inactive
+        - custom_tariff_locked
         - invoices_disabled
         - entrance_auth_disabled
         - manager_throttled
@@ -4230,6 +4651,15 @@ components:
         - catalog_item_duplicate
         - catalog_match_overflow
         - catalog_item_invalid
+        - idempotency_key_conflict
+        - catalog_multi_tradepoint
+        - catalog_delete_scope_required
+        - catalog_delete_filter_invalid
+        - catalog_delete_in_progress
+        - catalog_delete_owner_key_required
+        - catalog_busy
+        - catalog_bulk_delete_mismatch
+        - request_rate_limited
         - kaspi_error
         - unknown_error
         - outstanding_recipient_limit
@@ -4937,12 +5367,25 @@ components:
     CatalogBatch:
       type: object
       description: |
-        Агрегат bulk-батча приёма каталога (POST /catalog инжест-путь · GET /catalog/batches/{id}).
-        Инвариант по завершении: `total = created + updated + skipped + failed`. `skipped` включает
-        идемпотентные skip'ы (позиция уже такая же, как в каталоге Kaspi) + intra-batch дубли +
-        matched-без-работы.
+        Агрегат bulk-батча каталога (POST /catalog инжест-путь · GET /catalog/batches/{id}).
+
+        ⚠️ **Инвариант totals зависит от `kind`:**
+          * `ingest` — `total = created + updated + skipped + failed` (`deleted` всегда 0);
+          * `delete` — `total = deleted + skipped + failed` (`created`/`updated` всегда 0).
+
+        `skipped` включает идемпотентные skip'ы (позиция уже такая же, как в каталоге Kaspi) +
+        intra-batch дубли + matched-без-работы; у батча удаления — позиции, ушедшие из работы
+        не через удаление (например, переизданные повторной заливкой).
+
+        Ключ `deleted` присутствует ВСЕГДА (у `ingest` — ноль), чтобы форма ответа не зависела
+        от вида батча.
       properties:
         batch_id: {type: string, format: uuid, example: "8f14e45f-ceea-467e-9a2c-0000000000aa"}
+        kind:
+          type: string
+          enum: [ingest, delete]
+          description: "Вид батча. Определяет, какой инвариант totals применять (см. описание схемы)."
+          example: ingest
         status:
           type: string
           enum: [accepted, processing, completed, partially_failed]
@@ -4954,6 +5397,7 @@ components:
             total: {type: integer, description: "Принятые items (без rejected).", example: 6870}
             created: {type: integer, example: 5868}
             updated: {type: integer, example: 3}
+            deleted: {type: integer, description: "Позиции, снятые в Kaspi. Ненулевой только у `kind: delete`.", example: 0}
             skipped: {type: integer, example: 996}
             failed: {type: integer, example: 3}
         pending_remaining: {type: integer, description: "Сколько строк батча ещё не финализировано (0 = готово).", example: 1002}
@@ -4991,6 +5435,11 @@ components:
       properties:
         event: {type: string, example: catalog.batch_processed}
         batch_id: {type: string, format: uuid, example: "8f14e45f-ceea-467e-9a2c-0000000000aa"}
+        kind:
+          type: string
+          enum: [ingest, delete]
+          description: "Вид батча — определяет, какой инвариант totals применять (см. CatalogBatch)."
+          example: ingest
         status: {type: string, enum: [completed, partially_failed], example: partially_failed}
         totals:
           type: object
@@ -4998,6 +5447,7 @@ components:
             total: {type: integer, example: 6870}
             created: {type: integer, example: 5868}
             updated: {type: integer, example: 3}
+            deleted: {type: integer, description: "Ненулевой только у `kind: delete`.", example: 0}
             skipped: {type: integer, example: 996}
             failed: {type: integer, example: 3}
         sample_failed:
@@ -5038,6 +5488,29 @@ components:
       properties:
         status: {type: string, enum: [none, trial, active, expired], example: active}
         tier: {type: string, nullable: true, example: business}
+        tier_label:
+          type: string
+          description: |
+            Имя тарифа так, как оно продано ЭТОМУ мерчанту. Обычно совпадает с именем из
+            каталога (`Business`), но у мерчанта с индивидуальными условиями это его
+            договорное имя. Витринное поле: switch-логику стройте по `tier`.
+          example: Business
+        daily_limit:
+          type: integer
+          nullable: true
+          description: |
+            Суточный лимит счетов, действующий у ЭТОГО мерчанта (у индивидуальных условий
+            он отличается от каталожного). `null` зарезервирован под тариф без лимита,
+            которого сейчас в каталоге нет.
+          example: 300
+        is_custom:
+          type: boolean
+          description: |
+            true — у организации индивидуальные условия (свой лимит и своя цена).
+            ⛔ `tier` при этом остаётся ОБЫЧНЫМ идентификатором (`pro`), значения `custom`
+            не существует. Смена тарифа таким мерчантом отбивается `409 custom_tariff_locked`
+            — переход оформляет поддержка.
+          example: false
         is_trial: {type: boolean, example: false}
         started_at: {type: string, format: date-time, nullable: true, example: "2026-01-01T00:00:00+05:00"}
         expires_at: {type: string, format: date-time, nullable: true}
@@ -5722,6 +6195,9 @@ x-webhooks:
         `kaspi_session_not_configured` — кассир чека деактивирован или удалён к моменту
         выбивания (чек НЕ выбивается от другой кассы);
         `fiscal_receipts_disabled` — запись через целевого кассира приостановлена;
+        `receipt_ofd_token_revoked` — отозвана ФИСКАЛЬНАЯ привязка кассы, мерчанту нужно
+        перепривязать ОФД в приложении Kaspi; приём оплат при этом работает, встают только
+        чек и каталог;
         `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ НЕ создан —
         повтор допустим: после `failed` прежний `client_operation_id` освобождается.
         Повторные попытки доставки — как у `receipt.issued`.
