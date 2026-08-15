@@ -6,9 +6,12 @@ Use this section when the organization has a Kaspi register: it lets you close s
 
 ## Prerequisites
 
-1. **A Kaspi cashier is connected.** Cashbox endpoints work through an active cashier session — except reconciliation, which reads shifts you already fetched. Otherwise you get `409 kaspi_session_not_configured`. With several active registers pass `kaspi_connection_id`, otherwise `422 connection_ambiguous`.
-2. **The trade point and register are known.** Without the trade point code you get `409 rfo_missing`, without the register number — `409 cashbox_kkm_unknown` (it is resolved after the first sale or a catalog sync).
-3. **An active subscription.** The cash register is part of the paid features.
+1. **A Kaspi register (OFD) is connected to the Kaspi Pay account.** This is the same connection that enables the product catalog. If sales run through Kaspi Pos without OFD, the organization has no register shifts at all: the "Cash register" section is not shown in the dashboard, and the endpoints refuse — `409 cashbox_kkm_unknown` for the shift list and closing, `409 rfo_missing` for the summary and the toggles. There is nothing to wait for: the register number will not appear.
+2. **A Kaspi cashier is connected.** Cashbox endpoints work through an active cashier session — except reconciliation, which reads shifts you already fetched. Otherwise you get `409 kaspi_session_not_configured`. With several active registers pass `kaspi_connection_id`, otherwise `422 connection_ambiguous`.
+3. **The trade point and register are known.** Without the trade point code you get `409 rfo_missing`, without the register number — `409 cashbox_kkm_unknown`. If the Kaspi register is connected and the codes still arrive: pass the `kaspi_connection_id` of the right point when there are several registers, and have the merchant re-check the organization state by reconnecting the cashier or via the "Refresh organization info" button in the dashboard settings. ⚠️ That action may enable the product catalog: after it `POST /invoices/qr` and `POST /static-qr` without `cart_items` answer `422 catalog_requires_cart_items`, and already printed QR sheets without a basket stop working.
+4. **An active subscription.** The cash register is part of the paid features.
+
+**In the sandbox the register always responds** — with deterministic data, regardless of whether a Kaspi register is connected in production and whether there is a cashier. Always verify an integration that passed in the sandbox against a production organization. The "Cash register" section in a test organization's dashboard appears only if the organization was created with the "has a register" answer (the answer can be changed in settings).
 
 **Separate rate limit:** 30 requests per minute per key — stricter than the general one.
 
@@ -193,11 +196,11 @@ Deduplicate by the `event` + `operation.id` pair. Signature and general delivery
 | Code | HTTP | What to do |
 |------|------|------------|
 | `cashbox_disabled` | 403 | Register operations are currently unavailable for the organization |
-| `cashbox_kkm_unknown` | 409 | The register is not resolved yet — retry after the first sale or a catalog sync |
+| `cashbox_kkm_unknown` | 409 | No Kaspi register (OFD) is linked to the Kaspi Pay account — the organization has no shifts |
 | `cashbox_shift_not_found` | 404 | Call `GET /cashbox/shifts` first |
-| `cashbox_no_open_shift` | 409 | There is no open shift to close |
+| `cashbox_no_open_shift` | — (in `operation.error_code`) | There is no open shift to close |
 | `cashbox_duplicate_operation` | 409 | An operation with this `client_operation_id` was already accepted |
-| `cashbox_busy` | 409 | The register is busy with another operation, retry in a minute |
+| `cashbox_busy` | — (in `operation.error_code`) | The register is busy with another operation — repeat the closure with a new `client_operation_id` |
 | `cashbox_operation_failed` | — | Kaspi did not complete the operation; see `resolution.safe_to_retry` |
 | `cashbox_unavailable` | 503 | The Kaspi register is temporarily unavailable, retry later |
 | `cashbox_report_unavailable` | 503 | The report is unavailable right now, retry later |
