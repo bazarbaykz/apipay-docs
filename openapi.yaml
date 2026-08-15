@@ -354,7 +354,9 @@ paths:
             без primary, укажите `kaspi_connection_id`); ошибки скидки/каталога;
             `content_rejected` (контент-скрин, только в режиме block);
             `amount_must_be_whole_tenge` (сумма с тиынами по телефонному счёту не
-            принимается; округлите либо используйте `POST /invoices/qr`).
+            принимается; округлите либо используйте `POST /invoices/qr`);
+            позиция корзины в статусе `deleting` — `errors["cart_items.N.catalog_item_id"]`,
+            отдельного `error_code` у этой ветки нет (см. `CartItem.catalog_item_id`).
           content:
             application/json:
               schema:
@@ -396,6 +398,12 @@ paths:
         ⛔ **Сумма — только целые тенге** (как и в `POST /invoices`). Позиция с тиынами
         приходит в `invoices[]` как `failed` с `error_code: amount_must_be_whole_tenge`;
         остальные позиции батча создаются нормально.
+
+        ⛔ **Товар в снятии тоже отбивается поэлементно.** Счёт с позицией корзины в
+        статусе `deleting` приходит в `invoices[]` как `failed` с
+        `error_code: catalog_item_not_found` и текстом `Catalog item is being deleted…`
+        в `message`; остальные позиции батча создаются. Позиция восстановима — см.
+        `CartItem.catalog_item_id`.
       operationId: createInvoicesBulk
       requestBody:
         required: true
@@ -475,6 +483,10 @@ paths:
         (`qr_substate: "scanned"`, `status` остаётся `pending`). Отмена QR-счёта не
         поддерживается; возврат — через отдельную ветку `POST /qr-refunds` (клиент
         сканирует возвратный QR).
+
+        ⛔ **Позиция корзины в статусе `deleting` отбивается `422`** —
+        `errors["cart_items.N.catalog_item_id"]`, отдельного `error_code` у этой ветки нет.
+        Как вернуть позицию — см. `CartItem.catalog_item_id`.
       operationId: createQrInvoice
       requestBody:
         required: true
@@ -1113,6 +1125,12 @@ paths:
         неактивный `kaspi_connection_id`, неоднозначный кассир, непроверенная организация,
         забракованное `description`), отбивается **на генерации** — см. `400`/`422`.
 
+        ⚠️ **Проверка работает на момент генерации.** Если позиция каталога из `cart_items`
+        позже уйдёт в снятие (`deleting`) или будет снята, скан такого листа перестанет
+        создавать счёт до возврата позиции — а переиздать напечатанный лист нельзя. Верните
+        позицию обычным `POST /catalog`, и лист снова заработает. Перед массовым удалением
+        каталога проверьте, какие позиции стоят в напечатанных листах.
+
         В **sandbox** не проверяется только верификация организации (её счета в Kaspi не
         уходят) — проверки кассира и корзины действуют и в песочнице, в отличие от
         `POST /invoices/qr`, который в sandbox кассира не резолвит вовсе. Это сделано
@@ -1167,10 +1185,13 @@ paths:
             * мерчант **с** каталогом без `cart_items` либо **без** каталога с `cart_items` —
               тело несёт `message` и `error_code` (`catalog_requires_cart_items` /
               `catalog_not_supported`), но **без** `errors`, как на `POST /invoices/qr`;
-            * `cart_items.*.catalog_item_id` не принадлежит вашей организации, удалён или без
-              цены — `errors["cart_items.0.catalog_item_id"]` с тем же текстом, что вернуло бы
+            * `cart_items.*.catalog_item_id` не принадлежит вашей организации, удалён,
+              стоит в очереди на снятие (`deleting`) или без цены —
+              `errors["cart_items.0.catalog_item_id"]` с тем же текстом, что вернуло бы
               создание счёта (`Catalog item does not belong to your organization.` /
-              `… has been deleted.` / `… has no price set.`);
+              `… has been deleted.` / `Catalog item is being deleted…` /
+              `… has no price set.`). Позицию из очереди снятия можно вернуть обычным
+              `POST /catalog`, после чего она снова принимается в корзину;
             * `kaspi_connection_id` чужой или неактивный — `errors.kaspi_connection_id`
               (`422`, а не `404`: код ответа не раскрывает существование чужого кассира);
             * `connection_ambiguous` — у организации больше одного активного кассира и нет
@@ -3072,6 +3093,12 @@ paths:
         за прогрессом по `poll_url`, итог придёт вебхуком `catalog.batch_processed`
         (`kind: delete`). ⛔ Не ставьте на этот запрос HTTP-таймаут в расчёте на завершение.
 
+        ⚠️ **Позиции, попавшие в очередь снятия, перестают приниматься в корзину сразу** —
+        включая уже напечатанные листы `POST /static-qr`, где эти позиции зашиты в
+        `cart_items`. Скан такого листа не создаст счёт, пока позиция не вернётся в продажу,
+        а переиздать напечатанный лист нельзя. Если под удаление попадают позиции из
+        действующих листов, верните их через `POST /catalog` либо перевыпустите листы.
+
         **Рекомендуемый порядок полной синхронизации из 1С:**
         1. залейте актуальный каталог через `POST /catalog`, передавая один и тот же
            `sync_token` во всех запросах прогона;
@@ -3439,6 +3466,20 @@ paths:
         `external_ref` при обновлении **не принимается**. ⚠️ `ntin`/`gtin` затирают
         идентичность Нацкаталога безвозвратно (её нельзя восстановить синком) — отправляйте
         только при реальном изменении. Sandbox → `200`, Production → `202`.
+
+        ⚠️ **`PATCH` по позиции в очереди удаления ОТМЕНЯЕТ удаление** — запрос означает
+        «позиция мне нужна» и обрабатывается так же, как повторная заливка. Исключение —
+        узкое окно, когда снятие уже отправлено в Kaspi: тогда приходит
+        `409 catalog_delete_in_progress`, состояние позиции при этом не меняется.
+        Повторите через несколько секунд; если попытка снятия не завершилась, окно
+        закрывается само не позже чем через две минуты — дольше этого кода не бывает.
+
+        ⛔ **Если позиция к этому моменту уже снята, `PATCH` по ней вернёт `404`:** выборка
+        идёт только по живым строкам, и снятая позиция для неё не существует. Заведите её
+        заново обычным `POST /catalog`: по `external_ref` вернётся та же строка (тот же
+        `id`); у позиции без `external_ref` в каталоге появится новая строка с новым `id`,
+        а если её штрихкод совпадает с другим живым товаром — присланная позиция сольётся
+        с ним. Пересоздание есть только у `POST /catalog`, у `PATCH` его нет.
       operationId: updateCatalogItem
       parameters:
         - name: id
@@ -3492,7 +3533,24 @@ paths:
         '403':
           $ref: '#/components/responses/TariffInactive'
         '404':
-          description: Товар не найден
+          description: |
+            Товар не найден. ⚠️ Сюда же приходит уже СНЯТАЯ позиция (`deleted`): выборка
+            идёт по живым строкам. Заводите её заново через `POST /catalog`.
+        '409':
+          description: |
+            `catalog_delete_in_progress` — снятие этой позиции уже отправлено в Kaspi,
+            отменить его нельзя. Состояние позиции не изменено. Повторите через несколько
+            секунд: если к тому моменту позиция снялась, `PATCH` вернёт `404` и заводить её
+            нужно через `POST /catalog`. Окно живёт не дольше двух минут даже если попытка
+            снятия не завершилась.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: catalog_delete_in_progress}
+                  error_code: {$ref: '#/components/schemas/ErrorCode'}
+                  message: {type: string}
         '422':
           $ref: '#/components/responses/ValidationError'
         '502':
@@ -3711,6 +3769,18 @@ paths:
         уходит в статус `error` с `error_code: amount_must_be_whole_tenge` — вебхуком
         `invoice.status_changed`, и так при КАЖДОМ списании. Проверьте суммы действующих
         подписок и цены каталожных позиций, из которых считается итог.
+
+        ⛔ **Позиция корзины в статусе `deleting` отбивается `422`** — здесь и в
+        `PUT /subscriptions/{id}`; текст в `errors["cart_items.N.catalog_item_id"]`.
+        ⚠️ На очередном СПИСАНИИ этого гейта нет: если позиция уходит в снятие у уже
+        работающей подписки, списание не проваливается, а откладывается до следующей
+        попытки списания — счётчик неудач не растёт и подписка не уходит в grace period
+        из-за временного состояния. Верните позицию обычным `POST /catalog`.
+
+        ⚠️ **Отложенное списание ничем не сигнализируется:** счёт за период не создаётся,
+        вебхука нет, `next_billing_at` не двигается. Списание пройдёт автоматически первой
+        же попыткой после того, как позиция вернётся в продажу — если деньги нужны раньше,
+        верните позицию сами.
       operationId: createSubscription
       requestBody:
         required: true
@@ -3788,7 +3858,12 @@ paths:
     put:
       tags: [Subscriptions]
       summary: Обновить подписку
-      description: Все поля опциональны. `cart_items` на не-каталог организации → 422. При передаче cart_items сумма пересчитывается.
+      description: |
+        Все поля опциональны. `cart_items` на не-каталог организации → `422`. При передаче
+        `cart_items` сумма пересчитывается.
+
+        ⛔ Позиция корзины в статусе `deleting` отбивается `422` так же, как при создании —
+        текст в `errors["cart_items.N.catalog_item_id"]`.
       operationId: updateSubscription
       parameters:
         - name: id
@@ -4832,7 +4907,23 @@ components:
       properties:
         catalog_item_id:
           type: integer
-          description: ID товара из каталога (поле id из GET /catalog). Должен принадлежать организации, не удалён, с ценой.
+          description: >-
+            ID товара из каталога (поле `id` из `GET /catalog`). Должен принадлежать
+            организации, иметь цену и НЕ находиться в снятии.
+            ⛔ Позиция в статусе `deleting` в корзину не принимается: при массовом
+            удалении она стоит в этом статусе долго (порядок величин — в описании
+            `POST /catalog/bulk-delete`), и счёт, выставленный в это окно, стал бы
+            фискальным документом на товар, которого к моменту оплаты уже нет. Отказ приходит в
+            `errors["cart_items.N.catalog_item_id"]` с текстом
+            `Catalog item is being deleted. Send it again via POST /catalog to cancel the
+            deletion and use it in invoices.` — позиция восстановима: пришлите её обычным
+            `POST /catalog`, удаление отменится, и она снова станет доступна для счетов.
+            Позиция в статусе `deleted` даёт отдельный текст (`Catalog item has been
+            deleted.`).
+            ⚠️ Форма отказа зависит от поверхности: `POST /invoices`, `/invoices/qr`,
+            `/static-qr` и создание/обновление подписки отдают `422`, а `POST /invoices/bulk`
+            остаётся `201` и возвращает позицию в `invoices[]` как `failed` с
+            `error_code: catalog_item_not_found`.
         count:
           type: integer
           minimum: 1
@@ -4847,7 +4938,16 @@ components:
       description: Позиция корзины для подписки (без кастомной цены).
       required: [catalog_item_id, count]
       properties:
-        catalog_item_id: {type: integer}
+        catalog_item_id:
+          type: integer
+          description: >-
+            Те же правила, что у `CartItem.catalog_item_id`: позиция в статусе `deleting`
+            в корзину не принимается (`422`).
+            ⚠️ Асимметрия, важная для денег: гейт стоит на СОЗДАНИИ и ОБНОВЛЕНИИ подписки,
+            а на очередном списании — нет. Если позиция уходит в снятие у уже работающей
+            подписки, списание не проваливается, а ОТКЛАДЫВАЕТСЯ до следующей попытки
+            списания: счётчик неудач не растёт и подписка не уходит в grace period. ⚠️ Наружу это никак
+            не сигнализируется — ни счёта, ни вебхука, ни сдвига `next_billing_at`.
         count: {type: integer, minimum: 1}
     CreateInvoiceRequest:
       type: object
@@ -5608,7 +5708,19 @@ components:
         ntin_missing: {type: boolean, description: "true, если у товара есть barcode, но нет НТИН → не попадёт в фискальный чек как маркированный. Notify-only: дорезолвите НТИН через POST /catalog/scan + PATCH. Присутствует во всех ответах каталога."}
         matched_existing: {type: boolean, description: "Только в ответе POST /catalog: позиция сматчена с уже существующим товаром (match-and-merge) — вернулся его живой id, новая строка не создавалась. В остальных ответах — false."}
         name_differs: {type: boolean, description: "Только в ответе POST /catalog при matched_existing=true по ярусу 3 (совпал barcode/НТИН, но наименование другое): имя существующего товара НЕ перезаписано. Правьте имя явным PATCH /catalog/{id}."}
-        status: {type: string, enum: [active, pending, deleting, deleted, failed], example: active}
+        status:
+          type: string
+          enum: [active, pending, deleting, deleted, failed]
+          example: active
+          description: >-
+            `pending` — заведена у нас, ждёт отправки в Kaspi; `active` — продаётся;
+            `deleting` — снятие запланировано или выполняется, продавать позицию уже нельзя;
+            `deleted` — снята; `failed` — провести позицию не удалось: причина в полях
+            `error_code`/`error_message` самой позиции, ошибки заливки дополнительно
+            доступны через `GET /catalog/errors` (окно по умолчанию — 7 дней).
+            ⛔ Позиция в `deleting` НЕ принимается в корзину ни на одной платёжной
+            поверхности — см. `CartItem.catalog_item_id`. Она восстановима: пришлите её
+            обычным `POST /catalog`, и удаление отменится.
         error_message: {type: string, nullable: true}
         error_code: {$ref: '#/components/schemas/ErrorCode'}
         created_at: {type: string, format: date-time}
