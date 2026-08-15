@@ -182,7 +182,7 @@ Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_dele
 
 **Response code:** `200 OK` (sandbox) / `202 Accepted` (production).
 
-A `PATCH` on an item queued for deletion **cancels the deletion** — the item comes back into service. The exception is the narrow window in which the removal has already been sent to Kaspi: then you get `409 catalog_delete_in_progress`. Retry in a few seconds. If the item has already been removed by then, a `PATCH` on it returns `404` — send it again with a regular `POST /catalog` carrying the same `external_ref`: the same row comes back with the same `id`.
+A `PATCH` on an item queued for deletion **cancels the deletion** — the item comes back into service. The exception is the narrow window in which the removal has already been sent to Kaspi: then you get `409 catalog_delete_in_progress`. Retry in a few seconds — the window lasts no longer than two minutes even if the removal attempt never completes. If the item has already been removed by then, a `PATCH` on it returns `404`: send it again with a regular `POST /catalog`. An `external_ref` brings back the same row with the same `id`; an item without one appears as a new row with a new `id`, and if its barcode matches another live item, the item you send merges into that one.
 
 The `sync_token` field is accepted here as well. You need it when an item is maintained through `PATCH` only: without the marker it counts as not mentioned in the run and falls under the removal of the remainder. The marker is stamped whether or not any field actually changed.
 
@@ -255,11 +255,13 @@ If nothing at all carries the marker, you get `reason: token_never_used` — che
 
 > ⚠️ **The list of `reason` values is open** — handle an unknown value in a generic branch. `catalog_delete_scope_required` has its own values: `mode_required` (no mode set, or more than one) and `expected_count_required`.
 
-### This Is a Background Operation That Takes Days
+### This Is a Background Operation That Takes About a Day
 
 Items are taken off sale one at a time, and while a bulk deletion runs, catalog uploads go slower — both operations share one queue. Orders of magnitude: 500 items take about two hours, several thousand take a bit over a day; with a parallel upload, multiply by roughly four. Plan your window from these numbers, not from the response time.
 
 > ⛔ The `202` response means "accepted for processing", not "deleted". Do not set an HTTP timeout on this request expecting it to complete.
+
+> ⚠️ Items queued for removal stop being accepted into carts immediately — including already printed `POST /static-qr` sheets that carry those items in `cart_items`. Scanning such a sheet will not create an invoice until the item is back on sale, and a printed sheet cannot be reissued. If items from active sheets fall under the deletion, bring them back with `POST /catalog` or reprint the sheets.
 
 ### Responses
 
@@ -306,13 +308,22 @@ Send it with a regular `POST /catalog` and the deletion is cancelled. If the ite
 |--------|---------------|
 | `pending` | The item is created on our side and waits to be sent to Kaspi |
 | `active` | The item is registered in Kaspi and is on sale |
-| `deleting` | The item is being taken off sale; it is still visible in Kaspi |
+| `deleting` | Removal is scheduled or in progress; the item can no longer be sold |
 | `deleted` | The item has been removed in Kaspi |
-| `failed` | Kaspi rejected the item; the reason is in `GET /catalog/errors` |
+| `failed` | The item could not be processed; the reason is in the item's `error_code`/`error_message`, upload errors are additionally available via `GET /catalog/errors` |
 
-> ⛔ **An item in the `deleting` status cannot be put into a cart.** The `422` refusal comes on every payment surface: `POST /invoices`, `POST /invoices/bulk`, `POST /invoices/qr`, printable QR, recurring invoices and subscription billing. The reason is monetary: taking an item off the till runs for days, and an invoice issued in that window would become a fiscal document for goods that no longer exist by the time it is paid.
+> ⛔ **An item in the `deleting` status cannot be put into a cart.** The reason is monetary: during a bulk deletion an item stays in this status for a long time (see [Bulk Deletion](#bulk-deletion) for the orders of magnitude), and an invoice issued in that window would become a fiscal document for goods that no longer exist by the time it is paid.
 >
-> The item can be brought back — see [Bringing an Item Back](#bringing-an-item-back). For subscriptions, the next charge in this situation does not fail but is postponed to the next run: attempts are not spent and the subscription does not enter the grace period.
+> The item can be brought back — see [Bringing an Item Back](#bringing-an-item-back).
+
+The shape of the refusal depends on the surface:
+
+| Where | What you get |
+|-------|--------------|
+| `POST /invoices`, `POST /invoices/qr`, `POST /static-qr` | `422`; the reason is in `errors["cart_items.N.catalog_item_id"]`, this branch has no separate `error_code` |
+| `POST /invoices/bulk` | The batch is still `201`: the item comes back in `invoices[]` as `failed` with `error_code: catalog_item_not_found`, the other invoices are created |
+| `POST /subscriptions`, `PUT /subscriptions/{id}` | `422`, the same `errors` |
+| A scheduled subscription charge | No refusal: the charge is postponed to the next charge attempt — the failure counter does not grow and the subscription does not enter the grace period |
 
 The intake queue and the removal queue are counted separately: `GET /catalog/queue` returns a `deleting` counter — how many items are waiting to be removed in Kaspi.
 
