@@ -181,6 +181,84 @@ All endpoints return the organization in a single format:
 }
 ```
 
+## Merchant Tariffs
+
+A merchant's ApiPay subscription is arranged by the partner. All paths below are relative to `https://api.apipay.kz/api/partner`, and authentication uses the same `X-Partner-Key`.
+
+### Two Tariff Billing Modes
+
+| Mode | What the partner does |
+|------|-----------------------|
+| `payment` (default) | Pays for the merchant's tariff — with a Kaspi invoice (`.../tariff/pay`) or a company invoice (`.../tariff/invoice`) |
+| `assignment` | Assigns the tariff for free (`.../tariff/assign`) and settles with ApiPay separately, under contract |
+
+The billing mode is set by ApiPay and cannot be changed through the API. It is not exposed as a field to `X-Partner-Key`: a partner in `payment` mode calling the assignment endpoint gets `403 assignment_not_enabled`.
+
+Your limits grid is visible in the tariff catalog — `GET /tariff-plans` returns `tiers[].daily_limit`, `tiers[].label` and `tiers[].limits_source`.
+
+### GET /tariff-plans
+
+The tariff catalog: 4 tiers (`start`, `business`, `pro`, `pro_max`) and 16 plans — tier × period of 1/3/6/12 months, with discounts for longer periods.
+
+The catalog is returned **through the eyes of your partner account**. If ApiPay assigned you a limits grid (white-label), `tiers[].daily_limit` and `tiers[].label` carry your values, and `tiers[].limits_source` shows the source: `partner_grid` for the grid, `config` for the global catalog. **The grid never changes prices**: `base_price` and `plans[].price` are always global. Another partner's grid is never returned.
+
+Daily limits in the global catalog: Start — up to 30 invoices, Business — up to 100, Pro — up to 300, Pro Max — up to 600.
+
+### GET /organizations/{id}/tariff
+
+A snapshot of the merchant's subscription. No tariff is `status: "none"`, not a `404`. The `next_payment.amount` field is always present.
+
+Fields for individually negotiated terms: `is_custom` (`true` when the merchant is on negotiated terms), `tier_label` (the tariff name as sold to this merchant) and `daily_limit`.
+
+> ⚠️ With `is_custom: true` the `tier` field stays an **ordinary** identifier (`pro`) — there is no `custom` value. Display the name from `tier_label`, but branch on `tier`.
+
+### POST /organizations/{id}/tariff/pay
+
+Pays for the merchant's tariff with a Kaspi invoice. Body: `tier_id`, `period_months`, `phone` (the **payer's** phone, format `8XXXXXXXXXX`, not the cashier's), optionally `set_billing_phone`.
+
+The tariff is activated asynchronously after payment — wait for the `invoice.status_changed` webhook with the `paid` status. The trial is preserved: the payment extends the subscription from the end of the trial or the current period. A test organization is activated instantly: `201`, `payment.status: "completed"`, `self_api_invoice_id: null`.
+
+This endpoint knows nothing about upgrades — it always charges the full plan price.
+
+### POST /organizations/{id}/tariff/assign
+
+Assigns a tariff to the merchant for free, in `assignment` mode. Body: `tier_id`, `period_months`. The tariff is activated **synchronously** — there is no Kaspi invoice and no payer phone is needed.
+
+- `201` — the tariff was assigned and the term extended, `already_assigned: false`.
+- `200` — the requested horizon is already covered by an assignment of the same tariff: the term is not extended, no second payment is created, `already_assigned: true`. Idempotency is defined by **coverage** (the expiry date is not earlier than the requested horizon) rather than by a time window, so CRM retries are safe.
+
+> ⛔ The `tariff.activated` webhook is not sent to a partner for their **own** assignment — that would echo their own request. The whole result is in the response (`payment.expires_at`) and in `GET .../tariff`.
+
+> ⛔ Partners cannot revoke an assignment: ApiPay removes a tariff on request.
+
+If a limits grid is set, only tiers from it are allowed — otherwise `422 tier_not_in_partner_grid`. The daily limit of an assigned tariff also comes from the grid.
+
+**Refusals:** `403 assignment_not_enabled`, `403 partner_not_active`, `403 production_access_required`, `409 test_organization`, `409 hard_limited_org` (a hard tariff restriction is not lifted by an assignment), `409 custom_tariff_locked`, `409 tariff_payment_pending`, `422 tier_not_in_partner_grid`, `422 assignment_horizon_exceeded` (the assignment would push the expiry date more than 12 months ahead).
+
+### POST /organizations/{id}/tariff/invoice
+
+A company invoice for the tariff: synchronously builds a PDF with the buyer's details and returns a public `download_url`. Body: `tier_id`, `period_months`, `buyer_bin`, `buyer_name`, optionally `contract` and `upgrade`.
+
+> ⛔ `download_url` opens **without authentication** — anyone holding the string gets the PDF. Pass it to the buyer directly; do not publish it and do not write it to your logs.
+
+Payment is by bank transfer; **there is no auto-activation** — the ApiPay owner grants the tariff once the funds arrive. The invoice appears in `GET .../tariff/payments` as `payment_method: invoice` with an `invoice` sub-object; the payment moving from `pending` to `completed` means the tariff was granted. Activation is announced by the `tariff.activated` webhook.
+
+**The `upgrade: true` flag** issues an invoice for moving between tiers: the amount is the difference of base prices (Start → Business is 15,000 KZT, not 25,000), `period_months` must be `1`, and `tier_id` is the target tier. The server determines which tier you are moving *from* by the organization's active paid tariff; you cannot pass that value.
+
+The tier the upgrade came from arrives in `upgrade_from` — in the invoice object, in the payment history and in the `tariff.activated` webhook. For a regular plan it is `null`.
+
+> ⛔ **`409 invoice_pdf_failed` must not be retried.** The invoice has already been issued: the records exist and a number was allocated; only the PDF failed to build. A retry would print a second accounting document. The body carries `invoice` with `payment_id` and `number`, without `download_url`; take the number and contact support. If your handler treats this code as retryable, remove the retry.
+
+**Refusals:** `400 downgrade_not_supported` (the target tier is not higher than the current one; downgrades are arranged with support), `409 invoice_locked`, `409 test_organization`, `409 organization_deleted`, `409 no_paid_tariff` (with `upgrade` only — there is nothing to move from), `409 upgrade_invoice_pending` (an unpaid upgrade invoice already exists and is returned in the `invoice` field), `409 custom_tariff_locked`, `422 invalid_tariff_plan`, `422 invalid_upgrade_plan`, `422 upgrade_period_not_supported`, `429 invoice_cooldown` (too many invoices issued in the last 24 hours — wait for `Retry-After`, also `retry_after_seconds` in the body).
+
+### GET /organizations/{id}/tariff/payments and /payments/{paymentId}
+
+The payment history for the merchant's tariff, and a single payment.
+
+### Individually Negotiated Terms
+
+For a merchant on negotiated terms, the tariff is their base tier plus their own limit and price. Switching tiers for such a merchant is refused with `409 custom_tariff_locked` and is arranged with support; **renewing the same tier is not blocked** — that is a payment, not a change of terms. You can detect it up front via `is_custom` in `GET /organizations/{id}/tariff`; the partner plan catalog is organization-agnostic and carries no such flag.
+
 ## Rate Limits
 
 | Group | Limit |
@@ -197,6 +275,8 @@ All endpoints return the organization in a single format:
 | 409 | Conflict — `no_process` (authorization not started or expired), `already_exists` |
 | 422 | Field validation failed — `invalid_phone`, `not_cashier`, or a `webhook_url` pointing to a private/internal address |
 | 502 | Kaspi API unavailable — `sms_failed` |
+
+The codes of the tariff endpoints are listed under [Merchant Tariffs](#merchant-tariffs) — each endpoint has its own set. A refusal body always carries `success: false`, `error` and `error_code` holding the same value; build your logic on `error_code`.
 
 ## Issuing Invoices for a Merchant
 
