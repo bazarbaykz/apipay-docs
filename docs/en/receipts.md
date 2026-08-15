@@ -166,11 +166,23 @@ The same outcome arrives as a `receipt.issued` (success) or `receipt.failed` (fa
 | `item_not_fiscal` | — (in `failed`) | A line item has no NTIN — it is not fiscal | Resolve the NTIN (`POST /catalog/scan` + `PATCH /catalog/{id}`) and retry |
 | `rfo_missing` | — (in `failed`) | The point of sale (RFO) is not determined | Contact support |
 | `receipt_kaspi_error` | — (in `failed`) | Kaspi rejected the issuing | The reason is in `error_message`; contact support if needed |
-| `receipt_dispatch_error` | — (in `failed`) | A technical dispatch failure | Retry with a **new** `client_operation_id` |
+| `receipt_dispatch_error` | — (in `failed`) | A technical dispatch failure | Retry with the same `client_operation_id` |
+| `receipt_ofd_token_revoked` | — (in `failed`) | The till's fiscal link to the OFD has been revoked | The merchant must re-link the OFD in the Kaspi app, then issue the receipt again. Waiting does not fix it |
+| `kaspi_session_invalid` | — (in `failed`) | The cashier session is not valid | Reconnect the cashier and issue the receipt again |
 | `kaspi_session_expired` | 409 | The Kaspi cashier session is dead — the receipt will not reach Kaspi | Reconnect the cashier (dashboard → Settings → Kaspi Authorization) and issue the receipt again |
 | `tariff_inactive` | 403 | The ApiPay subscription is not active | Pay for the plan in the dashboard: billable operations, receipts included, are blocked as soon as it lapses |
 
 > Codes without an HTTP status arrive on a failed receipt (`status=failed`) — in the `error_code` field of the `GET /receipts/{id}` response and in the `receipt.failed` webhook. Build your logic on `error_code`, not on the `error_message` text.
+
+### A Revoked OFD Link
+
+`receipt_ofd_token_revoked` means Kaspi has revoked the till's **fiscal** link. It arrives in the `receipt.failed` webhook and in `GET /receipts/{id}`; it will not appear in the response of `POST /receipts` itself — that endpoint is asynchronous and always answers `202` with `status: pending`, and the code is set later.
+
+- **Taking payments keeps working** — invoices and QR codes are still created. Only fiscal receipts and catalog writes stop.
+- **A retry will not help while the link is revoked.** The action is on the merchant's side: re-link the OFD in the Kaspi app. After that the receipt is issued again — no fiscal document was created, so the same `client_operation_id` is allowed.
+- **Do not confuse it with `kaspi_session_invalid`:** there the payment session is dead and the cashier must be reconnected, here the session is alive.
+- This case used to arrive as `receipt_kaspi_error`. If you branch on that code, add the new one to your handling.
+- The `simulate` parameter does not reproduce this outcome in the sandbox.
 
 ## Code Examples
 
