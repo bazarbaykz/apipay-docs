@@ -31,6 +31,8 @@ ApiPay.kz uses standard HTTP status codes with detailed error messages.
 }
 ```
 
+> Public API v1 errors are returned **as JSON regardless of the `Accept` header** — a bare `curl` sending `*/*` gets a parseable body too.
+
 ## Common Errors
 
 ### 401 Unauthorized
@@ -56,7 +58,7 @@ ApiPay.kz uses standard HTTP status codes with detailed error messages.
   "message": "Validation failed",
   "errors": {
     "phone_number": ["Phone number must be in format 8XXXXXXXXXX"],
-    "amount": ["Amount must be between 0.01 and 99999999.99"]
+    "amount": ["The amount of a phone-number invoice must be whole, from 1 KZT"]
   }
 }
 ```
@@ -114,7 +116,7 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync on `POST /catalog/scan` | Kaspi rate-limited requests. For invoices, create a new one in 2–3 minutes. On `POST /catalog/scan` it is returned synchronously (HTTP 429): `retry_after_seconds` in the body, `Retry-After` header. Wait the given time and retry. |
 | `kaspi_session_expired` | 400 | sync | The merchant's Kaspi session expired on `POST /catalog/scan`. Reconnect the Kaspi cashier and retry. |
 | `kaspi_scan_unavailable` | 503 | sync | Kaspi's National Catalog is temporarily unavailable on `POST /catalog/scan`. Retry later. |
-| `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | The refund window expired (~14 days) or the refund was already made. Don't retry. |
+| `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | Kaspi rejected the refund: the refund window may have expired, or the refund was already made. Don't retry. |
 | `Invoice cannot be cancelled` | 400 | sync | Only invoices in `pending` or `processing` status can be cancelled. |
 | `qr_cancel_unsupported` | 409 | sync | A QR invoice (`is_qr_token: true`) cannot be cancelled: the status does not change and the body carries `expires_at`. Wait for `expired` or issue a new invoice. |
 | `amount_must_be_whole_tenge` | 422 | sync (per item in `POST /invoices/bulk`) | The amount of a phone-number invoice must be whole: both `amount` and the cart total after discounts are checked. Round the amount or issue the invoice through `POST /invoices/qr`. |
@@ -140,7 +142,39 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `item_not_fiscal` | — | async (`receipt.failed`, `status=failed`) | A receipt line item has no NTIN — it is not fiscal. Resolve the NTIN (`POST /catalog/scan` + `PATCH /catalog/{id}`) and retry. |
 | `rfo_missing` | — | async (`receipt.failed`, `status=failed`) | The point of sale (RFO) for the receipt is not determined. Contact support. |
 | `receipt_kaspi_error` | — | async (`receipt.failed`, `status=failed`) | Kaspi rejected issuing the receipt. The reason text is in `error_message`. |
-| `receipt_dispatch_error` | — | async (`receipt.failed`, `status=failed`) | A technical dispatch failure. Retry with a **new** `client_operation_id`. |
+| `receipt_dispatch_error` | — | async (`receipt.failed`, `status=failed`) | A technical dispatch failure. Retry with the same `client_operation_id`: no fiscal document was created, and after `failed` the previous key is released. |
+| `receipt_ofd_token_revoked` | — | async (`receipt.failed`, `status=failed`) | The till's fiscal link to the OFD has been revoked. Taking payments keeps working; only receipts and catalog writes stop. The merchant must re-link the OFD in the Kaspi app — waiting does not fix it. See [Fiscal Receipts](receipts.md). |
+| `receipt_not_available_for_status` | 409 | sync | `GET /invoices/{id}/receipt`: the invoice is not `paid`/`partially_refunded`, or a paid invoice has no numeric Kaspi identifier yet. |
+| `receipt_rate_limited` | 429 | sync | `GET /invoices/{id}/receipt` has its own per-minute limit, stricter than the general one. Wait for `Retry-After`. |
+| `receipt_unavailable` | 503 | sync | Kaspi did not return the invoice receipt. A retry a minute later usually helps. |
+| `kaspi_session_unavailable` | 409 | sync | The cashier for this invoice is temporarily unavailable. Retry later. |
+| `catalog_requires_cart_items` | 422 | sync | The organization has a catalog but `cart_items` were not sent. The body carries `message` and `error_code`, without `errors`. |
+| `catalog_not_supported` | 400 / 422 | sync | The organization has no catalog. `422` when `cart_items` were sent anyway; `400` on `POST /catalog/bulk-delete`, where this is an organization precondition. |
+| `catalog_delete_scope_required` | 422 | sync | `POST /catalog/bulk-delete` with no mode, or with two at once. Detail in `reason`: `mode_required`, `expected_count_required`. |
+| `catalog_delete_filter_invalid` | 422 | sync | The deletion filter cannot be trusted. `reason: token_never_used` — wrong token; `reason: coverage_too_low` — the run did not complete, repeat the full upload (numbers in `stamped`/`visible`). The `reason` list is open. |
+| `catalog_delete_owner_key_required` | 403 | sync | Bulk deletion requires a key issued by the organization owner. Reissue the key as the owner. |
+| `catalog_delete_in_progress` | 409 / — | sync: `409` on `PATCH /catalog/{id}`, an entry in `rejected[]` on `POST /catalog` | The item's removal has already been sent to Kaspi and cannot be cancelled in this window. Retry in a few seconds. |
+| `catalog_bulk_delete_mismatch` | 409 | sync | `expected_count` no longer matches the facts (`actual_count` in the body): the catalog changed between the `dry_run` and the command. Repeat the `dry_run`. |
+| `catalog_multi_tradepoint` | 409 | sync | The organization has several trade points — catalog deletion through the API is unavailable. Contact support. |
+| `catalog_match_overflow` | 422 | sync | Too many values in a targeted request or in a deletion list: no more than 200 values in total, and in a targeted `GET /catalog` no more than 1000 matched rows either. Split into batches. |
+| `catalog_busy` | 409 | sync | The catalog is busy with another operation. Retry in a few seconds. |
+| `idempotency_key_conflict` | 409 | sync | The `Idempotency-Key` is already taken by an operation of another type — the key space is shared between uploads and bulk deletion. Take a new key. |
+| `custom_tariff_locked` | 409 | sync | The organization is on individually negotiated tariff terms: switching tiers is not self-service and is arranged with support. Renewing the same tier is not blocked. Detect the state up front via `is_custom` in `GET /tariff` and `can_change_tier` in the plan catalog. |
+| `request_rate_limited` | 429 | sync | The per-minute request limit was exceeded. Do not confuse it with `rate_limited` — they are different codes. See [Rate Limiting](#rate-limiting). |
+| `cashbox_disabled` | 403 | sync | Cash register operations are unavailable for the organization. |
+| `cashbox_kkm_unknown` | 409 | sync | No Kaspi register (OFD) is linked to the Kaspi Pay account — the organization has no shifts. See [Cash register](cashbox.md). |
+| `rfo_missing` (cash register) | 409 | sync | The same "no Kaspi register" signal for `GET /cashbox/summary` and both toggles. |
+| `cashbox_no_open_shift` | — | async (`cashbox.shift_close_failed`) | There is no open shift — nothing to close. The code arrives in `operation.error_code`. |
+| `cashbox_shift_already_closed` | — | — | The shift was already closed. It is not returned as a refusal: the operation finishes as `completed` — the target state is reached. |
+| `cashbox_shift_not_found` | 404 | sync | A shift with this id is not available: `GET /cashbox/shifts` never returned it. |
+| `cashbox_operation_not_found` | 404 | sync | No cash register operation with this id. |
+| `cashbox_duplicate_operation` | 409 | sync | The `client_operation_id` of a shift closure is already used. ⚠️ The key is not released even after `failed` — repeat the closure with a new `client_operation_id`. |
+| `cashbox_busy` | — | async (`cashbox.shift_close_failed`) | An operation on the register is already running. Repeat the closure with a new `client_operation_id`. |
+| `cashbox_operation_failed` | — | async | The cash register operation failed (`cashbox.shift_close_failed`). |
+| `cashbox_unavailable` | 503 | sync | The Kaspi register is temporarily unavailable. |
+| `cashbox_report_unavailable` | 503 | sync | The shift report cannot be produced right now. Retry later. |
+| `cashbox_toggle_in_progress` | 503 | sync | The toggle is already being switched. Retry later. |
+| `cashbox_toggle_unavailable` | 503 | sync | The current value on the register could not be verified; the switch was not applied. |
 
 > The `kaspi_session_not_configured` and `connection_ambiguous` codes (above) also apply
 > to receipts: `POST /receipts` / `/receipts/preview` require an active cashier, and with
@@ -197,5 +231,30 @@ async function apiRequest(url, options) {
 - **`POST /clients/check`:** 60 requests per minute and 10 000 per day per API key (separate counter)
 - **`POST /catalog/scan`:** 30 requests per minute and 2000 per day per API key
 - **QR invoices:** a separate limit of 60 requests per minute per organization (`POST /invoices/qr`)
-- **Header:** `Retry-After` shows the number of seconds to wait before retrying
-- **Response:** HTTP 429 with body `{"message": "Too Many Requests"}` — do not hammer the endpoint, wait for the indicated time
+- **`POST /catalog/bulk-delete`:** 10 requests per minute per API key
+- **Cash register (`/cashbox/*`):** 30 requests per minute per API key
+- **`GET /invoices/{id}/receipt`:** its own per-minute limit, stricter than the general one
+
+### The `429` Body and Headers
+
+A per-minute limiter refusal is machine-readable:
+
+```json
+{
+  "message": "Too Many Attempts.",
+  "error": "request_rate_limited",
+  "error_code": "request_rate_limited",
+  "limit": 200,
+  "remaining": 0,
+  "reset_at": "2026-08-13T09:31:00+00:00",
+  "retry_after_seconds": 17
+}
+```
+
+Headers: `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining` (always `0` on a `429`), `X-RateLimit-Reset` (the Unix time the window resets).
+
+> ⚠️ The `message` field was deliberately left unchanged — `"Too Many Attempts."`. Integrations that parsed the string keep working; everything machine-readable was added alongside it.
+
+> ⚠️ `limit` and `X-RateLimit-Limit` report the **most depleted bucket for this request**, not the limit of one particular endpoint: several limiters apply to a request at once.
+
+Wait for `Retry-After` — do not hammer the endpoint. Tariff refusals (`tariff_limit_reached`) and quota refusals (`kyc_daily_limit_reached`) also arrive with `429`, but they are different codes with different handling: look at `error_code`, not at the status alone.

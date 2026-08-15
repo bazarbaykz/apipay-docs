@@ -31,6 +31,8 @@ ApiPay.kz использует стандартные HTTP коды статус
 }
 ```
 
+> Ошибки Public API v1 приходят **в JSON независимо от заголовка `Accept`** — разбираемое тело получит и голый `curl`, который шлёт `*/*`.
+
 ## Частые ошибки
 
 ### 401 Unauthorized
@@ -56,7 +58,7 @@ ApiPay.kz использует стандартные HTTP коды статус
   "message": "Ошибка валидации",
   "errors": {
     "phone_number": ["Номер телефона должен быть в формате 8XXXXXXXXXX"],
-    "amount": ["Сумма должна быть от 0.01 до 99999999.99"]
+    "amount": ["Сумма счёта на номер телефона должна быть целой, от 1 ₸"]
   }
 }
 ```
@@ -113,7 +115,7 @@ ApiPay.kz использует стандартные HTTP коды статус
 | `kaspi_throttled` | — / 429 | async (`invoice.status_changed`, `status=error`); sync при `POST /catalog/scan` | Kaspi ограничил частоту запросов. По счетам — создайте новый через 2–3 минуты. При `POST /catalog/scan` приходит синхронно (HTTP 429): `retry_after_seconds` в теле, заголовок `Retry-After`. Подождите указанное время и повторите. |
 | `kaspi_session_expired` | 400 | sync | Сессия Kaspi мерчанта истекла при `POST /catalog/scan`. Переподключите кассира Kaspi и повторите. |
 | `kaspi_scan_unavailable` | 503 | sync | Нацкаталог Kaspi временно недоступен при `POST /catalog/scan`. Повторите позже. |
-| `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | Истёк срок возврата (~14 дней) или возврат уже сделан. Не повторяйте. |
+| `refund_window_expired` | — | async (`invoice.refunded`, `refund.status=failed`) | Kaspi отклонил возврат: возможно, истёк срок возврата либо возврат уже сделан. Не повторяйте. |
 | `Invoice cannot be cancelled` | 400 | sync | Отменить можно только счёт в статусе `pending` или `processing`. |
 | `qr_cancel_unsupported` | 409 | sync | QR-счёт (`is_qr_token: true`) отменить нельзя: статус не меняется, в теле приходит `expires_at`. Дождитесь `expired` или выставьте новый счёт. |
 | `amount_must_be_whole_tenge` | 422 | sync (в `POST /invoices/bulk` — по позиции) | Сумма счёта на номер телефона должна быть целой: проверяется и `amount`, и итог корзины после скидок. Округлите сумму или выставьте счёт через `POST /invoices/qr`. |
@@ -139,7 +141,39 @@ ApiPay.kz использует стандартные HTTP коды статус
 | `item_not_fiscal` | — | async (`receipt.failed`, `status=failed`) | Позиция чека без НТИН — не фискальная. Дорезолвите НТИН (`POST /catalog/scan` + `PATCH /catalog/{id}`) и повторите. |
 | `rfo_missing` | — | async (`receipt.failed`, `status=failed`) | Не определена торговая точка (РФО) для чека. Обратитесь в поддержку. |
 | `receipt_kaspi_error` | — | async (`receipt.failed`, `status=failed`) | Kaspi отклонил выбивание чека. Текст причины — в `error_message`. |
-| `receipt_dispatch_error` | — | async (`receipt.failed`, `status=failed`) | Технический сбой отправки чека. Повторите с **новым** `client_operation_id`. |
+| `receipt_dispatch_error` | — | async (`receipt.failed`, `status=failed`) | Технический сбой отправки чека. Повторите с тем же `client_operation_id`: фискальный документ не создан, после `failed` прежний ключ освобождается. |
+| `receipt_ofd_token_revoked` | — | async (`receipt.failed`, `status=failed`) | Фискальная привязка кассы к ОФД отозвана. Приём оплат работает, встают только чек и изменение каталога. Мерчанту нужно перепривязать ОФД в приложении Kaspi — временем не лечится. Подробнее — [Фискальные чеки](receipts.md). |
+| `receipt_not_available_for_status` | 409 | sync | `GET /invoices/{id}/receipt`: счёт не в статусе `paid`/`partially_refunded`, либо у оплаченного счёта ещё нет числового идентификатора Kaspi. |
+| `receipt_rate_limited` | 429 | sync | У `GET /invoices/{id}/receipt` собственный минутный лимит, строже общего. Дождитесь `Retry-After`. |
+| `receipt_unavailable` | 503 | sync | Kaspi не отдал чек по счёту. Обычно помогает повтор через минуту. |
+| `kaspi_session_unavailable` | 409 | sync | Кассир по счёту временно недоступен. Повторите позже. |
+| `catalog_requires_cart_items` | 422 | sync | У организации включён каталог, а `cart_items` не переданы. Тело несёт `message` и `error_code`, без `errors`. |
+| `catalog_not_supported` | 400 / 422 | sync | Каталог у организации не включён. `422` — если всё же переданы `cart_items`; `400` на `POST /catalog/bulk-delete`, где это предусловие организации. |
+| `catalog_delete_scope_required` | 422 | sync | `POST /catalog/bulk-delete` без режима или сразу с двумя. Уточнение в `reason`: `mode_required`, `expected_count_required`. |
+| `catalog_delete_filter_invalid` | 422 | sync | Фильтру удаления нельзя верить. `reason: token_never_used` — токен не тот; `reason: coverage_too_low` — прогон не завершился, повторите заливку целиком (числа в `stamped`/`visible`). Список `reason` открыт. |
+| `catalog_delete_owner_key_required` | 403 | sync | Массовое удаление требует ключ, выпущенный владельцем организации. Перевыпустите ключ от имени владельца. |
+| `catalog_delete_in_progress` | 409 / — | sync: `409` на `PATCH /catalog/{id}`, запись в `rejected[]` на `POST /catalog` | Снятие позиции уже отправлено в Kaspi, отменить его в этом окне нельзя. Повторите через несколько секунд. |
+| `catalog_bulk_delete_mismatch` | 409 | sync | `expected_count` разошёлся с фактом (в теле `actual_count`): каталог изменился между `dry_run` и командой. Повторите `dry_run`. |
+| `catalog_multi_tradepoint` | 409 | sync | У организации несколько торговых точек — удаление каталога через API недоступно. Обратитесь в поддержку. |
+| `catalog_match_overflow` | 422 | sync | Слишком много значений в точечном запросе или в списке на удаление: суммарно не больше 200 значений, а в точечном `GET /catalog` — ещё и не больше 1000 найденных строк. Разбейте на батчи. |
+| `catalog_busy` | 409 | sync | Каталог занят другой операцией. Повторите через несколько секунд. |
+| `idempotency_key_conflict` | 409 | sync | `Idempotency-Key` уже занят операцией другого типа — пространство ключей общее у заливки и массового удаления. Возьмите новый ключ. |
+| `custom_tariff_locked` | 409 | sync | У организации индивидуальные условия тарифа: сменить тариф самостоятельно нельзя, это оформляет поддержка. Продление того же тарифа не блокируется. Состояние видно заранее: `is_custom` в `GET /tariff` и `can_change_tier` в каталоге планов. |
+| `request_rate_limited` | 429 | sync | Превышен поминутный лимит запросов. Не путайте с `rate_limited` — это разные коды. См. [Rate Limiting](#rate-limiting). |
+| `cashbox_disabled` | 403 | sync | Кассовые операции организации недоступны. |
+| `cashbox_kkm_unknown` | 409 | sync | К аккаунту Kaspi Pay не подключена касса Kaspi (ОФД) — смен у организации нет. См. [Касса](cashbox.md). |
+| `rfo_missing` (Касса) | 409 | sync | Тот же признак отсутствия кассы Kaspi у `GET /cashbox/summary` и тумблеров. |
+| `cashbox_no_open_shift` | — | async (`cashbox.shift_close_failed`) | Открытой смены нет — закрывать нечего. Код приходит в `operation.error_code`. |
+| `cashbox_shift_already_closed` | — | — | Смена уже была закрыта. Отказом не приходит: операция завершается статусом `completed` — целевое состояние достигнуто. |
+| `cashbox_shift_not_found` | 404 | sync | Смена с таким id недоступна: её не отдавал `GET /cashbox/shifts`. |
+| `cashbox_operation_not_found` | 404 | sync | Кассовая операция с таким id не найдена. |
+| `cashbox_duplicate_operation` | 409 | sync | `client_operation_id` закрытия смены уже использован. ⚠️ Ключ не освобождается даже после `failed` — повторяйте закрытие новым `client_operation_id`. |
+| `cashbox_busy` | — | async (`cashbox.shift_close_failed`) | По кассе уже выполняется операция. Повторите закрытие новым `client_operation_id`. |
+| `cashbox_operation_failed` | — | async | Кассовая операция не удалась (`cashbox.shift_close_failed`). |
+| `cashbox_unavailable` | 503 | sync | Касса Kaspi временно недоступна. |
+| `cashbox_report_unavailable` | 503 | sync | Отчёт по смене сейчас не сформировать. Повторите позже. |
+| `cashbox_toggle_in_progress` | 503 | sync | Переключение тумблера уже выполняется. Повторите позже. |
+| `cashbox_toggle_unavailable` | 503 | sync | Текущее значение на кассе проверить не удалось, переключение не выполнено. |
 
 > Коды `kaspi_session_not_configured` и `connection_ambiguous` (выше) относятся и к чекам:
 > `POST /receipts` / `/receipts/preview` требуют активного кассира, а при нескольких
@@ -196,5 +230,30 @@ async function apiRequest(url, options) {
 - **`POST /clients/check`:** 60 запросов в минуту и 10 000 в сутки на API-ключ (отдельный счётчик)
 - **`POST /catalog/scan`:** 30 запросов в минуту и 2000 в сутки на API-ключ
 - **QR-счета:** отдельный лимит — 60 запросов в минуту на организацию (`POST /invoices/qr`)
-- **Заголовок:** `Retry-After` показывает количество секунд до следующей попытки
-- **Ответ:** статус 429, тело `{"message": "Too Many Requests"}` — не долбите эндпоинт, дождитесь указанного времени
+- **`POST /catalog/bulk-delete`:** 10 запросов в минуту на API-ключ
+- **Касса (`/cashbox/*`):** 30 запросов в минуту на API-ключ
+- **`GET /invoices/{id}/receipt`:** собственный минутный лимит, строже общего
+
+### Тело и заголовки `429`
+
+Отказ поминутного лимитера машиночитаем:
+
+```json
+{
+  "message": "Too Many Attempts.",
+  "error": "request_rate_limited",
+  "error_code": "request_rate_limited",
+  "limit": 200,
+  "remaining": 0,
+  "reset_at": "2026-08-13T09:31:00+00:00",
+  "retry_after_seconds": 17
+}
+```
+
+Заголовки: `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining` (на `429` всегда `0`), `X-RateLimit-Reset` (Unix-время обнуления окна).
+
+> ⚠️ Поле `message` намеренно осталось прежним — `"Too Many Attempts."`. Интеграции, разбиравшие строку, продолжают работать; всё машиночитаемое добавлено рядом.
+
+> ⚠️ `limit` и `X-RateLimit-Limit` показывают **самый дефицитный бакет этого запроса**, а не лимит конкретной ручки: к запросу применяется несколько лимитеров сразу.
+
+Дождитесь `Retry-After` — не долбите эндпоинт. Отказы по тарифу (`tariff_limit_reached`) и по квотам (`kyc_daily_limit_reached`) тоже приходят с `429`, но это другие коды и другая логика: смотрите `error_code`, а не только статус.
