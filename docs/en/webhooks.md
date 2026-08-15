@@ -16,7 +16,7 @@ Configure webhooks in [ApiPay.kz Dashboard](https://apipay.kz) → Settings → 
 
 ## Events
 
-ApiPay sends 19 event types:
+ApiPay sends 21 event types:
 
 | Event | Description |
 |-------|-------------|
@@ -27,7 +27,7 @@ ApiPay sends 19 event types:
 | `qr_refund.completed` | The QR refund was completed (`refunded_amount`, `receipt_url`) |
 | `qr_refund.expired` | The refund QR expired before the customer was identified |
 | `catalog.item_processed` | A catalog item was processed (`status`: `active`/`failed`); in a queued bulk upload it is replaced by the aggregated `catalog.batch_processed` |
-| `catalog.batch_processed` | The outcome of a bulk catalog upload as a single aggregate (`totals`, `sample_failed[]`) |
+| `catalog.batch_processed` | The outcome of a bulk catalog operation as a single aggregate (`kind`, `totals`, `sample_failed[]`). `kind: ingest` — an upload, `kind: delete` — a bulk deletion |
 | `receipt.issued` | A fiscal receipt was successfully issued (Kaspi OFD) |
 | `receipt.failed` | Issuing a fiscal receipt failed |
 | `subscription.created` | A subscription was created |
@@ -38,6 +38,8 @@ ApiPay sends 19 event types:
 | `subscription.paused` | The subscription was paused |
 | `subscription.resumed` | The subscription was resumed |
 | `subscription.cancelled` | The subscription was cancelled |
+| `cashbox.shift_closed` | A cash register shift was closed |
+| `cashbox.shift_close_failed` | Closing a cash register shift failed (`error_code`) |
 | `webhook.test` | Test event from the dashboard |
 
 > Full payloads for the `qr_refund.*` and `catalog.*` events are in `openapi.yaml`, section `x-webhooks`.
@@ -262,7 +264,7 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
 |-------|------|-------------|
 | `refund.status` | string | `pending` / `processing` / `completed` / `failed`. The webhook arrives on both `completed` and `failed`. |
 | `refund.kaspi_refund_id` | string \| null | Refund ID in Kaspi; `null` on failure. |
-| `refund.error_code` | string \| null | Only at `status=failed`. For example `refund_window_expired` — the refund window expired (~14 days). There is no `error_message` in the webhook by design — read the text in `GET /invoices/{id}/refunds` or resolve the code via the catalog. |
+| `refund.error_code` | string \| null | Only at `status=failed`. For example `refund_window_expired` — Kaspi rejected the refund. There is no `error_message` in the webhook by design — read the text in `GET /invoices/{id}/refunds` or resolve the code via the catalog. |
 | `refund.items` | array \| null | Refund line items (only for itemized refunds): `catalog_item_id`, `name`, `price`, `count`, `amount`. |
 | `invoice.available_for_refund` | number | Amount still available for refund. Comes as a number (float), unlike `amount` and `total_refunded` (strings). |
 | `invoice.status` | string | Invoice status after the refund. A full refund does **not** change the status (stays `paid` — or `partially_refunded` if there was an earlier partial one) + `is_fully_refunded=true`; the first partial refund moves it to `partially_refunded` (and an `invoice.status_changed` is also sent). |
@@ -293,7 +295,7 @@ Sent when a fiscal receipt is successfully issued in Kaspi OFD (after `POST /rec
 
 ### receipt.failed
 
-Sent when issuing a fiscal receipt fails. The reason is in `receipt.error_code` (e.g. `shift_closed` — the shift is closed; `item_not_fiscal` — a line item has no NTIN; `receipt_kaspi_error`; `receipt_dispatch_error`). The fiscal document was **not** created — retry with a **new** `client_operation_id` (except for `shift_closed` — first open the shift in Kaspi Pos).
+Sent when issuing a fiscal receipt fails. The reason is in `receipt.error_code`: `shift_closed` — the shift is closed; `item_not_fiscal` — a line item has no NTIN; `rfo_missing`; `kaspi_session_invalid` — the cashier session is not valid, reconnect the cashier; `kaspi_session_not_configured`; `fiscal_receipts_disabled`; `receipt_ofd_token_revoked` — the till's fiscal link to the OFD has been revoked and the merchant must re-link it in the Kaspi app; `receipt_kaspi_error`; `receipt_dispatch_error`. The fiscal document was **not** created — retry with the **same** `client_operation_id`: after `failed` the previous key is released. For `shift_closed`, first open the shift in Kaspi Pos.
 
 ```json
 {
@@ -569,7 +571,7 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 | `invoice.refunded` | `completed` | The refund went through. Includes refunds made by the cashier in the Kaspi app (imported automatically). |
 | `invoice.refunded` | `failed` | The refund failed (`refund.error_code`). The system does **not** retry; the amount is not locked — you can create a new refund. |
 | `receipt.issued` | — | A fiscal receipt was issued in Kaspi OFD (after `POST /receipts`). Details in `fpd`/`operation_id`/`link`. Equivalent to polling `GET /receipts/{id}`. |
-| `receipt.failed` | — | The receipt was not issued (`receipt.error_code`). No fiscal document was created — retry with a new `client_operation_id` (for `shift_closed`, first open the shift in Kaspi Pos). |
+| `receipt.failed` | — | The receipt was not issued (`receipt.error_code`). No fiscal document was created — retry with the same `client_operation_id` (for `shift_closed`, first open the shift in Kaspi Pos; for `receipt_ofd_token_revoked`, re-link the OFD). |
 | `subscription.created` | — | The subscription was created. The system issues subscription invoices automatically at `next_billing_at` (or immediately with `bill_immediately`). Each invoice triggers the regular invoice webhooks. |
 | `subscription.payment_succeeded` | — | The next subscription invoice was paid. `failed_attempts` is reset; the grace period (if any) is lifted. |
 | `subscription.payment_failed` | — | The subscription invoice expired or was cancelled (`reason`). While attempts are below `max_retry_attempts` the system re-issues the invoice itself — nothing to recreate. |
@@ -617,7 +619,7 @@ When a webhook brings `status=error` (invoice) or `status=failed` (refund), the 
 | `invoice_already_paid` | An attempt to cancel an already-paid invoice | Stopped the cancellation; the money is received | Don't cancel; to return the money, create a refund |
 | `invoice_already_cancelled` | The invoice is already cancelled | — | Nothing: the desired state is already reached |
 | `invoice_not_found_in_kaspi` | Kaspi could not find the invoice during cancellation | Finalizes `error` | Contact support |
-| `refund_window_expired` | The refund window expired (~14 days) or the refund was already made | Refund `failed`, no retries | Don't repeat; notify the customer or contact support |
+| `refund_window_expired` | Kaspi rejected the refund: the refund window may have expired, or the refund was already made | Refund `failed`, no retries | Don't repeat; notify the customer or contact support |
 | `qr_render_failed` | The QR image could not be rendered | The invoice is finalized in `error` (both a 500 response and a webhook) | Retry `POST /invoices/qr` — a new invoice is created |
 | `kaspi_session_invalid` | The cashier session expired while creating the QR | The invoice is finalized in `error`; the session is invalidated | Retry later; if it recurs — reconnect the cashier |
 | `kaspi_error` | An unclassified Kaspi error | Depends on the cause; for QR — invoice `error` + webhook | Read `message`/`error_message`; retry or contact support |

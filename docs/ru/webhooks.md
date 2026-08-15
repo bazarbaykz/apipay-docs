@@ -16,7 +16,7 @@ Webhooks доставляют уведомления в реальном вре�
 
 ## События
 
-ApiPay отправляет 19 типов событий:
+ApiPay отправляет 21 тип событий:
 
 | Событие | Описание |
 |---------|----------|
@@ -27,7 +27,7 @@ ApiPay отправляет 19 типов событий:
 | `qr_refund.completed` | QR-возврат выполнен (`refunded_amount`, `receipt_url`) |
 | `qr_refund.expired` | Возвратный QR истёк до идентификации |
 | `catalog.item_processed` | Позиция каталога обработана (`status`: `active`/`failed`); при пакетной заливке через очередь заменяется агрегатом `catalog.batch_processed` |
-| `catalog.batch_processed` | Итог пакетной заливки каталога одним агрегатом (`totals`, `sample_failed[]`) |
+| `catalog.batch_processed` | Итог пакетной операции с каталогом одним агрегатом (`kind`, `totals`, `sample_failed[]`). `kind: ingest` — заливка, `kind: delete` — массовое удаление |
 | `receipt.issued` | Фискальный чек успешно выбит (Kaspi OFD) |
 | `receipt.failed` | Выбить фискальный чек не удалось |
 | `subscription.created` | Создана подписка |
@@ -38,6 +38,8 @@ ApiPay отправляет 19 типов событий:
 | `subscription.paused` | Подписка приостановлена |
 | `subscription.resumed` | Подписка возобновлена |
 | `subscription.cancelled` | Подписка отменена |
+| `cashbox.shift_closed` | Кассовая смена закрыта |
+| `cashbox.shift_close_failed` | Закрыть кассовую смену не удалось (`error_code`) |
 | `webhook.test` | Тестовое событие из личного кабинета |
 
 > Полные payload'ы событий `qr_refund.*` и `catalog.*` — в `openapi.yaml`, раздел `x-webhooks`.
@@ -262,7 +264,7 @@ ApiPay отправляет 19 типов событий:
 |------|-----|----------|
 | `refund.status` | string | `pending` / `processing` / `completed` / `failed`. Вебхук приходит и на `completed`, и на `failed`. |
 | `refund.kaspi_refund_id` | string \| null | ID возврата в Kaspi; `null` при неудаче. |
-| `refund.error_code` | string \| null | Только при `status=failed`. Например `refund_window_expired` — истёк срок возврата (~14 дней). Поля `error_message` в вебхуке нет by design — текст смотрите в `GET /invoices/{id}/refunds` или резолвите код по каталогу. |
+| `refund.error_code` | string \| null | Только при `status=failed`. Например `refund_window_expired` — Kaspi отклонил возврат. Поля `error_message` в вебхуке нет by design — текст смотрите в `GET /invoices/{id}/refunds` или резолвите код по каталогу. |
 | `refund.items` | array \| null | Позиции возврата (только для позиционных возвратов): `catalog_item_id`, `name`, `price`, `count`, `amount`. |
 | `invoice.available_for_refund` | number | Сумма, ещё доступная для возврата. Приходит числом (float), в отличие от `amount` и `total_refunded` (строки). |
 | `invoice.status` | string | Статус счёта после возврата. Полный возврат статус **НЕ меняет** (остаётся `paid` — или `partially_refunded`, если ранее был частичный) + `is_fully_refunded=true`; первый частичный переводит в `partially_refunded` (и дополнительно приходит `invoice.status_changed`). |
@@ -293,7 +295,7 @@ ApiPay отправляет 19 типов событий:
 
 ### receipt.failed
 
-Отправляется, когда выбить фискальный чек не удалось. Причина — в `receipt.error_code` (например `shift_closed` — смена закрыта; `item_not_fiscal` — позиция без НТИН; `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ **не** создан — повторите с **новым** `client_operation_id` (кроме `shift_closed` — сначала откройте смену в Kaspi Pos).
+Отправляется, когда выбить фискальный чек не удалось. Причина — в `receipt.error_code`: `shift_closed` — смена закрыта; `item_not_fiscal` — позиция без НТИН; `rfo_missing`; `kaspi_session_invalid` — сессия кассира недействительна, переподключите кассира; `kaspi_session_not_configured`; `fiscal_receipts_disabled`; `receipt_ofd_token_revoked` — отозвана фискальная привязка кассы к ОФД, мерчанту нужно перепривязать её в приложении Kaspi; `receipt_kaspi_error`; `receipt_dispatch_error`. Фискальный документ **не** создан — повторите с **тем же** `client_operation_id`: после `failed` прежний ключ освобождается. При `shift_closed` сначала откройте смену в Kaspi Pos.
 
 ```json
 {
@@ -569,7 +571,7 @@ ApiPay отправляет 19 типов событий:
 | `invoice.refunded` | `completed` | Возврат проведён. Включает возвраты, сделанные кассиром в приложении Kaspi (импортируются автоматически). |
 | `invoice.refunded` | `failed` | Возврат не удался (`refund.error_code`). Система сама **не** повторяет; сумма не блокируется — можно создать новый возврат. |
 | `receipt.issued` | — | Фискальный чек выбит в Kaspi OFD (после `POST /receipts`). Реквизиты — `fpd`/`operation_id`/`link`. Равноправен поллингу `GET /receipts/{id}`. |
-| `receipt.failed` | — | Чек не выбит (`receipt.error_code`). Фискальный документ не создан — повторите с новым `client_operation_id` (при `shift_closed` сначала откройте смену в Kaspi Pos). |
+| `receipt.failed` | — | Чек не выбит (`receipt.error_code`). Фискальный документ не создан — повторите с тем же `client_operation_id` (при `shift_closed` сначала откройте смену в Kaspi Pos, при `receipt_ofd_token_revoked` — перепривяжите ОФД). |
 | `subscription.created` | — | Подписка создана. Счета по подписке выставляет система автоматически в `next_billing_at` (или сразу при `bill_immediately`). По каждому счёту приходят обычные invoice-вебхуки. |
 | `subscription.payment_succeeded` | — | Очередной счёт подписки оплачен. `failed_attempts` сброшен, льготный период (если был) снят. |
 | `subscription.payment_failed` | — | Счёт подписки истёк или отменён (`reason`). Пока попыток меньше `max_retry_attempts` система сама перевыставит счёт — ничего пересоздавать не нужно. |
@@ -617,7 +619,7 @@ ApiPay не дублирует вебхуки одного статуса: ду�
 | `invoice_already_paid` | Попытка отменить уже оплаченный счёт | Отмену остановила; деньги получены | Не отменяйте; если нужно вернуть деньги — создайте возврат |
 | `invoice_already_cancelled` | Счёт уже отменён | — | Ничего: желаемое состояние уже достигнуто |
 | `invoice_not_found_in_kaspi` | Kaspi не нашёл счёт при отмене | Финализирует `error` | Обратитесь в поддержку |
-| `refund_window_expired` | Истёк срок возврата (~14 дней) или возврат уже сделан | Возврат `failed`, ретраев нет | Не повторяйте; сообщите клиенту или обратитесь в поддержку |
+| `refund_window_expired` | Kaspi отклонил возврат: возможно, истёк срок возврата либо возврат уже сделан | Возврат `failed`, ретраев нет | Не повторяйте; сообщите клиенту или обратитесь в поддержку |
 | `qr_render_failed` | Не сформировалось изображение QR | Счёт финализирован в `error` (и 500-ответ, и вебхук) | Повторите `POST /invoices/qr` — создастся новый счёт |
 | `kaspi_session_invalid` | Сессия кассира истекла в момент создания QR | Счёт финализирован в `error`; сессия инвалидирована | Повторите позже; если повторяется — переподключите кассира |
 | `kaspi_error` | Неклассифицированная ошибка Kaspi | Зависит от причины; для QR — счёт `error` + вебхук | Читайте `message`/`error_message`; повторите или обратитесь в поддержку |
