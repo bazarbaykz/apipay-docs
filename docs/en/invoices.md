@@ -164,7 +164,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
 | `is_qr_token` | QR-invoice flag. Also returned by `GET /invoices/{id}` and inside webhook payloads. |
 | `qr_token_url` | Direct Kaspi URL (`qr.kaspi.kz/...`). Same payload as encoded in the PNG. You can re-render the QR on your side if you want a different style/size. |
 | `qr_image_url` | Ready-made PNG 600×600 with the Kaspi logo in the center (ECC=High). Hosted on our CDN-storage, accessible without auth, lives until `qr_expires_at + 60s` (then returns 404). |
-| `qr_expires_at` | UTC timestamp, informational. Minutes from creation. Not for local termination — the terminal arrives via webhook. |
+| `qr_expires_at` | The last moment at which the QR can still be **scanned** (UTC). Kaspi sets the window length — read it from this field rather than hard-coding a constant. The window limits scanning only: a payment started near the end of it completes after `qr_expires_at`. The terminal status is Kaspi's call — wait for the webhook, not for a local countdown. |
 
 ### Lifecycle and status handling
 
@@ -225,12 +225,15 @@ Response (excerpt):
 | 400 | `Organization not found or not verified` | Production organization not in `verified` status |
 | 400 | `sandbox_invoice_limit` | Sandbox invoice limit exceeded |
 | 422 | `Validation failed` | Invalid params (see body schema) |
-| 422 | `This organization requires cart items.` | `has_catalog=true` but `cart_items` not provided |
-| 422 | `This organization does not support catalog.` | `has_catalog=false` but `cart_items` provided |
+| 422 | `catalog_requires_cart_items` | `has_catalog=true` but `cart_items` not provided |
+| 422 | `catalog_not_supported` | `has_catalog=false` but `cart_items` provided |
+| 422 | — | The cart contains an item in the `deleting` status; the reason is in `errors["cart_items.N.catalog_item_id"]`, this branch has no separate `error_code`. Bring the item back or drop it from the cart, see [Catalog → Item Statuses](catalog.md#item-statuses) |
 | 429 | `qr_rate_limit` | Per-org limit of 60 QR/min |
 | 500 | `qr_render_failed` | Failed to render PNG |
 | 502 | `kaspi_error` | Kaspi API returned an error |
 | 503 | `kaspi_session_invalid` | Kaspi session expired |
+
+> The two catalog-parity codes arrive in the **`error_code`** field, not in `error`, and without an `errors` object — only `message` sits next to them. The `message` texts did not change when the codes were added, so string parsing keeps working; move your branching to `error_code`.
 
 ## List Invoices
 
@@ -265,6 +268,62 @@ curl https://api.apipay.kz/api/v1/invoices/42 \
 ```
 
 > Response includes `items` array — snapshot of cart items at invoice creation: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id, original_price, discount }]`. Fields `subtotal`, `discount_sum`, `discount_percentage` appear at top level only when discount is applied.
+
+**The `kaspi_qr_link` field** is a link for paying this invoice by QR, shaped like `https://kaspi.kz/qr/pay?tranId=QR…`. Draw a QR code from it for the customer. The field is also present in every `data` element of `GET /invoices`. It is computed from the Kaspi identifier and not stored, so it comes back `null` until Kaspi has assigned that identifier (the `processing` status), and it is always `null` in the sandbox.
+
+> ⚠️ Do not confuse `kaspi_qr_link` with `qr_token_url`: the latter belongs to a separate mechanism, QR invoices (`POST /invoices/qr`).
+
+## Kaspi Receipt for an Invoice
+
+**Endpoint:** `GET /invoices/{id}/receipt`
+
+Links to the Kaspi receipt of a paid invoice, so you can hand the receipt to the customer.
+
+> This is the Kaspi receipt for an invoice payment. Fiscal receipts for cash and another bank's POS are a separate section, [Fiscal Receipts](receipts.md) (Kaspi OFD), unrelated to this endpoint.
+
+```bash
+curl https://api.apipay.kz/api/v1/invoices/42/receipt \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+**The response is asynchronous.** The first call schedules the fetch and answers `202`:
+
+```json
+{ "status": "pending", "poll_after": 2 }
+```
+
+Repeat the request after `poll_after` seconds — take the interval from the response, not from your own constant. Once the receipt is fetched, the same URL answers `200`:
+
+```json
+{
+  "status": "ready",
+  "receipt_link": "https://kaspi.kz/...",
+  "download_link": "https://kaspi.kz/...&hash=...",
+  "share_link": "https://kaspi.kz/...&hash=...",
+  "sale_date": "2026-08-10 09:14:00.000000",
+  "fetched_at": "2026-08-10T09:15:02+00:00"
+}
+```
+
+`sale_date` comes exactly as Kaspi returned it (`YYYY-MM-DD HH:MM:SS.ffffff`), not as ISO 8601; the microseconds are significant — do not drop them. The other timestamps are ISO 8601.
+
+A ready receipt is cached, so a repeat request for the same invoice answers immediately.
+
+The three links differ in purpose: `share_link` is the one meant for the customer, `download_link` is the direct PDF for your own system, and `receipt_link` is the fiscal form of the receipt, safe to show anywhere.
+
+> ⛔ `download_link` and `share_link` contain a secret `hash` parameter that opens the receipt for anyone holding the string. Do not publish them, do not write them to your logs and do not put them into the URLs of your own pages. We cannot revoke a link once issued: if it leaks, there is no way to close access. `receipt_link` carries no secret.
+
+A receipt exists only for an invoice in the `paid` or `partially_refunded` status — a partial refund still leaves the invoice paid. There is no webhook for this event: request the receipt after the invoice becomes `paid`. In the sandbox the endpoint answers at once and the links are marked `sandbox=1` — they are stubs, there is no real receipt behind them, do not hand them to a customer.
+
+**Errors:**
+
+| Code | HTTP | When |
+|------|------|------|
+| `receipt_not_available_for_status` | 409 | The invoice is not `paid`/`partially_refunded`, or a paid invoice does not have a numeric Kaspi identifier yet |
+| `kaspi_session_expired` | 409 | The cashier for this invoice needs reconnecting |
+| `kaspi_session_unavailable` | 409 | The cashier is temporarily unavailable |
+| `receipt_rate_limited` | 429 | The endpoint has its own per-minute limit, stricter than the general one |
+| `receipt_unavailable` | 503 | Kaspi did not return the receipt — a retry a minute later usually helps |
 
 ## Cancel Invoice
 
