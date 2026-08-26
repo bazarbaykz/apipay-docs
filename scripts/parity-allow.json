@@ -1,15 +1,16 @@
 {
   "_": [
-    "Осознанные исключения гейта scripts/check-parity.mjs. Пустые списки — норма:",
-    "строка здесь означает «посмотрели и решили, что так правильно», а не «руки не дошли».",
+    "Deliberate exceptions for scripts/check-parity.mjs. Empty lists are the normal state:",
+    "a line here means «we looked and decided this is right», not «nobody got to it yet».",
     "",
-    "unknown_identifiers — термин, которого нет в openapi.yaml, openapi-partner.yaml и",
-    "llms.txt, но который в документации законен. Прежде чем добавлять сюда, проверьте",
-    "обратное: чаще это опечатка в имени поля или пробел в самом каноне.",
+    "unknown_identifiers — a term absent from openapi.yaml, openapi-partner.yaml and",
+    "llms.txt that is nonetheless legitimate in the documentation. Before adding one, check",
+    "the opposite first: more often it is a typo in a field name, or a genuine gap in the",
+    "contract.",
     "",
-    "shape_skip — глава, у которой русская и английская версии намеренно устроены",
-    "по-разному. Повод должен быть сильный: расхождение формы почти всегда значит, что",
-    "одна из локалей чего-то не знает."
+    "shape_skip — a chapter whose Russian and English versions are deliberately built",
+    "differently. The reason had better be strong: a difference in shape almost always means",
+    "one of the locales does not know something."
   ],
   "unknown_identifiers": [],
   "shape_skip": []

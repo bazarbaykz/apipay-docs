@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# pre-commit — гейт двуязычной документации на застейдженных файлах.
+# pre-commit — the bilingual documentation gate, over staged files.
 #
-# Ставится одной командой, потому что package.json в этом репозитории нет:
+# Installed with a single command, because this repository has no package.json:
 #   git config core.hooksPath githooks
 #
-# Проверяется паритет docs/ru ↔ docs/en, сверка терминов с каноном и co-change:
-# правка русской главы обязана нести английскую в том же коммите.
+# It checks parity between docs/ru and docs/en, verifies every term against the contract,
+# and enforces co-change: an edit to a Russian chapter must carry its English counterpart
+# in the same commit.
 #
-# Осознанно обойти: git commit --no-verify. Но если формулировка законна, честнее
-# добавить её строкой с причиной в scripts/parity-allow.json, чем обходить хук молча.
+# To bypass deliberately: git commit --no-verify. But when a term is legitimate, adding it
+# with a reason to scripts/parity-allow.json is more honest than a silent bypass.
 set -uo pipefail
 
 command -v node >/dev/null 2>&1 || exit 0
@@ -16,6 +17,6 @@ command -v node >/dev/null 2>&1 || exit 0
 
 node scripts/check-parity.mjs --staged || {
   echo ""
-  echo "Коммит остановлен гейтом документации."
+  echo "Commit stopped by the documentation gate."
   exit 1
 }

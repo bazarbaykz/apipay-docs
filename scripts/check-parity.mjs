@@ -1,26 +1,27 @@
 #!/usr/bin/env node
-// check-parity.mjs — гейт двуязычной документации.
+// check-parity.mjs — the bilingual documentation gate.
 //
-// Модель источников, которую этот скрипт защищает:
-//   факты      → openapi.yaml / openapi-partner.yaml (зеркала канона бэкенда)
-//   проза      → docs/ru/
-//   английский → docs/en/, производное от docs/ru/
+// The model this script protects:
+//   facts    → openapi.yaml / openapi-partner.yaml (verbatim mirrors of the API contract)
+//   prose    → docs/ru/
+//   English  → docs/en/, derived from docs/ru/
 //
-// Почему проверок четыре, а не одна. Сверки ru↔en НЕДОСТАТОЧНО: главы умеют врать
-// согласованно — обе локали могут называть поле, которого в контракте нет либо которое
-// принадлежит другой ручке. Паритет языков это пропускает, ловит только сверка с каноном.
+// Why four checks rather than one. Comparing the two locales against each other is not
+// enough: chapters can be wrong in agreement — both locales may name a field the contract
+// does not have, or one that belongs to a different endpoint. Locale parity sails past
+// that; only the comparison against the contract catches it.
 //
-// ⛔ Чего гейт НЕ ловит и не притворяется, что ловит: идентификатор, который в каноне
-// есть, но применён не к той ручке — сверка идёт подстрокой по всему контракту. Против
-// этого работает чтение главы рядом с каноном, а не регулярное выражение.
+// ⛔ What the gate does NOT catch, and does not pretend to: an identifier that exists in
+// the contract but is applied to the wrong endpoint — the lookup is a substring match over
+// the whole contract. Against that, only reading the chapter next to the contract helps.
 //
-// Зависимостей нет намеренно: в репозитории нет package.json, и заводить его ради
-// гейта не нужно. Всё на голом node.
+// No dependencies on purpose: this repository has no package.json and does not need one
+// for a gate. Plain Node is enough.
 //
-// Режимы:
-//   node scripts/check-parity.mjs              — полный прогон, exit 1 при находках
-//   node scripts/check-parity.mjs --staged     — плюс co-change по застейдженному
-//   node scripts/check-parity.mjs --base <ref> — плюс co-change против ветки (для CI)
+// Modes:
+//   node scripts/check-parity.mjs              — full run, exit 1 on findings
+//   node scripts/check-parity.mjs --staged     — plus co-change over staged files
+//   node scripts/check-parity.mjs --base <ref> — plus co-change against a branch (CI)
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -30,7 +31,7 @@ import { execFileSync } from 'node:child_process'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RU = path.join(ROOT, 'docs/ru')
 const EN = path.join(ROOT, 'docs/en')
-const CANON_FILES = ['openapi.yaml', 'openapi-partner.yaml', 'llms.txt']
+const CONTRACT_FILES = ['openapi.yaml', 'openapi-partner.yaml', 'llms.txt']
 const ALLOW_PATH = path.join(ROOT, 'scripts/parity-allow.json')
 
 const argv = process.argv.slice(2)
@@ -40,15 +41,15 @@ const BASE = argv.includes('--base') ? argv[argv.indexOf('--base') + 1] : null
 const problems = []
 const read = (p) => fs.readFileSync(p, 'utf-8')
 
-/** Блоки кода вырезаем: внутри них живут значения примеров, а не термины контракта. */
+/** Fenced blocks are stripped: they hold example values, not contract terms. */
 function stripFences(src) {
   return src.replace(/^```[\s\S]*?^```/gm, '\n')
 }
 
 /**
- * Форма документа: последовательность уровней заголовков, число блоков кода и строк
- * таблиц. Сравнивать ТЕКСТ заголовков бесполезно — они на разных языках, и `diff`
- * показывает файл целиком изменённым. Форма же языко-независима.
+ * The shape of a document: the sequence of heading levels, the number of fenced blocks and
+ * the number of table rows. Comparing heading TEXT is useless — the two locales are in
+ * different languages and a plain diff reports the whole file as changed. Shape is not.
  */
 function shape(src) {
   return {
@@ -59,12 +60,13 @@ function shape(src) {
 }
 
 /**
- * Машинные идентификаторы: `snake_case` в бэктиках и `METHOD /path`. Слова из одного
- * корня (`amount`, `status`) не берём — они и есть обычный текст, шум перевесил бы сигнал.
+ * Machine identifiers: `snake_case` inside backticks, and `METHOD /path`. Single words
+ * (`amount`, `status`) are left out — they are ordinary prose, and the noise would drown
+ * the signal.
  *
- * ⚠️ Кавычки внутри бэктиков снимаем: одна локаль пишет `partially_refunded`, другая
- * `"partially_refunded"` — это один и тот же термин, и различие разметки не должно
- * выглядеть как расхождение контракта.
+ * ⚠️ Quotes inside backticks are trimmed: one locale writes `partially_refunded`, the other
+ * `"partially_refunded"`. Same term; a difference in markup must not read as a difference
+ * in the contract.
  */
 function identifiers(src) {
   const body = stripFences(src)
@@ -85,10 +87,11 @@ function loadAllow() {
   }
 }
 
-// Оглавление и витрина — не главы: у двух локалей они законно устроены по-разному
-// (русское оглавление ведёт на свои страницы примеров, английское — наружу на GitHub).
-// Имена перечислены заранее: если оглавление и витрина однажды окажутся внутри docs/ru
-// и docs/en, без этого списка гейт начал бы требовать от них построчного паритета.
+// The table of contents and the landing page are not chapters: the two locales are allowed
+// to build them differently (the Russian summary links to its own example pages, the
+// English one links out to GitHub). Listed ahead of time so that, should the summary and
+// the landing page ever move inside docs/ru and docs/en, the gate does not start demanding
+// line-by-line parity from them.
 const NOT_CHAPTERS = new Set(['SUMMARY', 'README'])
 
 function chapters() {
@@ -101,13 +104,13 @@ function chapters() {
     .sort()
 }
 
-// ── 1. Структурный паритет ru↔en ──────────────────────────────────────────────
+// ── 1. Structural parity ru ↔ en ──────────────────────────────────────────────
 function checkShape(list, allow) {
   for (const ch of list) {
     if (allow.shape_skip.includes(ch)) continue
     const enPath = path.join(EN, `${ch}.md`)
     if (!fs.existsSync(enPath)) {
-      problems.push(`${ch}: нет английской версии docs/en/${ch}.md`)
+      problems.push(`${ch}: no English version at docs/en/${ch}.md`)
       continue
     }
     const a = shape(read(path.join(RU, `${ch}.md`)))
@@ -117,18 +120,18 @@ function checkShape(list, allow) {
       const i = a.levels.findIndex((v, k) => v !== b.levels[k])
       const at = i === -1 ? Math.min(a.levels.length, b.levels.length) : i
       notes.push(
-        `структура заголовков расходится с ${at + 1}-го (ru ${a.levels.length}, en ${b.levels.length})`
+        `heading structure diverges at #${at + 1} (ru ${a.levels.length}, en ${b.levels.length})`
       )
     }
-    if (a.fences !== b.fences) notes.push(`блоков кода: ru ${a.fences}, en ${b.fences}`)
+    if (a.fences !== b.fences) notes.push(`code blocks: ru ${a.fences}, en ${b.fences}`)
     if (a.tableRows !== b.tableRows) {
-      notes.push(`строк таблиц: ru ${a.tableRows}, en ${b.tableRows}`)
+      notes.push(`table rows: ru ${a.tableRows}, en ${b.tableRows}`)
     }
     if (notes.length) problems.push(`${ch}: ${notes.join('; ')}`)
   }
 }
 
-// ── 2. Множества идентификаторов ru↔en ────────────────────────────────────────
+// ── 2. Identifier sets ru ↔ en ────────────────────────────────────────────────
 function checkIdentifierParity(list) {
   for (const ch of list) {
     const enPath = path.join(EN, `${ch}.md`)
@@ -137,20 +140,20 @@ function checkIdentifierParity(list) {
     const b = identifiers(read(enPath))
     const onlyRu = [...a].filter((x) => !b.has(x)).sort()
     const onlyEn = [...b].filter((x) => !a.has(x)).sort()
-    if (onlyRu.length) problems.push(`${ch}: только в ru — ${onlyRu.join(', ')}`)
-    if (onlyEn.length) problems.push(`${ch}: только в en — ${onlyEn.join(', ')}`)
+    if (onlyRu.length) problems.push(`${ch}: only in ru — ${onlyRu.join(', ')}`)
+    if (onlyEn.length) problems.push(`${ch}: only in en — ${onlyEn.join(', ')}`)
   }
 }
 
-// ── 3. Сверка с каноном ───────────────────────────────────────────────────────
-// Контракт лежит в этом же репозитории: три его файла кладёт сюда синхронизация,
-// дословно. Доступ к репозиторию бэкенда гейту не нужен — он работает и в CI.
-function checkAgainstCanon(list, allow) {
-  const canon = CANON_FILES.filter((f) => fs.existsSync(path.join(ROOT, f)))
+// ── 3. Comparison against the contract ────────────────────────────────────────
+// The contract lives in this very repository: its three files are placed here verbatim by
+// the sync. The gate needs no access to the backend repository — it works in CI as is.
+function checkAgainstContract(list, allow) {
+  const contract = CONTRACT_FILES.filter((f) => fs.existsSync(path.join(ROOT, f)))
     .map((f) => read(path.join(ROOT, f)))
     .join('\n')
-  if (!canon) {
-    problems.push('канонные файлы не найдены — сверка с контрактом невозможна')
+  if (!contract) {
+    problems.push('contract files not found — cannot verify terms against the contract')
     return
   }
   const unknown = new Map()
@@ -159,20 +162,20 @@ function checkAgainstCanon(list, allow) {
       const p = path.join(ROOT, `docs/${loc}/${ch}.md`)
       if (!fs.existsSync(p)) continue
       for (const id of identifiers(read(p))) {
-        if (id.includes(' ')) continue // METHOD /path — свой формат, проверяется отдельно
+        if (id.includes(' ')) continue // METHOD /path — its own format, checked separately
         if (allow.unknown_identifiers.includes(id)) continue
-        if (canon.includes(id)) continue
+        if (contract.includes(id)) continue
         if (!unknown.has(id)) unknown.set(id, new Set())
         unknown.get(id).add(`${loc}/${ch}`)
       }
     }
   }
   for (const [id, where] of [...unknown].sort()) {
-    problems.push(`${id}: нет в каноне — встречается в ${[...where].sort().join(', ')}`)
+    problems.push(`${id}: not in the contract — appears in ${[...where].sort().join(', ')}`)
   }
 }
 
-// ── 4. Co-change: правка русского обязана нести английский ────────────────────
+// ── 4. Co-change: a Russian edit must carry its English counterpart ───────────
 function checkCoChange() {
   let changed = []
   try {
@@ -181,7 +184,7 @@ function checkCoChange() {
       : ['diff', '--name-only', '--diff-filter=ACMR', `${BASE}...HEAD`]
     changed = execFileSync('git', args, { cwd: ROOT, encoding: 'utf-8' }).split('\n').filter(Boolean)
   } catch {
-    return // не git-окружение или нет базы — молча пропускаем
+    return // not a git environment, or the base is missing — skip silently
   }
   const touched = (dir) =>
     new Set(
@@ -192,35 +195,35 @@ function checkCoChange() {
   const ru = touched('ru')
   const en = touched('en')
   for (const ch of ru) {
-    if (!en.has(ch)) problems.push(`${ch}: тронут docs/ru/${ch}.md, но не docs/en/${ch}.md`)
+    if (!en.has(ch)) problems.push(`${ch}: docs/ru/${ch}.md was touched, docs/en/${ch}.md was not`)
   }
   for (const ch of en) {
-    if (!ru.has(ch)) problems.push(`${ch}: тронут docs/en/${ch}.md, но не docs/ru/${ch}.md`)
+    if (!ru.has(ch)) problems.push(`${ch}: docs/en/${ch}.md was touched, docs/ru/${ch}.md was not`)
   }
 }
 
-// ── Прогон ────────────────────────────────────────────────────────────────────
+// ── Run ───────────────────────────────────────────────────────────────────────
 const allow = loadAllow()
 const list = chapters()
 if (!list.length) {
-  console.error('docs/ru не найден или пуст — проверять нечего')
+  console.error('docs/ru is missing or empty — nothing to check')
   process.exit(1)
 }
 
 checkShape(list, allow)
 checkIdentifierParity(list)
-checkAgainstCanon(list, allow)
+checkAgainstContract(list, allow)
 if (STAGED || BASE) checkCoChange()
 
 if (problems.length) {
-  console.error(`\n❌ Паритет документации нарушен (${problems.length}):\n`)
+  console.error(`\n❌ Documentation parity broken (${problems.length}):\n`)
   for (const p of problems) console.error(`  • ${p}`)
   console.error(
-    '\nИсточник прозы — docs/ru/, английский производен от него; факты берутся из' +
-      '\nopenapi.yaml и openapi-partner.yaml. Если формулировка законна, добавьте её' +
-      `\nточной строкой с причиной в ${path.relative(ROOT, ALLOW_PATH)}.\n`
+    '\nProse is sourced from docs/ru/ and English is derived from it; facts come from' +
+      '\nopenapi.yaml and openapi-partner.yaml. If a term is legitimate, add it verbatim' +
+      `\nwith a reason to ${path.relative(ROOT, ALLOW_PATH)}.\n`
   )
   process.exit(1)
 }
 
-console.log(`✅ Паритет документации: ${list.length} глав, ru ↔ en ↔ канон.`)
+console.log(`✅ Documentation parity: ${list.length} chapters, ru ↔ en ↔ contract.`)
