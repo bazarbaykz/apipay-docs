@@ -36,6 +36,8 @@ curl "https://api.apipay.kz/api/v1/catalog?search=coffee&page=1&per_page=20" \
 | `statuses[]` | array | `active` | Filter by product statuses (multiple allowed): `active`, `pending`, `deleting`, `deleted`, `failed` |
 | `without_ntin` | boolean | -- | `true` returns only items without an NTIN (`ntin` = `null`), regardless of a barcode — broader than the response field `ntin_missing` (which requires a non-empty `barcode`). Handy for estimating what's left to finish via `meta.total`. Composes with all modes and filters. |
 | `ids[]`, `external_refs[]`, `barcodes[]`, `ntins[]` | array | -- | Targeted read: returns specific items in any status, without pagination |
+| `updated_after` | string (ISO 8601) | -- | Incremental mode: only items changed after the given moment, removed ones included |
+| `cursor` | string | -- | Cursor pagination from `meta.next_cursor` — for exporting catalogs of tens of thousands of items without deep-offset cost |
 
 > ⚠️ **Without `statuses[]` only `active` items are returned.** To see other statuses, list them explicitly: `?statuses[]=active&statuses[]=deleted`. That is also how you confirm a deletion reached Kaspi.
 
@@ -149,11 +151,13 @@ curl -X POST https://api.apipay.kz/api/v1/catalog \
 | `selling_price` | number | Yes | Price in KZT (min 0.01) |
 | `unit_id` | integer | Yes | Unit of measurement ID |
 | `image_id` | string | No | Image UUID from upload-image |
-| `barcode` | string | No | Barcode (optional, string, max 32 characters — a Kaspi limit) |
+| `barcode` | string | No | Barcode (max 32 characters) |
 | `external_ref` | string | No | Your own reference for the item, for example a 1C item code (max 191) |
 | `ntin` | string | No | NTIN of the selected National Catalog candidate (max 50) |
 | `gtin` | string | No | GTIN, only for GS1 candidates (max 50) |
 | `from_catalog` | boolean | No | Marks the item as created from the National Catalog (default `false`) |
+
+> ⚠️ **A price with tiyn breaks phone-number invoices.** The catalog accepts a `selling_price` from 0.01, but a phone-number invoice and a subscription charge require a whole-tenge amount — including the `cart_items` total after discounts. An item priced `1500.50` is created fine, but an invoice for it returns `422 amount_must_be_whole_tenge`; in `POST /invoices/bulk` such an item comes back in `invoices[]` as `failed` with the same code, and a subscription charge lands in `error` on every cycle. Only `POST /invoices/qr` accepts tiyn. If you bill by phone number, keep catalog prices whole.
 
 The National Catalog fields are filled from the candidate chosen via `POST /catalog/scan`. Example item with catalog data: `{"name": "ВАФЛИ ЯШКИНО ОРЕХОВЫЕ 300Г", "selling_price": 450, "unit_id": 1, "barcode": "4607015232646", "ntin": "0200009461097", "gtin": "4607015232646", "from_catalog": true}`.
 
@@ -180,7 +184,7 @@ curl -X PATCH https://api.apipay.kz/api/v1/catalog/101 \
   -d '{"name": "Coffee Latte Grande", "selling_price": 1800}'
 ```
 
-Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode` (optional, string, max 32 characters — a Kaspi limit), `ntin` (optional, string, max 50), `gtin` (optional, string, max 50).
+Updatable fields: `name`, `selling_price`, `unit_id`, `image_id`, `is_image_deleted`, `barcode` (max 32 characters), `ntin` (optional, string, max 50), `gtin` (optional, string, max 50).
 
 > ⚠️ **Important about `ntin`/`gtin`.** Send these fields only when you actually want to change the National Catalog identity. For a regular edit (for example, price only), **do not send** `ntin`/`gtin` — otherwise `null` overwrites the National Catalog identity in Kaspi. It cannot be restored by synchronization: the Kaspi listing does not return `gtin`.
 
@@ -449,7 +453,8 @@ See [Invoices](invoices.md) for details.
 ### JavaScript
 
 ```javascript
-// X-API-Key is a secret — call the API from your server only, never from browser code
+// ⚠️ X-API-Key is a secret. Make every API call from your own server;
+// the key must never go into code that reaches the browser.
 import { readFile } from 'node:fs/promises'
 
 const API_KEY = process.env.APIPAY_KEY

@@ -1,0 +1,41 @@
+name: Check documentation parity
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'openapi.yaml'
+      - 'openapi-partner.yaml'
+      - 'llms.txt'
+      - 'scripts/**'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'openapi.yaml'
+      - 'openapi-partner.yaml'
+      - 'llms.txt'
+      - 'scripts/**'
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # На pull_request сверяем ещё и co-change: правка docs/ru обязана нести docs/en.
+      # На push в main базы для сравнения нет — идут только три структурные проверки.
+      - name: Check parity
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            node scripts/check-parity.mjs --base "origin/${{ github.base_ref }}"
+          else
+            node scripts/check-parity.mjs
+          fi

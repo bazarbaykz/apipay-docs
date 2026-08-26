@@ -1454,6 +1454,18 @@ paths:
             Дубль `client_operation_id` (`duplicate_client_operation_id`); нет кассира
             (`kaspi_session_not_configured`); `kaspi_session_expired` — сессия кассира мертва,
             чек не выбит (нужна переавторизация кассира).
+
+            У дубля в теле приходят `receipt_id` и `status` уже созданного чека — по ним
+            читайте его через `GET /receipts/{id}`, а не выбивайте заново.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: duplicate_client_operation_id}
+                  message: {type: string}
+                  receipt_id: {type: integer, description: "Только у duplicate_client_operation_id: id ранее созданного чека.", example: 4412}
+                  status: {type: string, description: "Только у duplicate_client_operation_id: статус того чека.", example: issued}
         '422':
           description: Ошибка валидации / connection_ambiguous
     get:
@@ -3238,7 +3250,9 @@ paths:
             `catalog_multi_tradepoint` — у организации несколько торговых точек.
             `catalog_busy` — каталог занят другой операцией, повторите через несколько секунд.
             `catalog_bulk_delete_mismatch` — необязательный `expected_count` не совпал с
-            фактическим числом строк; повторите `dry_run`.
+            фактическим числом строк; повторите `dry_run`. У этого отказа в теле дополнительно
+            приходят `expected_count` (что прислали) и `actual_count` (сколько строк нашлось);
+            не удалено ничего.
           content:
             application/json:
               schema:
@@ -3247,6 +3261,8 @@ paths:
                   error: {type: string, example: catalog_busy}
                   error_code: {$ref: '#/components/schemas/ErrorCode'}
                   message: {type: string}
+                  expected_count: {type: integer, description: "Только у catalog_bulk_delete_mismatch: значение из запроса.", example: 120}
+                  actual_count: {type: integer, description: "Только у catalog_bulk_delete_mismatch: сколько строк реально попало бы под удаление.", example: 118}
         '422':
           description: |
             `catalog_delete_scope_required` — не задан ни `ids[]`, ни `external_refs[]`, либо заданы оба списка.
@@ -3732,7 +3748,11 @@ paths:
     get:
       tags: [Subscriptions]
       summary: Получить подписку
-      description: Подписка со статистикой (`stats`) и последним платежом (`last_payment`).
+      description: |
+        Подписка со статистикой (`stats`) и последним платежом (`last_payment`).
+
+        ⚠️ Тело обёрнуто в `subscription` — так же, как у `POST /subscriptions`,
+        `PUT`, `pause`, `resume` и `cancel`. Читайте `body.subscription.id`, а не `body.id`.
       operationId: getSubscription
       parameters:
         - name: id
@@ -3746,24 +3766,27 @@ paths:
           content:
             application/json:
               schema:
-                allOf:
-                  - $ref: '#/components/schemas/Subscription'
-                  - type: object
-                    properties:
-                      last_payment:
-                        type: object
-                        nullable: true
+                type: object
+                properties:
+                  subscription:
+                    allOf:
+                      - $ref: '#/components/schemas/Subscription'
+                      - type: object
                         properties:
-                          amount: {type: string, example: "5000.00"}
-                          paid_at: {type: string, format: date-time, nullable: true}
-                          status: {type: string, example: paid}
-                      stats:
-                        type: object
-                        properties:
-                          total_payments: {type: integer, example: 6}
-                          successful_payments: {type: integer, example: 5}
-                          failed_payments: {type: integer, example: 0}
-                          total_collected: {type: string, example: "25000.00"}
+                          last_payment:
+                            type: object
+                            nullable: true
+                            properties:
+                              amount: {type: string, example: "5000.00"}
+                              paid_at: {type: string, format: date-time, nullable: true}
+                              status: {type: string, example: paid}
+                          stats:
+                            type: object
+                            properties:
+                              total_payments: {type: integer, example: 6}
+                              successful_payments: {type: integer, example: 5}
+                              failed_payments: {type: integer, example: 0}
+                              total_collected: {type: string, example: "25000.00"}
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -3791,7 +3814,7 @@ paths:
               type: object
               properties:
                 amount: {type: number, minimum: 100, maximum: 1000000}
-                billing_day: {type: integer, minimum: 1, maximum: 28}
+                billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28); в коротком месяце берётся последний доступный день. У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье; значения 8–28 валидацию проходят, но на этих периодах не действуют — списание просто уходит на +7 или +14 дней от предыдущего. У `daily` не используется."}
                 description: {type: string, maxLength: 255}
                 subscriber_name: {type: string, maxLength: 255}
                 external_subscriber_id: {type: string, maxLength: 255}
@@ -5627,7 +5650,7 @@ components:
           minimum: 100
           maximum: 1000000
           description: Обязателен без каталога; на каталог-организации игнорируется (сумма из cart_items).
-        billing_day: {type: integer, minimum: 1, maximum: 28}
+        billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28); в коротком месяце берётся последний доступный день. У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье; значения 8–28 валидацию проходят, но на этих периодах не действуют — списание просто уходит на +7 или +14 дней от предыдущего. У `daily` не используется."}
         description: {type: string, maxLength: 255}
         subscriber_name: {type: string, maxLength: 255}
         external_subscriber_id: {type: string, maxLength: 255}

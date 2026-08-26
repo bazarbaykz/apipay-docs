@@ -1,6 +1,8 @@
 # Подписки
 
-Подписки позволяют автоматически выставлять счета клиентам по расписанию.
+Подписки автоматически выставляют счета Kaspi по расписанию — для абонементов, SaaS и регулярных услуг.
+
+Автосписания нет: в каждую дату списания система создаёт обычный счёт Kaspi, а клиент подтверждает оплату в приложении Kaspi. Если счёт не оплачен, система выставляет его повторно — см. [Grace Period](#grace-period).
 
 ## Создание подписки
 
@@ -27,7 +29,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `amount` | number | Условно | Сумма в тенге (100 - 1 000 000), **только целая**. Не нужно при `cart_items` |
 | `phone_number` | string | Да | Телефон клиента (формат: 8XXXXXXXXXX) |
 | `billing_period` | string | Да | Период списания |
-| `billing_day` | integer | Нет | День списания (1-28) |
+| `billing_day` | integer | Нет | День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28). У `weekly` и `biweekly` — **день недели**: 1 — понедельник … 7 — воскресенье; другие значения на этих периодах не действуют. У `daily` не используется |
 | `description` | string | Нет | Описание (макс. 255) |
 | `subscriber_name` | string | Нет | Имя подписчика (макс. 255) |
 | `external_subscriber_id` | string | Нет | Ваш ID подписчика (макс. 255) |
@@ -48,11 +50,11 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | Период | Описание |
 |--------|----------|
 | `daily` | Каждый день |
-| `weekly` | Раз в неделю |
-| `biweekly` | Раз в две недели |
-| `monthly` | Раз в месяц |
-| `quarterly` | Раз в квартал |
-| `yearly` | Раз в год |
+| `weekly` | Раз в неделю, в день недели из `billing_day`; без него — через 7 дней от предыдущего списания |
+| `biweekly` | Раз в две недели, в тот же день недели; без `billing_day` — через 14 дней |
+| `monthly` | То же число каждого месяца |
+| `quarterly` | Раз в 3 месяца |
+| `yearly` | То же число каждого года |
 
 ### Ответ
 
@@ -80,6 +82,11 @@ HTTP-статус — `201`. Сама подписка лежит в поле `s
 
 **Эндпоинт:** `GET /subscriptions`
 
+```bash
+curl "https://api.apipay.kz/api/v1/subscriptions?status=active&page=1&per_page=20" \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
 ### Параметры запроса
 
 | Параметр | Тип | Описание |
@@ -98,6 +105,40 @@ HTTP-статус — `201`. Сама подписка лежит в поле `s
 
 Возвращает подписку со статистикой и последним платежом. Тело ответа — объект `{ "subscription": { … } }`: и сама подписка, и вложенные `stats` / `last_payment` лежат внутри поля `subscription`.
 
+```bash
+curl https://api.apipay.kz/api/v1/subscriptions/1 \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+### Ответ
+
+```json
+{
+  "subscription": {
+    "id": 1,
+    "amount": "5000.00",
+    "phone_number": "87001234567",
+    "subscriber_name": "Иван Иванов",
+    "billing_period": "monthly",
+    "billing_day": 1,
+    "status": "active",
+    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "stats": {
+      "total_payments": 5,
+      "successful_payments": 5,
+      "failed_payments": 0,
+      "total_collected": "25000.00"
+    },
+    "last_payment": {
+      "amount": "5000.00",
+      "status": "paid",
+      "paid_at": "2026-02-01T10:30:00+00:00"
+    },
+    "created_at": "2026-01-01T12:00:00+00:00"
+  }
+}
+```
+
 ### Поля stats
 
 | Поле | Тип | Описание |
@@ -105,7 +146,7 @@ HTTP-статус — `201`. Сама подписка лежит в поле `s
 | `total_payments` | integer | Всего платежей |
 | `successful_payments` | integer | Успешных платежей |
 | `failed_payments` | integer | Неуспешных платежей |
-| `total_amount` | string | Общая собранная сумма |
+| `total_collected` | string | Общая собранная сумма |
 
 ### Поле last_payment
 
@@ -119,15 +160,32 @@ HTTP-статус — `201`. Сама подписка лежит в поле `s
 
 **Эндпоинт:** `PUT /subscriptions/{id}`
 
+```bash
+curl -X PUT https://api.apipay.kz/api/v1/subscriptions/1 \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 7500, "description": "Премиальная подписка"}'
+```
+
 Обновляемые поля: `amount`, `billing_day`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `metadata`, `cart_items`.
 
 ## Приостановка
 
 **Эндпоинт:** `POST /subscriptions/{id}/pause`
 
+```bash
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/pause \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
 ## Возобновление
 
 **Эндпоинт:** `POST /subscriptions/{id}/resume`
+
+```bash
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/resume \
+  -H "X-API-Key: YOUR_API_KEY"
+```
 
 ## Отмена
 
@@ -135,9 +193,19 @@ HTTP-статус — `201`. Сама подписка лежит в поле `s
 
 Отмена окончательна — нельзя возобновить.
 
+```bash
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/cancel \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
 ## Счета подписки
 
 **Эндпоинт:** `GET /subscriptions/{id}/invoices`
+
+```bash
+curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" \
+  -H "X-API-Key: YOUR_API_KEY"
+```
 
 ### Структура элемента ответа
 
@@ -163,8 +231,8 @@ HTTP-статус — `201`. Сама подписка лежит в поле `s
 | Статус | Описание |
 |--------|----------|
 | `active` | Списания по расписанию |
-| `paused` | Приостановлена |
-| `cancelled` | Отменена |
+| `paused` | Временно приостановлена, можно возобновить |
+| `cancelled` | Отменена окончательно |
 | `expired` | Истекла (grace period закончился) |
 
 ## Grace Period

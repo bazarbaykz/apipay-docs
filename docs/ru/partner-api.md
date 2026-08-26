@@ -284,7 +284,7 @@ X-Partner-Key: pk_your_partner_key_here
 |------|----------|
 | 401 | Неверный или отсутствующий `X-Partner-Key` |
 | 403 | Нет доступа к запрошенному ресурсу |
-| 409 | Конфликт — `no_process` (авторизация не начата или истекла), `already_exists`, `organization_identity_conflict` |
+| 409 | Конфликт — `no_process` (авторизация не начата или истекла), `already_connected` (организация уже подключена к Kaspi; чтобы сменить кассира, повторите `init` с `force: true`), `organization_identity_conflict` |
 | 422 | Ошибка валидации — `invalid_phone`, `not_cashier` или `webhook_url` с приватным/внутренним адресом |
 | 502 | Kaspi API недоступен — `sms_failed`, `organization_identity_unavailable` |
 

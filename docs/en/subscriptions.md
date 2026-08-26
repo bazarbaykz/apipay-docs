@@ -29,7 +29,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `amount` | number | Conditional | Amount in KZT (100 - 1,000,000), **whole tenge only**. Not required when `cart_items` provided |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `billing_period` | string | Yes | Billing cycle (see table below) |
-| `billing_day` | integer | No | Day of billing (1-28) |
+| `billing_day` | integer | No | Day of charge. For `monthly`, `quarterly`, `yearly` — day of month (1–28). For `weekly` and `biweekly` — **day of week**: 1 = Monday … 7 = Sunday; other values have no effect on these periods. Not used for `daily` |
 | `description` | string | No | Payment description (max 255 chars) |
 | `subscriber_name` | string | No | Subscriber name (max 255 chars) |
 | `external_subscriber_id` | string | No | Your external subscriber ID (max 255 chars) |
@@ -38,7 +38,6 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `retry_interval_hours` | integer | No | Hours between retries (1-168) |
 | `grace_period_days` | integer | No | Grace period in days (1-30) |
 | `metadata` | object | No | Custom JSON data |
-| `webhook_id` | number | No | Specific webhook ID from dashboard |
 | `cart_items` | array | Conditional | Cart items `[{ catalog_item_id, count }]`, 1–100 items. **Required** for catalog organizations — the amount is computed server-side and `amount` is ignored. Non-catalog organizations must **not** send it: the request returns `422` |
 | `bill_immediately` | boolean | No | If `true` — first invoice is created immediately. Default: `false` (first invoice on schedule) |
 
@@ -51,8 +50,8 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | Period | Description |
 |--------|-------------|
 | `daily` | Every day |
-| `weekly` | Every 7 days |
-| `biweekly` | Every 14 days |
+| `weekly` | Weekly, on the `billing_day` weekday; without it — every 7 days from the previous charge |
+| `biweekly` | Every two weeks, on the same weekday; without `billing_day` — every 14 days |
 | `monthly` | Same day each month |
 | `quarterly` | Every 3 months |
 | `yearly` | Same day each year |
@@ -77,7 +76,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 }
 ```
 
-The subscription itself is in the `subscription` field; `PUT /subscriptions/{id}`, `pause`, `resume` and `cancel` are shaped the same way.
+The HTTP status is `201`. The subscription itself is in the `subscription` field; `PUT /subscriptions/{id}`, `pause`, `resume` and `cancel` are shaped the same way.
 
 ## List Subscriptions
 
@@ -104,7 +103,7 @@ curl "https://api.apipay.kz/api/v1/subscriptions?status=active&page=1&per_page=2
 
 **Endpoint:** `GET /subscriptions/{id}`
 
-Returns subscription with stats and last payment info.
+Returns the subscription with its stats and last payment. The response body is `{ "subscription": { … } }`: the subscription itself and the nested `stats` / `last_payment` all sit inside the `subscription` field.
 
 ```bash
 curl https://api.apipay.kz/api/v1/subscriptions/1 \
@@ -128,7 +127,7 @@ curl https://api.apipay.kz/api/v1/subscriptions/1 \
       "total_payments": 5,
       "successful_payments": 5,
       "failed_payments": 0,
-      "total_amount": "25000.00"
+      "total_collected": "25000.00"
     },
     "last_payment": {
       "amount": "5000.00",
@@ -139,6 +138,23 @@ curl https://api.apipay.kz/api/v1/subscriptions/1 \
   }
 }
 ```
+
+### stats Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_payments` | integer | Total payments |
+| `successful_payments` | integer | Successful payments |
+| `failed_payments` | integer | Failed payments |
+| `total_collected` | string | Total amount collected |
+
+### last_payment Field
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `amount` | string | Payment amount |
+| `status` | string | Status |
+| `paid_at` | string | Payment date (ISO 8601) |
 
 ## Update Subscription
 

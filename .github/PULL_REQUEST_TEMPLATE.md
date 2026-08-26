@@ -10,7 +10,7 @@ Briefly describe what you changed and why.
 
 - [ ] **One change per PR** — the pull request is focused on a single change
 - [ ] **Clear description** — it is clear what changed and why
-- [ ] **Both locales updated** — content changes are applied to `docs/ru/` **and** `docs/en/`, so the two never drift apart (Russian is the source, English is its translation)
+- [ ] **Parity check passes** — `node scripts/check-parity.mjs` is green: both locales updated together (Russian is the source, English is its translation) and every machine identifier present in the spec
 - [ ] **Code examples tested** — every example added or edited was actually run
 - [ ] **Editable files only** — the change touches `docs/**` or `examples/**`; `openapi.yaml`, `openapi-partner.yaml` and `llms.txt` are mirrors of the upstream source and get overwritten by the next sync
 - [ ] **No real data** — no API keys, customer numbers or real IDs in the diff

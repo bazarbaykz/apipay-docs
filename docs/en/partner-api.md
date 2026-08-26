@@ -283,7 +283,7 @@ For a merchant on negotiated terms, the tariff is their base tier plus their own
 |------|---------|
 | 401 | Invalid or missing `X-Partner-Key` |
 | 403 | No access to the requested resource |
-| 409 | Conflict — `no_process` (authorization not started or expired), `already_exists`, `organization_identity_conflict` |
+| 409 | Conflict — `no_process` (authorization not started or expired), `already_connected` (the organization is already linked to Kaspi; to change the cashier, repeat `init` with `force: true`), `organization_identity_conflict` |
 | 422 | Field validation failed — `invalid_phone`, `not_cashier`, or a `webhook_url` pointing to a private/internal address |
 | 502 | Kaspi API unavailable — `sms_failed`, `organization_identity_unavailable` |
 

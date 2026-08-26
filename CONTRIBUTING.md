@@ -63,13 +63,49 @@ If you'd like to add code examples:
 
 ## Documentation Style Guide
 
+### Where the truth lives
+
+Three layers, each with its own source. Know which one you are editing.
+
+| Layer | Source | Derived from it |
+|---|---|---|
+| **Facts** — field names, error codes, endpoints, limits | `openapi.yaml`, `openapi-partner.yaml` (mirrors of the upstream spec) | everything else |
+| **Prose** — explanations, warnings, walkthroughs | `docs/ru/` | — |
+| **English** | `docs/ru/` | `docs/en/` |
+
+A term that is not in the spec does not belong in a chapter. Two chapters can agree with
+each other and still both be wrong, which is why the check below compares chapters against
+the spec and not only against each other.
+
 ### Language
 
-- **Russian** — Source of truth in `docs/ru/`. The documentation entry point is `README.ru.md`, and Russian files are written first
-- **English** — Translation of the Russian source in `docs/en/`
-- **Both locales in one PR** — Any change to content must update `docs/ru/` and `docs/en/` together, so the two locales never drift apart
+- **Russian** — source of truth in `docs/ru/`. Russian files are written first
+- **English** — translation of the Russian source in `docs/en/`
+- **Both locales in one PR** — any content change must update `docs/ru/` and `docs/en/`
+  together, so the two never drift apart
 - Keep language simple and direct
 - Avoid jargon when possible
+
+### Checking your change
+
+```bash
+node scripts/check-parity.mjs
+```
+
+It verifies four things: that both locales have the same document shape, that they mention
+the same machine identifiers, that every identifier exists in the spec, and — with
+`--staged` — that you did not touch one locale without the other. No dependencies, no
+`npm install`; plain Node is enough.
+
+To have it run before every commit:
+
+```bash
+git config core.hooksPath githooks
+```
+
+The same check runs on every pull request. If a refusal is wrong, add the exact term with
+a reason to `scripts/parity-allow.json` rather than working around the check — but first
+make sure it is not a typo in a field name or a genuine gap in the spec.
 
 ### Code Examples
 
