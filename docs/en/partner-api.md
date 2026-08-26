@@ -126,11 +126,22 @@ Onboarding step 3 — confirm the SMS code.
 **Response** on success: `{ "success": true, "mode": "self", "organization": { ... } }`.
 On a wrong code: `{ "success": false, "error": "invalid_otp" }`.
 
+**Kaspi organization identity.** The pair "BIN + Kaspi organization identifier" is pinned on the first connection and does not change afterwards. Connecting a cashier does not by itself transfer ownership:
+
+| Code | HTTP | What it means |
+|------|------|---------------|
+| `organization_identity_conflict` | 409 | The Kaspi organization did not match the pinned one, or that pair is already taken by another organization. The response deliberately does not reveal the other organization's details. If the business owner really changed, the request goes to support at 77003076512 |
+| `organization_identity_unavailable` | 502 | Kaspi did not return reliable data. The connection is not blocked and any previously confirmed pair is kept: the attempt simply ends, so start over with a new code request |
+
+Other terminal outcomes of this step: `context_expired` (409, Kaspi lost the process context — you need a new `init`, not another OTP), `no_process` (409), `cashier_unavailable` (409), `not_registered` (422, the number is not registered as a cashier — the session is closed and retrying is pointless).
+
 ### GET /api/partner/organizations/{id}/kaspi-auth/status
 
 Cashier authorization status.
 
-**Response:** `{ "success": true, "status": "pending|active|...", "kaspi_connected": true, "expires_at": "..." }`
+**Response:** `{ "success": true, "status": "pending|active|...", "process_status": "...", "attempt_status": "none", "kaspi_connected": true, "expires_at": "..." }`
+
+The `attempt_status` field is the status of an individual authorization attempt. It is always a string; when there is no attempt it is `none`. The values are not fixed by the contract: branch on `status` and `process_status`, not on this field. The working session is not cleared when a re-authorization starts, so `status` and `attempt_status` are read separately.
 
 ### POST /api/partner/organizations/{id}/api-key
 
@@ -272,9 +283,9 @@ For a merchant on negotiated terms, the tariff is their base tier plus their own
 |------|---------|
 | 401 | Invalid or missing `X-Partner-Key` |
 | 403 | No access to the requested resource |
-| 409 | Conflict — `no_process` (authorization not started or expired), `already_exists` |
+| 409 | Conflict — `no_process` (authorization not started or expired), `already_exists`, `organization_identity_conflict` |
 | 422 | Field validation failed — `invalid_phone`, `not_cashier`, or a `webhook_url` pointing to a private/internal address |
-| 502 | Kaspi API unavailable — `sms_failed` |
+| 502 | Kaspi API unavailable — `sms_failed`, `organization_identity_unavailable` |
 
 The codes of the tariff endpoints are listed under [Merchant Tariffs](#merchant-tariffs) — each endpoint has its own set. A refusal body always carries `success: false`, `error` and `error_code` holding the same value; build your logic on `error_code`.
 

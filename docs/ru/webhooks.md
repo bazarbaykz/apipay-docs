@@ -16,7 +16,7 @@ Webhooks доставляют уведомления в реальном вре�
 
 ## События
 
-ApiPay отправляет 21 тип событий:
+ApiPay отправляет 20 типов событий:
 
 | Событие | Описание |
 |---------|----------|
@@ -26,8 +26,7 @@ ApiPay отправляет 21 тип событий:
 | `qr_refund.identified` | Покупатель отсканировал возвратный QR (сессия → `customer_identified`) |
 | `qr_refund.completed` | QR-возврат выполнен (`refunded_amount`, `receipt_url`) |
 | `qr_refund.expired` | Возвратный QR истёк до идентификации |
-| `catalog.item_processed` | Позиция каталога обработана (`status`: `active`/`failed`); при пакетной заливке через очередь заменяется агрегатом `catalog.batch_processed` |
-| `catalog.batch_processed` | Итог пакетной операции с каталогом одним агрегатом (`kind`, `totals`, `sample_failed[]`). `kind: ingest` — заливка, `kind: delete` — массовое удаление |
+| `catalog.item_processed` | Операция над позицией каталога закрыта. Приходит **по каждой позиции, всегда** — агрегата пакетной операции больше нет |
 | `receipt.issued` | Фискальный чек успешно выбит (Kaspi OFD) |
 | `receipt.failed` | Выбить фискальный чек не удалось |
 | `subscription.created` | Создана подписка |
@@ -42,7 +41,9 @@ ApiPay отправляет 21 тип событий:
 | `cashbox.shift_close_failed` | Закрыть кассовую смену не удалось (`error_code`) |
 | `webhook.test` | Тестовое событие из личного кабинета |
 
-> Полные payload'ы событий `qr_refund.*` и `catalog.*` — в `openapi.yaml`, раздел `x-webhooks`.
+> Полные payload'ы событий `qr_refund.*` — в `openapi.yaml`, раздел `x-webhooks`.
+
+> ⛔ Событие `catalog.batch_processed` **не отправляется никогда**: агрегат пакетных операций с каталогом убран. Адрес и подпись прежние — просто тишина, по ошибке об этом не узнать. Если вы ждали этот вебхук как признак «заливка завершена», переходите на `catalog.item_processed` и собственный список `external_ref`.
 
 ### invoice.status_changed
 
@@ -268,6 +269,53 @@ ApiPay отправляет 21 тип событий:
 | `refund.items` | array \| null | Позиции возврата (только для позиционных возвратов): `catalog_item_id`, `name`, `price`, `count`, `amount`. |
 | `invoice.available_for_refund` | number | Сумма, ещё доступная для возврата. Приходит числом (float), в отличие от `amount` и `total_refunded` (строки). |
 | `invoice.status` | string | Статус счёта после возврата. Полный возврат статус **НЕ меняет** (остаётся `paid` — или `partially_refunded`, если ранее был частичный) + `is_fully_refunded=true`; первый частичный переводит в `partially_refunded` (и дополнительно приходит `invoice.status_changed`). |
+
+### catalog.item_processed
+
+Отправляется, когда операция над позицией каталога закрыта — создание, правка или снятие, успешно или с отказом.
+
+> ⚠️ **Событие приходит по каждой позиции, всегда.** Агрегата пакетной операции больше нет: заливка 50 позиций даёт **до 50 доставок** вместо одной. Приёмник должен это выдержать.
+
+```json
+{
+  "event": "catalog.item_processed",
+  "catalog_item": {
+    "id": 12345,
+    "external_ref": "1C-000123",
+    "kaspi_item_id": "MP-000000",
+    "name": "Кофе зерновой 1 кг",
+    "barcode": "4870000000001",
+    "ntin": "00000000000001",
+    "gtin": null,
+    "ntin_missing": false,
+    "status": "active",
+    "sellable": true,
+    "in_kaspi_catalog": true,
+    "operation": null,
+    "error_code": null,
+    "error_message": null,
+    "failed_at": null
+  },
+  "timestamp": "2026-08-26T14:37:00+00:00"
+}
+```
+
+**Поля payload**
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `catalog_item.external_ref` | string \| null | Ваша ссылка на позицию (например код номенклатуры 1С) — ключ сверки. |
+| `catalog_item.status` | string | Тот же производный статус и тот же словарь, что у `GET /catalog`: `active`, `pending`, `deleting`, `deleted`, `failed`. Значения в push и в листинге совпадают всегда. |
+| `catalog_item.operation` | string \| null | Что именно происходило с позицией: `create`, `update`, `delete`. `null` после успешного завершения; при отказе значение сохраняется. |
+| `catalog_item.sellable` | boolean | Примут ли позицию в корзину счёта, QR или подписки. |
+| `catalog_item.in_kaspi_catalog` | boolean | Есть ли у позиции боевая идентичность номенклатуры Kaspi. В песочнице всегда `false`. |
+| `catalog_item.error_code` | string \| null | Код отказа операции. |
+| `catalog_item.failed_at` | string \| null | Момент отказа (ISO 8601). |
+| `catalog_item.ntin_missing` | boolean | `true` — у позиции есть штрихкод, но нет НТИН: в фискальный чек она не попадёт как маркированная. |
+
+Подробнее про статусы, ось `operation` и флаги — [Каталог](catalog.md#статусы-товара).
+
+Признак «пакетная работа закончена» считайте у себя по своему списку `external_ref`. Остаток очереди и отказы дополнительно видны в `GET /catalog/queue` и `GET /catalog/errors`.
 
 ### receipt.issued
 

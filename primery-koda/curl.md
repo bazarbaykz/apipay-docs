@@ -72,34 +72,41 @@ curl "https://api.apipay.kz/api/v1/cashbox/shifts/118275707/report" \
 ## Каталог: полная синхронизация из 1С
 
 ```bash
-# Шаг 1 — залейте каталог, передавая ОДИН И ТОТ ЖЕ sync_token во всех запросах прогона.
+# Шаг 1 — залейте актуальный каталог (1–100 позиций за запрос).
 curl -X POST "https://api.apipay.kz/api/v1/catalog" \
   -H "X-API-Key: $APIPAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "sync_token": "run-2026-08-15-a",
     "items": [
       {"name": "Кофе латте", "selling_price": 1500, "unit_id": 1, "external_ref": "SKU-LATTE"}
     ]
   }'
 
-# Шаг 2 — разведка: сколько позиций уйдёт под удаление.
+# Шаг 2 — разведка по чанку: сколько позиций из вашего списка уйдёт под удаление.
+#          Ровно один список — ids[] ЛИБО external_refs[], не больше 200 значений.
 curl -X POST "https://api.apipay.kz/api/v1/catalog/bulk-delete" \
   -H "X-API-Key: $APIPAY_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"filter": {"sync_token_not": "run-2026-08-15-a"}, "dry_run": true}'
+  -d '{"external_refs": ["SKU-OLD-1", "SKU-OLD-2"], "dry_run": true}'
 
-# Шаг 3 — подтверждение с числом из разведки.
+# Шаг 3 — подтверждение с числом из разведки и УНИКАЛЬНЫМ ключом на чанк.
 curl -X POST "https://api.apipay.kz/api/v1/catalog/bulk-delete" \
   -H "X-API-Key: $APIPAY_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"filter": {"sync_token_not": "run-2026-08-15-a"}, "expected_count": 6870}'
+  -H "Idempotency-Key: catalog-sync-2026-08-26-chunk-01" \
+  -d '{"external_refs": ["SKU-OLD-1", "SKU-OLD-2"], "expected_count": 2}'
+
+# Шаг 4 — исход: остаток очереди и отказы.
+curl "https://api.apipay.kz/api/v1/catalog/queue" -H "X-API-Key: $APIPAY_API_KEY"
+curl "https://api.apipay.kz/api/v1/catalog/errors?from=2026-08-26" -H "X-API-Key: $APIPAY_API_KEY"
 ```
 
+Список снятия строит интегратор: режима «удали всё, чего не было в моей заливке» нет.
 Ключ должен быть выпущен **владельцем** организации, иначе придёт `403 catalog_delete_owner_key_required`.
 Ответ `202` означает «принято в работу», а не «удалено»: снятие идёт фоном и на большом каталоге
-занимает сутки с небольшим. Итог придёт вебхуком `catalog.batch_processed` с `kind: delete`.
-Позиции без метки вовсе под фильтр не попадают — для них нужен явный `filter.include_never_stamped: true`.
+занимает сутки с небольшим. Общего хендла у операции нет — исход смотрите в `GET /catalog/queue`,
+`GET /catalog/errors` и точечным `GET /catalog?external_refs[]=`; итог каждой позиции присылает
+вебхук `catalog.item_processed`.
 Подробности и коды отказов — [Каталог → Массовое удаление](../docs/ru/catalog.md#массовое-удаление).
 
 ## Больше примеров

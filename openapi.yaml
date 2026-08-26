@@ -355,7 +355,7 @@ paths:
             `content_rejected` (контент-скрин, только в режиме block);
             `amount_must_be_whole_tenge` (сумма с тиынами по телефонному счёту не
             принимается; округлите либо используйте `POST /invoices/qr`);
-            позиция корзины в статусе `deleting` — `errors["cart_items.N.catalog_item_id"]`,
+            позиция корзины с `operation=delete` — `errors["cart_items.N.catalog_item_id"]`,
             отдельного `error_code` у этой ветки нет (см. `CartItem.catalog_item_id`).
           content:
             application/json:
@@ -399,8 +399,9 @@ paths:
         приходит в `invoices[]` как `failed` с `error_code: amount_must_be_whole_tenge`;
         остальные позиции батча создаются нормально.
 
-        ⛔ **Товар в снятии тоже отбивается поэлементно.** Счёт с позицией корзины в
-        статусе `deleting` приходит в `invoices[]` как `failed` с
+        ⛔ **Товар в снятии тоже отбивается поэлементно.** Счёт с позицией корзины, над
+        которой открыто снятие (`operation=delete`, `sellable=false`), приходит в
+        `invoices[]` как `failed` с
         `error_code: catalog_item_not_found` и текстом `Catalog item is being deleted…`
         в `message`; остальные позиции батча создаются. Позиция восстановима — см.
         `CartItem.catalog_item_id`.
@@ -484,7 +485,7 @@ paths:
         поддерживается; возврат — через отдельную ветку `POST /qr-refunds` (клиент
         сканирует возвратный QR).
 
-        ⛔ **Позиция корзины в статусе `deleting` отбивается `422`** —
+        ⛔ **Позиция корзины с `operation=delete` отбивается `422`** —
         `errors["cart_items.N.catalog_item_id"]`, отдельного `error_code` у этой ветки нет.
         Как вернуть позицию — см. `CartItem.catalog_item_id`.
       operationId: createQrInvoice
@@ -1126,7 +1127,7 @@ paths:
         забракованное `description`), отбивается **на генерации** — см. `400`/`422`.
 
         ⚠️ **Проверка работает на момент генерации.** Если позиция каталога из `cart_items`
-        позже уйдёт в снятие (`deleting`) или будет снята, скан такого листа перестанет
+        позже уйдёт на снятие (`status=deleting`) или будет снята (`status=deleted`), скан такого листа перестанет
         создавать счёт до возврата позиции — а переиздать напечатанный лист нельзя. Верните
         позицию обычным `POST /catalog`, и лист снова заработает. Перед массовым удалением
         каталога проверьте, какие позиции стоят в напечатанных листах.
@@ -1185,8 +1186,8 @@ paths:
             * мерчант **с** каталогом без `cart_items` либо **без** каталога с `cart_items` —
               тело несёт `message` и `error_code` (`catalog_requires_cart_items` /
               `catalog_not_supported`), но **без** `errors`, как на `POST /invoices/qr`;
-            * `cart_items.*.catalog_item_id` не принадлежит вашей организации, удалён,
-              стоит в очереди на снятие (`deleting`) или без цены —
+            * `cart_items.*.catalog_item_id` не принадлежит вашей организации, имеет
+              `status=deleted`, стоит в очереди на снятие (`status=deleting`) или без цены —
               `errors["cart_items.0.catalog_item_id"]` с тем же текстом, что вернуло бы
               создание счёта (`Catalog item does not belong to your organization.` /
               `… has been deleted.` / `Catalog item is being deleted…` /
@@ -1960,8 +1961,10 @@ paths:
         Остаток **своей** pending-очереди приёма каталога (POST /catalog) со слим-полями +
         блок `queue` с честным ETA в минутах. ETA учитывает общую FIFO-очередь кассира
         (несколько организаций на одном кассире). Пагинация **плоская**
-        `{current_page, data, total, deleting, queue}`. Скоуп — организация ключа (чужие строки
-        недоступны). Rate-limit **600/min per key** (не жжёт общий лимит 200/min).
+        `{current_page, data, total, updating, deleting, queue}`. `data`/`total` описывают
+        только создание; открытые update/delete видны отдельными счётчиками. Скоуп —
+        организация ключа (чужие строки недоступны). Rate-limit **600/min per key**
+        (не жжёт общий лимит 200/min).
       operationId: getCatalogQueue
       parameters:
         - name: sort_order
@@ -1976,7 +1979,7 @@ paths:
           schema:
             type: integer
             minimum: 20
-            maximum: 100
+            maximum: 200
             default: 100
         - name: page
           in: query
@@ -1998,13 +2001,20 @@ paths:
                     items:
                       $ref: '#/components/schemas/CatalogQueueItem'
                   total: {type: integer, example: 1234}
+                  updating:
+                    type: integer
+                    description: >-
+                      Позиции с открытой правкой в Kaspi (`operation=update`). Зеркало уже
+                      содержит новое значение, поэтому только этот счётчик отличает
+                      «правка принята» от «правка подтверждена Kaspi».
+                    example: 0
                   deleting:
                     type: integer
                     description: >-
                       Позиции, ожидающие СНЯТИЯ в Kaspi (очередь массового удаления).
                       Считается отдельно: `data`/`total` описывают только приём, и без этого
                       счётчика ответ выглядел бы «очередь пуста», пока тысячи позиций ждут
-                      удаления. Подробности — GET /catalog/batches/{id}.
+                      удаления.
                     example: 0
                   queue:
                     $ref: '#/components/schemas/CatalogQueueBlock'
@@ -2018,16 +2028,22 @@ paths:
       summary: Ошибки приёма каталога
       description: |
         Failed-позиции приёма каталога своей организации с **обезличенными** текстами
-        ошибок (сырые ответы Kaspi не отдаются). Фильтр по периоду **постановки в очередь**
-        (`created_at`); при отсутствии `from` — окно **последних 7 дней**. Пагинация
-        **плоская** `{current_page, data, total}`. Rate-limit **600/min per key**
-        (не жжёт общий лимит 200/min).
+        ошибок (сырые ответы Kaspi не отдаются). Фильтр по периоду **отказа** (`failed_at`,
+        то же поле отдаётся в каждой строке ответа); при отсутствии `from` — окно
+        **последних 7 дней**. Пагинация **плоская** `{current_page, data, total}`.
+        Rate-limit **600/min per key** (не жжёт общий лимит 200/min).
+
+        ⛔ Фильтр `batch_id` удалён вместе с агрегатом партий и теперь **отклоняется явно**
+        (`422 catalog_batch_filter_removed`), а не игнорируется: раньше он сужал выборку до
+        партии, и молчаливый игнор вернул бы все ошибки организации за окно — ответ,
+        неотличимый от правды. Отбирайте свои позиции окном `from`/`to` и собственным
+        списком `external_ref`.
       operationId: getCatalogErrors
       parameters:
         - name: from
           in: query
           description: |
-            Начало окна (включительно), по created_at. Default — now-7d при отсутствии.
+            Начало окна (включительно), по failed_at (момент отказа). Default — now-7d при отсутствии.
             Минуты и секунды опциональны (`2026-07-13`, `2026-07-13 10`, `2026-07-13 10:30`).
             Голая дата и дата-время без смещения трактуются в **Asia/Almaty** (+05:00) —
             календарный день мерчанта; явное смещение берётся как есть.
@@ -2044,12 +2060,6 @@ paths:
           schema:
             type: string
             format: date-time
-        - name: batch_id
-          in: query
-          description: Фильтр по UUID батча приёма (last_batch_id).
-          schema:
-            type: string
-            format: uuid
         - name: sort_order
           in: query
           schema:
@@ -2061,7 +2071,7 @@ paths:
           schema:
             type: integer
             minimum: 20
-            maximum: 100
+            maximum: 200
             default: 100
         - name: page
           in: query
@@ -2086,43 +2096,18 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          $ref: '#/components/responses/ValidationError'
-  "/catalog/batches/{id}":
-    get:
-      tags: [Catalog]
-      summary: Прогресс bulk-батча приёма каталога
-      description: |
-        Агрегированный прогресс bulk-батча (POST /catalog с per-item очередью). Скоуп строго
-        по организации ключа — чужой/несуществующий/битый UUID → **404** (non-enumeration).
-        Итог батча также приходит вебхуком `catalog.batch_processed`. Rate-limit **600/min per
-        key** (не жжёт общий лимит 200/min).
-      operationId: getCatalogBatch
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: UUID батча (batch_id из ответа POST /catalog).
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: Прогресс батча
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CatalogBatch'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          description: Батч не найден (или принадлежит другой организации)
+          description: >-
+            Ошибка валидации параметров ЛИБО удалённый фильтр `batch_id`
+            (`error_code: catalog_batch_filter_removed`).
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  error: {type: string, example: batch_not_found}
-                  message: {type: string, example: "Батч не найден."}
+                  error: {type: string, example: catalog_batch_filter_removed}
+                  error_code:
+                    $ref: '#/components/schemas/ErrorCode'
+                  message: {type: string}
   "/tariff/plans":
     get:
       tags: [Tariff & Account]
@@ -2384,6 +2369,14 @@ paths:
           $ref: '#/components/responses/CashierManagementDisabled'
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
+        '422':
+          description: >-
+            `connection_identity_unverified` — connection ещё не подтвердила
+            полную business identity и не может стать primary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   "/connections/{connection}/auth/init":
     post:
       tags: [Connections]
@@ -2611,7 +2604,8 @@ paths:
                       Почему каталог товаров этой организации не заработает; `null` — блокировки нет
                       (или каталог организации не нужен). Отдаётся только при `success=true`.
 
-                      `idn_conflict` — БИН организации уже закреплён за другой организацией;
+                      `idn_conflict` — legacy-маркер старого collision-flow; новые auth
+                      конфликты возвращаются отдельным HTTP 409 и этот marker не пишут;
                       решается поддержкой.
                       `no_idn` — Kaspi не вернул БИН организации.
                       `no_kaspi_org_id` — не получен контекст организации Kaspi.
@@ -2635,15 +2629,10 @@ paths:
             `init`, а не повтор OTP); `no_process` — авторизация не начата либо уже
             закрыта предыдущим терминальным исходом; `test_organization` — организация
             тестовая (`is_test`), реальная авторизация кассира для неё запрещена;
-            `org_transferred` — организация этого кассира уже заведена в ApiPay и по
-            итогам подтверждения закреплена за вашим аккаунтом.
-
-            ⚠️ У `org_transferred` в теле есть ДОПОЛНИТЕЛЬНЫЕ поля рядом с `error` и
-            `message`: `organization_id` и `organization_name` — организация, в которой
-            теперь надо работать. Кассира нужно подключить уже в ней: новый `init` →
-            `send-phone` → `verify-otp` по её `connection`, список организаций перечитайте
-            из `GET /api/users/me`. Повтор OTP на прежнем подключении бессмыслен, а
-            организация, из которой вы делали запрос, осталась пустой.
+            `organization_identity_conflict` — Kaspi вернул другую полную
+            identity либо та же пара уже закреплена за другой Organization.
+            Cashier auth не меняет владельца и не раскрывает данные чужой
+            организации.
           content:
             application/json:
               schema:
@@ -2653,12 +2642,8 @@ paths:
                   value: {error: context_expired, message: "Auth session expired — re-initialize"}
                 no_process:
                   value: {error: no_process, message: "Auth session is not initialized"}
-                org_transferred:
-                  value:
-                    error: org_transferred
-                    message: "Organization ownership transferred — connect the cashier there"
-                    organization_id: 42
-                    organization_name: "ТОО Example"
+                organization_identity_conflict:
+                  value: {error: organization_identity_conflict, message: "Kaspi organization identity conflicts with this organization"}
         '422':
           description: |
             Ошибка формата `otp` (стандартная Laravel-форма валидации) либо терминальный
@@ -2673,6 +2658,14 @@ paths:
               examples:
                 not_registered:
                   value: {error: not_registered, message: "Number is not a registered Kaspi cashier"}
+        '502':
+          description: >-
+            `organization_identity_unavailable` — Kaspi не вернул единую полную
+            пару IDN + OrganizationId. Ни session, ни Organization не изменены.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/CashierAuthUnavailable'
   "/connections/{connection}/auth/status":
@@ -2694,6 +2687,7 @@ paths:
                   mode: {type: string, example: self}
                   status: {type: string, description: "Статус кассира (напр. active/pending/inactive).", example: active}
                   auth_status: {type: string, description: "Статус self-сессии (none, если сессии нет).", example: active}
+                  attempt_status: {type: string, description: "Статус отдельной попытки авторизации; когда попытки нет — строка `none`, не null. Рабочая session в начале reauth не очищается. Значения контрактом не фиксированы — ветвитесь по `status`/`auth_status`, а не по этому полю.", example: none}
                   phone: {type: string, nullable: true, description: "Маскированный телефон.", example: "770****4567"}
                   last_used_at: {type: string, format: date-time, nullable: true, example: "2026-01-10T12:00:00+00:00"}
         '401':
@@ -2734,20 +2728,38 @@ paths:
         Товары каталога. **Четыре режима чтения** (по приоритету):
         1. **targeted** — `ntins[]`/`barcodes[]`/`ids[]`/`external_refs[]` (OR, все статусы,
            суммарно ≤200 значений по 4 наборам) → форма `{data:[...]}` без пагинации
-           (точечное подтверждение батча);
+           (точечное подтверждение отправленного набора);
         2. **incremental** — `updated_after` → инкрементальный экспорт изменённого;
         3. **keyset** — `cursor` (курсорная пагинация без deep-offset, для экспорта 100k+);
         4. **default (offset)** — постранично `page`/`per_page`.
 
-        **Статусы (default = active):** без параметра `statuses[]` ЛЮБОЙ режим отдаёт
-        только `active`. Чтобы получить другие статусы (`pending`/`failed`/`deleting`/
-        `deleted`) — передайте `statuses[]` явно (в т.ч. в incremental для зеркалирования
-        удалений: `?updated_after=…&statuses[]=active&statuses[]=deleted`).
+        **Статусы (default = `active`):** без параметра `statuses[]` ЛЮБОЙ режим отдаёт
+        только `active` — позиции, которые есть в каталоге и над которыми не висит
+        незакрытая операция создания/снятия. Остальные четыре значения запрашиваются явно
+        (в т.ч. в incremental: `?updated_after=…&statuses[]=active&statuses[]=deleted`).
+        Запрос без параметров и `?statuses[]=active` дают ОДИН И ТОТ ЖЕ набор: скрытых осей
+        у default нет.
 
-        **Призраки НЕ отдаются никогда:** строки `status='deleted'` с `kaspi_item_id=null`
-        (позиции, отклонённые до отправки в Kaspi — их никогда не было в Kaspi) исключаются
-        во всех режимах, даже при явном `?statuses[]=deleted`. Настоящие удаления
-        (`deleted` с непустым `kaspi_item_id`) доступны через `?statuses[]=deleted`.
+        `status` — **производное** поле: оно вычисляется из состояния строки, а не хранится.
+        Приоритет веток фиксирован (первое совпадение выигрывает):
+        `failed` (операция брошена) → `pending` (открыто создание) → `deleting` (открыто
+        снятие) → `deleted` (позиция снята) → `active`. Открытая операция проверяется ВЫШЕ
+        состояния позиции. Поэтому снятая позиция со следом брошенной операции читается как
+        `failed`, а снятая позиция, для которой уже открыто повторное создание, — как
+        `pending`: она создаётся заново (в каталоге Kaspi её сейчас нет, `sellable=false`),
+        и вид намерения виден в `operation`.
+
+        Ось операции отдаётся отдельно и ортогональна статусу:
+        `operation=create|update|delete|null` плюс `error_code`/`error_message` при отказе.
+        Продаваемость и наличие в каталоге Kaspi — отдельные булевы поля `sellable` и
+        `in_kaspi_catalog` (см. схему ответа), выводить их из `status` не нужно.
+
+        ⛔ Фильтр `batch_id` удалён вместе с агрегатом партий и **отклоняется явно**
+        (`422 catalog_batch_filter_removed`): молчаливый игнор вернул бы весь каталог вместо
+        позиций партии. Подтверждайте свой набор targeted-запросом по `external_refs[]`.
+
+        **Призраки НЕ отдаются никогда:** строки `state='void'` (позиции, которых никогда
+        не было в Kaspi) исключаются во всех режимах и не являются допустимым фильтром.
 
         **Лимиты targeted (явная ошибка вместо тихого усечения):** суммарное число значений
         по `ntins[]`+`barcodes[]`+`ids[]`+`external_refs[]` ≤200, и число найденных СТРОК
@@ -2761,9 +2773,10 @@ paths:
         - name: "statuses[]"
           in: query
           description: >-
-            Фильтр по статусам товара. Не передан → отдаётся только `active`
-            (default) во всех режимах. Призраки (`deleted` + пустой `kaspi_item_id`)
-            не отдаются даже при `deleted`.
+            Фильтр по производному статусу позиции. Не передан → отдаётся только `active`
+            (default) во всех режимах, включая targeted. Значения взаимоисключающие и
+            покрывают весь каталог. Позиции, которых никогда не было в Kaspi, не отдаются
+            ни при каком фильтре.
           schema:
             type: array
             items:
@@ -2829,12 +2842,6 @@ paths:
           schema:
             type: boolean
             default: false
-        - name: batch_id
-          in: query
-          description: "Фильтр по UUID батча bulk-приёма (last_batch_id). Компонуется со всеми режимами."
-          schema:
-            type: string
-            format: uuid
         - name: per_page
           in: query
           schema:
@@ -2871,7 +2878,9 @@ paths:
           description: Верифицированная организация не найдена
         '422':
           description: >-
-            Targeted-режим: суммарно значений >200 ИЛИ строк соответствий >1000.
+            Targeted-режим: суммарно значений >200 ИЛИ строк соответствий >1000
+            (`catalog_match_overflow`); неизвестное значение `statuses[]`; удалённый фильтр
+            `batch_id` (`catalog_batch_filter_removed`).
           content:
             application/json:
               schema:
@@ -2885,10 +2894,10 @@ paths:
       tags: [Catalog]
       summary: Создать товары каталога
       description: |
-        Создаёт 1–100 товаров пакетно. Sandbox → `201` (товар сразу активирован);
-        Production → `202` (товар в статусе `pending`, синхронизация в Kaspi джобом).
-        `external_ref` — клиентская ссылка (например код 1С) для последующего точечного
-        чтения (`?external_refs[]=`).
+        Создаёт 1–100 товаров пакетно. Ответ всегда `202` — «принято»: в песочнице позиция
+        возвращается уже активной, в бою она получает статус `pending` и уезжает в Kaspi
+        фоновой обработкой. `external_ref` — клиентская ссылка (например код 1С) для
+        последующего точечного чтения (`?external_refs[]=`).
 
         **Валидация per-item lenient.** Каждая позиция валидируется отдельно: валидные
         обрабатываются штатно (`data[]`), невалидные попадают в `rejected[]` (см. ниже) и
@@ -2896,11 +2905,12 @@ paths:
         остаётся ТОЛЬКО за структурными ошибками ЗАПРОСА: `items` отсутствует / не массив /
         пуст / больше лимита (100). Ключ `rejected[]` присутствует в ответе ВСЕГДА (пустой
         `[]`, когда все позиции валидны). Если ВСЕ позиции невалидны — ответ всё равно
-        успешный (`202`/`201`) с пустым `data[]` и полным `rejected[]`.
+        успешный (`202`) с пустым `data[]` и полным `rejected[]`.
 
-        **Match-and-merge работает и в sandbox** (тот же матчинг и маркеры), но синхронно и
-        без обращения к Kaspi: matched-товар возвращается сразу активным, переиздание
-        удалённого по `external_ref` активируется мгновенно (без фазы `pending`).
+        **Match-and-merge работает и в песочнице** — это тот же обход решений, что в бою, с
+        теми же маркерами; отличается только доставка: без обращения к Kaspi и синхронно.
+        Позиция возвращается сразу активной, переиздание удалённого по `external_ref`
+        активируется мгновенно (без фазы `pending`).
 
         **Match-and-merge (идемпотентная заливка).** Если позиция совпадает с уже
         существующим товаром, вместо дубля/ошибки возвращается ЖИВОЙ id существующего
@@ -2916,24 +2926,25 @@ paths:
         уезжают в Kaspi асинхронно. **Используйте `external_ref` как ключ маппинга** (не
         barcode/имя): на один barcode у мерчанта может быть несколько товаров.
 
-        **Переиздание удалённого / статусы матча по `external_ref`:** если `external_ref`
-        указывает на удалённый (`deleted`) товар — он автоматически переиздаётся: ТА ЖЕ
-        строка (тот же `id`) возвращается в `pending` с полями из запроса и заново
-        отправляется в Kaspi (`matched_existing: true`, `status: pending`). Если
-        `external_ref` указывает на `failed`-товар — возвращается его текущая строка со
-        `status: failed` БЕЗ автоматического повтора: исправьте данные и переотправьте
-        позицию через `PATCH /catalog/{id}` (для строки без `kaspi_item_id` PATCH сам
-        переотправляет создание) либо кнопкой «Повторить» в кабинете.
+        **Переиздание снятого / операция матча по `external_ref`:** если `external_ref`
+        указывает на снятый товар — он автоматически переиздаётся: ТА ЖЕ строка (тот же
+        `id`) получает `operation: create` и заново отправляется в Kaspi. ⚠️ До подтверждения
+        Kaspi она читается как `status: pending` — она создаётся заново, но в каталоге Kaspi
+        её пока нет, поэтому `sellable=false`; вид намерения виден в `operation`.
+        Если у строки есть отказанная операция, автоматического повтора нет: она возвращается
+        с текущими `status`, `operation`, `error_code` и `failed_at`. Исправьте данные через
+        `PATCH /catalog/{id}` либо нажмите «Повторить» в кабинете; повтор исполняет сохранённую
+        `operation`, а не выводит её из наличия `kaspi_item_id`.
       operationId: createCatalogItems
       parameters:
         - name: Idempotency-Key
           in: header
           required: false
           description: |
-            Ключ идемпотентности bulk-приёма (≤191). Повторный POST с тем же ключом той же
-            организации возвращает СУЩЕСТВУЮЩИЙ батч (HTTP 200) без пересоздания позиций.
-            Альтернатива — body-поле `idempotency_key`. Значимо только на инжест-пути
-            (`batch` в ответе).
+            Ключ идемпотентности приёма (≤191). Точный повтор того же тела в той же
+            организации отвечает `200` с `idempotent_replay: true` и не выполняется снова.
+            Тот же ключ с другим телом или на `POST /catalog/bulk-delete` отвечает
+            `409 idempotency_key_conflict`. Альтернатива — body-поле `idempotency_key`.
           schema:
             type: string
             maxLength: 191
@@ -2950,23 +2961,10 @@ paths:
                   maxLength: 191
                   nullable: true
                   description: >-
-                    Ключ идемпотентности (эквивалент заголовка Idempotency-Key). Повтор → тот же батч (200).
-                    ⚠️ Пространство ключей ОБЩЕЕ с массовым удалением: ключ, уже занятый операцией
-                    другого типа, отдаёт `409 idempotency_key_conflict`.
-                sync_token:
-                  type: string
-                  maxLength: 64
-                  pattern: '^[A-Za-z0-9._:-]+$'
-                  description: >-
-                    Метка прогона полной синхронизации. Проставляется на КАЖДУЮ упомянутую позицию —
-                    включая те, по которым работы не было (совпадение с каталогом Kaspi). Нужна, чтобы
-                    потом удалить остаток «всё, чего в этой заливке не было». Заливка из нескольких
-                    запросов шлёт один и тот же токен во всех.
-                    ⚠️ Повтор с тем же `idempotency_key` токен НЕ обновляет — берите точку отсчёта
-                    ДО первого запроса прогона.
-                    ⛔ Не заменяйте это фильтром по времени изменения: `updated_at` не двигается у
-                    позиций, совпавших с каталогом, и двигается у тронутых синхронизацией — фильтр по
-                    времени удалил бы живое и пощадил мёртвое.
+                    Ключ идемпотентности (эквивалент заголовка Idempotency-Key). Точный
+                    повтор того же тела → `200` с `idempotent_replay: true`. Пространство
+                    ключей ОБЩЕЕ с массовым удалением: другое тело или операция отдаёт
+                    `409 idempotency_key_conflict`.
                 items:
                   type: array
                   minItems: 1
@@ -2982,39 +2980,21 @@ paths:
                       barcode: {type: string, nullable: true, maxLength: 32}
                       ntin: {type: string, nullable: true, maxLength: 50, description: "НТИН кандидата Нацкаталога (из POST /catalog/scan)."}
                       gtin: {type: string, nullable: true, maxLength: 50, description: "GTIN кандидата Нацкаталога (GS1)."}
-                      external_ref: {type: string, nullable: true, maxLength: 191, description: "Клиентская ссылка (1С)."}
+                      external_ref: {type: string, nullable: true, maxLength: 191, description: "Клиентская ссылка (1С), UNIQUE в пределах боевой/песочной оси организации."}
                       from_catalog: {type: boolean, nullable: true, default: false}
       responses:
         '200':
-          description: "Idempotency-Key повтор: возвращён существующий батч (позиции не пересозданы)"
+          description: "Точный повтор Idempotency-Key: запрос не выполнен снова"
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  data:
-                    type: array
-                    items: {$ref: '#/components/schemas/CatalogItem'}
-                  rejected:
-                    type: array
-                    items: {$ref: '#/components/schemas/RejectedCatalogItem'}
-                  batch: {$ref: '#/components/schemas/CatalogBatch'}
-        '201':
-          description: "Sandbox: валидные товары созданы и активированы (невалидные — в rejected[])"
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items: {$ref: '#/components/schemas/CatalogItem'}
-                  rejected:
-                    type: array
-                    description: "Позиции, не прошедшие per-item валидацию (присутствует всегда, может быть пустым)."
-                    items: {$ref: '#/components/schemas/RejectedCatalogItem'}
+                  data: {type: array, items: {$ref: '#/components/schemas/CatalogItem'}, example: []}
+                  rejected: {type: array, items: {$ref: '#/components/schemas/RejectedCatalogItem'}, example: []}
+                  idempotent_replay: {type: boolean, example: true}
         '202':
-          description: "Production: валидные товары созданы со статусом pending (невалидные — в rejected[]), синхронизация запланирована"
+          description: "Принято: валидные товары созданы (невалидные — в rejected[]). В бою status=pending, operation=create до фонового подтверждения; в песочнице операция уже закрыта (status=active, operation=null)."
           content:
             application/json:
               schema:
@@ -3027,9 +3007,6 @@ paths:
                     type: array
                     description: "Позиции, не прошедшие per-item валидацию (присутствует всегда, может быть пустым)."
                     items: {$ref: '#/components/schemas/RejectedCatalogItem'}
-                  batch:
-                    allOf: [{$ref: '#/components/schemas/CatalogBatch'}]
-                    description: "Присутствует ТОЛЬКО на инжест-пути (per-item очередь включена). Прогресс батча + poll_url; итог — вебхук catalog.batch_processed."
         '400':
           description: Лимит каталога в тестовом режиме (sandbox) превышен
           content:
@@ -3046,9 +3023,9 @@ paths:
         '409':
           description: |
             `catalog_busy` — каталог занят другой операцией, повторите через несколько секунд.
-            `idempotency_key_conflict` — этот `Idempotency-Key` уже занят операцией ДРУГОГО типа
-            (например, массовым удалением): пространство ключей общее, поэтому чужой батч не
-            отдаётся, возьмите новый ключ. Повторять с тем же ключом бесполезно.
+            `idempotency_key_conflict` — этот `Idempotency-Key` уже занят другим телом либо
+            другой каталожной операцией. Пространство ключей приёма и массового удаления
+            общее; возьмите новый ключ. Повторять изменённый запрос с тем же ключом бесполезно.
           content:
             application/json:
               schema:
@@ -3061,7 +3038,7 @@ paths:
                 catalog_busy:
                   value: {error: catalog_busy, message: "Каталог занят другой операцией, повторите запрос через несколько секунд."}
                 idempotency_key_conflict:
-                  value: {error: idempotency_key_conflict, error_code: idempotency_key_conflict, message: "Этот Idempotency-Key уже использован операцией другого типа. Возьмите новый ключ."}
+                  value: {error: idempotency_key_conflict, error_code: idempotency_key_conflict, message: "Этот Idempotency-Key уже использован с другим телом или для другой операции. Возьмите новый ключ."}
         '422':
           $ref: '#/components/responses/ValidationError'
         '502':
@@ -3076,22 +3053,20 @@ paths:
         Снимает с продажи много позиций одним запросом. **POST, а не DELETE** — тело у
         `DELETE` плохо поддержано HTTP-клиентами 1С.
 
-        **Два взаимоисключающих режима** (ровно один, иначе `422`):
-          * **список** — `ids[]` либо `external_refs[]` (оба ключа уникальны в пределах
-            организации, поэтому одно значение = не больше одной позиции). Лимит значений —
-            **200**, превышение → `422 catalog_match_overflow`.
-            ⛔ `barcodes[]` не принимается: штрихкод не уникален, и одно значение могло бы
-            снести сотни позиций. Штрихкоды — только через фильтр, где есть `dry_run`;
-          * **фильтр** — `filter.sync_token_not`: «удали всё, чего не было в моей заливке».
-            Обязателен `expected_count` — множество большое и необратимое.
+        Цели задаются ровно одним списком: `ids[]` либо `external_refs[]`. Оба ключа уникальны в
+        пределах боевой/песочной оси организации, поэтому одно значение = не больше одной позиции.
+        Лимит — **200** значений, превышение → `422 catalog_match_overflow`.
+        ⛔ `barcodes[]` не принимается: штрихкод не уникален, и одно значение могло бы снести сотни позиций.
+        Filter-режима нет: сервер не додумывает разрушающее множество по неполной заливке.
 
         ⚠️ **Это фоновая операция на СУТКИ.** Позиции снимаются с продажи по одной, и во
-        время массового удаления заливка каталога идёт медленнее — обе операции работают в
-        одной очереди. Порядок величин: 500 позиций — около двух часов, несколько тысяч — около
+        время массового удаления заливка каталога идёт медленнее.
+        Порядок величин: 500 позиций — около двух часов, несколько тысяч — около
         суток с небольшим; при параллельной заливке умножьте примерно вчетверо.
-        Ответ `202` — это «принято в работу», а не «удалено»: следите
-        за прогрессом по `poll_url`, итог придёт вебхуком `catalog.batch_processed`
-        (`kind: delete`). ⛔ Не ставьте на этот запрос HTTP-таймаут в расчёте на завершение.
+        Ответ `202` — это «принято в работу», а не «удалено». Общего хендла операции нет:
+        остаток смотрите в `GET /catalog/queue`, строки — через targeted `GET /catalog`,
+        отказы — в `GET /catalog/errors`; итог каждой строки присылает
+        `catalog.item_processed`. ⛔ Не ставьте на этот запрос HTTP-таймаут в расчёте на завершение.
 
         ⚠️ **Позиции, попавшие в очередь снятия, перестают приниматься в корзину сразу** —
         включая уже напечатанные листы `POST /static-qr`, где эти позиции зашиты в
@@ -3099,13 +3074,10 @@ paths:
         а переиздать напечатанный лист нельзя. Если под удаление попадают позиции из
         действующих листов, верните их через `POST /catalog` либо перевыпустите листы.
 
-        **Рекомендуемый порядок полной синхронизации из 1С:**
-        1. залейте актуальный каталог через `POST /catalog`, передавая один и тот же
-           `sync_token` во всех запросах прогона;
-        2. вызовите этот эндпоинт с `dry_run: true` — узнаете, сколько позиций попадёт под
-           удаление, и увидите образец;
-        3. повторите без `dry_run`, передав полученное число в `expected_count`;
-        4. дождитесь вебхука либо опрашивайте `poll_url`.
+        **Полная синхронизация из 1С:** залейте актуальное, постройте у себя явный список ушедших
+        `ids`/`external_refs`, проверьте каждый чанк через `dry_run`, затем поставьте его в очередь с уникальным
+        `Idempotency-Key`. Необязательный `expected_count` из ответа разведки защитит от
+        изменения множества между проверкой и запуском. Подробный рецепт — `docs/guide-catalog-full-sync.md`.
 
         ⚠️ Позицию, попавшую в очередь удаления по ошибке, можно **вернуть**: пришлите её
         обычным `POST /catalog` — удаление отменится, и если товар ещё не снят в Kaspi, он
@@ -3113,21 +3085,20 @@ paths:
         `external_ref` вернётся та же строка (тот же `id`), а у позиции без `external_ref`,
         штрихкода и НТИН в каталоге появится новая строка.
 
-        ⛔ Два случая, когда возврат НЕ сработает:
-        1. если у позиции нет `external_ref`, а её штрихкод совпадает с ДРУГИМ, живым товаром —
-           присланная позиция сольётся с живым товаром, а приговорённая уйдёт по вашему плану.
-           Возврат по `external_ref` однозначен всегда;
-        2. если удаление именно этой позиции уже отправлено в Kaspi — придёт
-           `catalog_delete_in_progress` (в `rejected[]` у `POST /catalog`, `409` у
-           `PATCH /catalog/{id}`). Повторите через несколько секунд: если позиция снялась,
-           она будет заведена заново.
+        ⛔ Возврат неоднозначен только если у позиции нет `external_ref`, а её штрихкод
+        совпадает с ДРУГИМ живым товаром: присланная позиция сольётся с живым товаром, а
+        приговорённая уйдёт по вашему плану. Возврат по `external_ref` однозначен всегда.
+        Отдельного отказа «снятие уже отправлено» больше нет: новое намерение принимается,
+        а фон при необходимости переиздаёт позицию после подтверждения удаления.
       operationId: bulkDeleteCatalogItems
       parameters:
         - name: Idempotency-Key
           in: header
           required: false
           schema: {type: string, maxLength: 191}
-          description: "Повтор с тем же ключом возвращает существующий батч (200), ничего не удаляя."
+          description: >-
+            Точный повтор того же тела отвечает 200 с idempotent_replay=true и не удаляет
+            снова. Другое тело либо ключ, занятый POST /catalog, → 409.
       requestBody:
         required: true
         content:
@@ -3143,30 +3114,10 @@ paths:
                   type: array
                   items: {type: string, maxLength: 191}
                   description: "Режим списка: клиентские ссылки (1С)."
-                filter:
-                  type: object
-                  description: "Режим фильтра."
-                  properties:
-                    sync_token_not:
-                      type: string
-                      maxLength: 64
-                      pattern: '^[A-Za-z0-9._:-]+$'
-                      description: >-
-                        Удалить позиции, помеченные ДРУГИМ sync_token. Позиции без метки вовсе
-                        (заведённые в кассе вручную, пришедшие из каталога Kaspi, залитые без
-                        sync_token) под фильтр НЕ попадают — для них нужен явный
-                        include_never_stamped.
-                    include_never_stamped:
-                      type: boolean
-                      default: false
-                      description: >-
-                        Включить в удаление и позиции, не участвовавшие ни в одном прогоне.
-                        Нужен не только в первый раз: такие позиции появляются постоянно —
-                        добавленные в кассе вручную, пришедшие из каталога Kaspi, залитые без
-                        sync_token.
                 expected_count:
                   type: integer
-                  description: "Обязателен в режиме фильтра. Возьмите из dry_run. Расхождение → 409."
+                  minimum: 0
+                  description: "Необязательная сверка с would_delete из dry_run. Расхождение → 409, ничего не меняется."
                 dry_run:
                   type: boolean
                   description: "true — только посчитать и показать образец, ничего не менять и не расходовать Idempotency-Key."
@@ -3175,14 +3126,11 @@ paths:
               targeted:
                 summary: Список идентификаторов
                 value: {ids: [101, 102, 103]}
-              full_sync:
-                summary: Полная синхронизация из 1С
-                value: {filter: {sync_token_not: "run-2026-08-13-A"}, expected_count: 6870}
       responses:
         '200':
           description: |
             Четыре РАЗНЫХ тела под одним кодом — различайте по наличию ключей:
-            `dry_run: true` — разведка; `batch` без `queued` — повтор по `Idempotency-Key`;
+            `dry_run: true` — разведка; `idempotent_replay: true` — точный повтор;
             `queued: 0` — удалять нечего; `deleted` — песочница (удалено синхронно).
           content:
             application/json:
@@ -3208,7 +3156,8 @@ paths:
                   - type: object
                     title: IdempotentReplay
                     properties:
-                      batch: {$ref: '#/components/schemas/CatalogBatch'}
+                      message: {type: string, example: Catalog request already accepted}
+                      idempotent_replay: {type: boolean, example: true}
                   - type: object
                     title: NothingToDelete
                     properties:
@@ -3223,7 +3172,6 @@ paths:
                       deleted: {type: integer}
                       already_queued: {type: array, items: {type: integer}}
                       already_queued_count: {type: integer}
-                      batch: {$ref: '#/components/schemas/CatalogBatch'}
         '202':
           description: "Позиции приняты в очередь удаления"
           content:
@@ -3231,12 +3179,21 @@ paths:
               schema:
                 type: object
                 properties:
-                  batch: {$ref: '#/components/schemas/CatalogBatch'}
-                  queued: {type: integer, example: 6870}
+                  queued: {type: integer, description: "Сколько позиций принято в очередь удаления этим запросом (не больше 200 — столько значений принимает список).", example: 180}
+                  buried:
+                    type: integer
+                    description: "Сколько недоставленных призрачных строк закрыто локально."
+                    example: 0
                   already_queued:
                     type: array
                     items: {type: integer}
-                    description: "Позиции, которые уже стояли в очереди удаления — их не переклеймливаем."
+                    description: >-
+                      Позиции, которые уже стояли в очереди удаления — их не переклеймливаем.
+                      ⚠️ Список ОБРЕЗАН до 200 элементов (это образец, а не полный перечень);
+                      полное число всегда в `already_queued_count`.
+                  already_queued_count:
+                    type: integer
+                    description: "Сколько позиций уже стояло в очереди удаления — без обрезки."
         '400':
           description: |
             `catalog_not_supported` — у организации не включён каталог. ⚠️ Именно 400, а не 422:
@@ -3277,31 +3234,22 @@ paths:
           $ref: '#/components/responses/RateLimitWindow'
         '409':
           description: |
-            `catalog_bulk_delete_mismatch` — `expected_count` разошёлся с фактом (тело несёт
-            `actual_count`), каталог изменился между разведкой и командой: повторите `dry_run`.
-            `idempotency_key_conflict` — ключ занят операцией другого типа.
+            `idempotency_key_conflict` — ключ занят другим телом либо другой каталожной операцией.
             `catalog_multi_tradepoint` — у организации несколько торговых точек.
             `catalog_busy` — каталог занят другой операцией, повторите через несколько секунд.
+            `catalog_bulk_delete_mismatch` — необязательный `expected_count` не совпал с
+            фактическим числом строк; повторите `dry_run`.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  error: {type: string, example: catalog_bulk_delete_mismatch}
+                  error: {type: string, example: catalog_busy}
                   error_code: {$ref: '#/components/schemas/ErrorCode'}
                   message: {type: string}
-                  expected_count: {type: integer, example: 6870}
-                  actual_count: {type: integer, example: 6868}
         '422':
           description: |
-            `catalog_delete_scope_required` — `reason: mode_required` (не задан ни один режим
-            либо задано несколько) или `reason: expected_count_required` (в режиме фильтра нет
-            `expected_count`).
-            `catalog_delete_filter_invalid` — фильтру нельзя верить: `reason: token_never_used`
-            (этим `sync_token` не отмечена ни одна позиция — обычно опечатка) либо
-            `reason: coverage_too_low` (прогон пометил слишком малую часть каталога — похоже,
-            заливка не завершилась; тело несёт `stamped` и `visible`). Во втором случае
-            повторите прогон целиком и вызовите удаление снова.
+            `catalog_delete_scope_required` — не задан ни `ids[]`, ни `external_refs[]`, либо заданы оба списка.
             `catalog_match_overflow` — слишком много значений в списке.
           content:
             application/json:
@@ -3311,18 +3259,6 @@ paths:
                   error: {type: string, example: catalog_delete_scope_required}
                   error_code: {$ref: '#/components/schemas/ErrorCode'}
                   message: {type: string}
-                  reason:
-                    type: string
-                    description: >-
-                      Уточнение причины в пределах одного error_code. Список ОТКРЫТ —
-                      неизвестное значение обрабатывайте общей веткой.
-                    example: coverage_too_low
-                  stamped:
-                    type: integer
-                    description: "Только при coverage_too_low: сколько позиций пометил прогон."
-                  visible:
-                    type: integer
-                    description: "Только при coverage_too_low: сколько живых позиций в каталоге."
   "/catalog/upload-image":
     post:
       tags: [Catalog]
@@ -3431,7 +3367,7 @@ paths:
                         barcode: {type: string, nullable: true, example: "4607015232646"}
                         unit_id: {type: integer, nullable: true}
                         image_link: {type: string, nullable: true}
-                  normalized_barcode: {type: string, example: "4607015232646"}
+                  normalized_barcode: {type: string, example: "4607015232646", description: "Точное эхо input; имя legacy, нормализация не обещается."}
                   scan_result:
                     type: object
                     properties:
@@ -3465,17 +3401,21 @@ paths:
         Обновляет товар. Все поля опциональны — применяются только присланные (`filled`).
         `external_ref` при обновлении **не принимается**. ⚠️ `ntin`/`gtin` затирают
         идентичность Нацкаталога безвозвратно (её нельзя восстановить синком) — отправляйте
-        только при реальном изменении. Sandbox → `200`, Production → `202`.
+        только при реальном изменении. Код ответа зависит от ПОЗИЦИИ, а не от режима
+        организации: правка позиции песочницы применена уже в момент ответа (`200`), правка
+        боевой позиции принята в работу (`202`). В production правка доставляется в Kaspi
+        уже после ответа, поэтому доставка может занять больше минуты — закладывайте это в
+        сценарий и не считайте `202` подтверждением. До подтверждения сохраняются `operation=update` и всё
+        намерение картинки, включая `image_id`/удаление; исход проверяйте через targeted
+        `GET /catalog`, `GET /catalog/queue`, `GET /catalog/errors` или per-item webhook.
 
-        ⚠️ **`PATCH` по позиции в очереди удаления ОТМЕНЯЕТ удаление** — запрос означает
-        «позиция мне нужна» и обрабатывается так же, как повторная заливка. Исключение —
-        узкое окно, когда снятие уже отправлено в Kaspi: тогда приходит
-        `409 catalog_delete_in_progress`, состояние позиции при этом не меняется.
-        Повторите через несколько секунд; если попытка снятия не завершилась, окно
-        закрывается само не позже чем через две минуты — дольше этого кода не бывает.
+        ⚠️ **`PATCH` по позиции с `operation=delete` ОТМЕНЯЕТ удаление** — запрос означает
+        «позиция мне нужна» и атомарно заменяет намерение на `create` либо `update`.
+        Уже отправленное снятие не создаёт отдельного окна отказа: фон приводит позицию к
+        правде Kaspi, а при состоявшемся снятии заново создаёт её с тем же локальным `id`.
 
-        ⛔ **Если позиция к этому моменту уже снята, `PATCH` по ней вернёт `404`:** выборка
-        идёт только по живым строкам, и снятая позиция для неё не существует. Заведите её
+        ⛔ **Если позиция уже снята (`status: deleted`), `PATCH` по ней вернёт `404`:**
+        выборка идёт только по живым позициям, и снятая для неё не существует. Заведите её
         заново обычным `POST /catalog`: по `external_ref` вернётся та же строка (тот же
         `id`); у позиции без `external_ref` в каталоге появится новая строка с новым `id`,
         а если её штрихкод совпадает с другим живым товаром — присланная позиция сольётся
@@ -3501,14 +3441,6 @@ paths:
                 barcode: {type: string, nullable: true, maxLength: 32}
                 ntin: {type: string, maxLength: 50, description: "⚠️ Затирает идентичность Нацкаталога — только при реальном изменении."}
                 gtin: {type: string, maxLength: 50, description: "⚠️ То же предупреждение, что и для ntin."}
-                sync_token:
-                  type: string
-                  maxLength: 64
-                  pattern: '^[A-Za-z0-9._:-]+$'
-                  description: >-
-                    Та же метка прогона, что у POST /catalog. Нужна, если позицию вы ведёте ТОЛЬКО
-                    через PATCH: без неё она будет считаться неупомянутой в прогоне и попадёт под
-                    удаление остатка. Проставляется независимо от того, менялись ли поля.
       responses:
         '200':
           description: "Sandbox: товар обновлён синхронно"
@@ -3534,43 +3466,36 @@ paths:
           $ref: '#/components/responses/TariffInactive'
         '404':
           description: |
-            Товар не найден. ⚠️ Сюда же приходит уже СНЯТАЯ позиция (`deleted`): выборка
-            идёт по живым строкам. Заводите её заново через `POST /catalog`.
-        '409':
-          description: |
-            `catalog_delete_in_progress` — снятие этой позиции уже отправлено в Kaspi,
-            отменить его нельзя. Состояние позиции не изменено. Повторите через несколько
-            секунд: если к тому моменту позиция снялась, `PATCH` вернёт `404` и заводить её
-            нужно через `POST /catalog`. Окно живёт не дольше двух минут даже если попытка
-            снятия не завершилась.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error: {type: string, example: catalog_delete_in_progress}
-                  error_code: {$ref: '#/components/schemas/ErrorCode'}
-                  message: {type: string}
+            Товар не найден. ⚠️ Сюда же приходит уже СНЯТАЯ позиция (`status: deleted`):
+            выборка идёт по живым позициям. Заводите её заново через `POST /catalog`.
         '422':
           $ref: '#/components/responses/ValidationError'
-        '502':
-          description: Ошибка Kaspi API
-        '503':
-          description: Kaspi сессия истекла
     delete:
       tags: [Catalog]
       summary: Удалить товар каталога
       description: |
-        Sandbox → `200` (hard delete). Production → `202`: статус позиции становится
-        `deleting`, а в Kaspi она снимается фоновой обработкой.
+        Код ответа зависит от ПОЗИЦИИ, а не от режима организации. Позиция песочницы снята уже
+        в момент ответа (`200`) и переходит в `status=deleted`. Боевая позиция принята в
+        работу (`202`): она становится `status=deleting` с `operation=delete`, а после
+        подтверждения Kaspi переходит в `deleted` и операция закрывается.
 
-        ⚠️ **Ответ приходит раньше, чем товар исчезает из кассы.** Обычно позиция снимается
-        за считаные секунды, но если параллельно идёт массовая операция с каталогом, очередь
-        загружена и снятие займёт дольше. Проверяйте результат чтением `GET /catalog?statuses[]=deleted`, а не сразу
-        после ответа.
+        ⚠️ Снятие в обоих случаях **логическое**: позиция остаётся доступной чтением
+        (`GET /catalog?statuses[]=deleted`) и восстановима повторной заливкой по тому же
+        `external_ref` — вернётся ТА ЖЕ позиция с тем же `id`.
 
-        ⚠️ Позиция остаётся в `deleting` и после временного сбоя — сервис вернётся к ней
-        сам, повторный запрос слать не нужно.
+        ⚠️ **Ответ приходит раньше, чем товар исчезает из кассы.** Снятие доставляется в
+        Kaspi уже после ответа и при загруженной очереди займёт дольше минуты. Проверяйте
+        результат чтением `GET /catalog?statuses[]=deleted`, а не сразу после ответа.
+
+        ⚠️ После временного сбоя позиция остаётся `status=deleting`; сервис вернётся к ней
+        сам. Если попытки исчерпаны, позиция читается как `status=failed` с сохранённым
+        `operation=delete`, `error_code`/`failed_at` — и по-прежнему не продаётся
+        (`sellable=false`).
+
+        ⚠️ Неоднозначная торговая точка у одиночного удаления больше не даёт синхронный
+        `409`: запрос принят с `202`, а на строке появляется
+        `error_code=catalog_multi_tradepoint`. Массовая ручка сохраняет синхронный preflight
+        и `409`, потому что обязана отклонить весь разрушительный набор до клейма.
       operationId: deleteCatalogItem
       parameters:
         - name: id
@@ -3580,9 +3505,9 @@ paths:
             type: integer
       responses:
         '200':
-          description: "Sandbox: товар удалён синхронно"
+          description: "Позиция песочницы: снята синхронно"
         '202':
-          description: "Production: удаление поставлено в очередь"
+          description: "Боевая позиция: снятие поставлено в очередь"
           content:
             application/json:
               schema:
@@ -3596,18 +3521,6 @@ paths:
           $ref: '#/components/responses/TariffInactive'
         '404':
           description: Товар не найден
-        '409':
-          description: |
-            `catalog_multi_tradepoint` — у организации несколько торговых точек, и удаление
-            каталога через API для неё недоступно. Обратитесь в поддержку.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error: {type: string, example: catalog_multi_tradepoint}
-                  error_code: {$ref: '#/components/schemas/ErrorCode'}
-                  message: {type: string, example: "У организации несколько торговых точек — удаление каталога недоступно. Обратитесь в поддержку."}
   "/clients/check":
     post:
       tags: [Clients]
@@ -3770,10 +3683,10 @@ paths:
         `invoice.status_changed`, и так при КАЖДОМ списании. Проверьте суммы действующих
         подписок и цены каталожных позиций, из которых считается итог.
 
-        ⛔ **Позиция корзины в статусе `deleting` отбивается `422`** — здесь и в
+        ⛔ **Позиция корзины с `operation=delete` отбивается `422`** — здесь и в
         `PUT /subscriptions/{id}`; текст в `errors["cart_items.N.catalog_item_id"]`.
-        ⚠️ На очередном СПИСАНИИ этого гейта нет: если позиция уходит в снятие у уже
-        работающей подписки, списание не проваливается, а откладывается до следующей
+        ⚠️ На очередном СПИСАНИИ тот же гейт даёт не ошибку, а отсрочку: если позиция
+        уходит в снятие у уже работающей подписки, списание откладывается до следующей
         попытки списания — счётчик неудач не растёт и подписка не уходит в grace period
         из-за временного состояния. Верните позицию обычным `POST /catalog`.
 
@@ -3862,7 +3775,7 @@ paths:
         Все поля опциональны. `cart_items` на не-каталог организации → `422`. При передаче
         `cart_items` сумма пересчитывается.
 
-        ⛔ Позиция корзины в статусе `deleting` отбивается `422` так же, как при создании —
+        ⛔ Позиция корзины с `operation=delete` отбивается `422` так же, как при создании —
         текст в `errors["cart_items.N.catalog_item_id"]`.
       operationId: updateSubscription
       parameters:
@@ -4699,6 +4612,8 @@ components:
         - client_not_found
         - kaspi_throttled
         - refund_window_expired
+        - refund_rejected_by_kaspi
+        - refund_requires_buyer_confirmation
         - invoice_already_paid
         - invoice_already_cancelled
         - invoice_not_found_in_kaspi
@@ -4728,12 +4643,11 @@ components:
         - catalog_item_invalid
         - idempotency_key_conflict
         - catalog_multi_tradepoint
+        - catalog_batch_filter_removed
         - catalog_delete_scope_required
-        - catalog_delete_filter_invalid
-        - catalog_delete_in_progress
         - catalog_delete_owner_key_required
-        - catalog_busy
         - catalog_bulk_delete_mismatch
+        - catalog_busy
         - request_rate_limited
         - kaspi_error
         - unknown_error
@@ -4910,16 +4824,15 @@ components:
           description: >-
             ID товара из каталога (поле `id` из `GET /catalog`). Должен принадлежать
             организации, иметь цену и НЕ находиться в снятии.
-            ⛔ Позиция в статусе `deleting` в корзину не принимается: при массовом
-            удалении она стоит в этом статусе долго (порядок величин — в описании
+            ⛔ Позиция с `operation=delete` в корзину не принимается: при массовом
+            удалении она стоит с этим намерением долго (порядок величин — в описании
             `POST /catalog/bulk-delete`), и счёт, выставленный в это окно, стал бы
             фискальным документом на товар, которого к моменту оплаты уже нет. Отказ приходит в
             `errors["cart_items.N.catalog_item_id"]` с текстом
             `Catalog item is being deleted. Send it again via POST /catalog to cancel the
             deletion and use it in invoices.` — позиция восстановима: пришлите её обычным
             `POST /catalog`, удаление отменится, и она снова станет доступна для счетов.
-            Позиция в статусе `deleted` даёт отдельный текст (`Catalog item has been
-            deleted.`).
+            Позиция с `status=deleted` даёт отдельный текст (`Catalog item has been deleted.`).
             ⚠️ Форма отказа зависит от поверхности: `POST /invoices`, `/invoices/qr`,
             `/static-qr` и создание/обновление подписки отдают `422`, а `POST /invoices/bulk`
             остаётся `201` и возвращает позицию в `invoices[]` как `failed` с
@@ -4941,11 +4854,9 @@ components:
         catalog_item_id:
           type: integer
           description: >-
-            Те же правила, что у `CartItem.catalog_item_id`: позиция в статусе `deleting`
-            в корзину не принимается (`422`).
-            ⚠️ Асимметрия, важная для денег: гейт стоит на СОЗДАНИИ и ОБНОВЛЕНИИ подписки,
-            а на очередном списании — нет. Если позиция уходит в снятие у уже работающей
-            подписки, списание не проваливается, а ОТКЛАДЫВАЕТСЯ до следующей попытки
+            Те же правила, что у `CartItem.catalog_item_id`: позиция с `operation=delete`
+            в корзину не принимается (`422`). Если позиция уходит в снятие у уже работающей
+            подписки, гейт очередного списания не объявляет ошибку, а ОТКЛАДЫВАЕТ попытку
             списания: счётчик неудач не растёт и подписка не уходит в grace period. ⚠️ Наружу это никак
             не сигнализируется — ни счёта, ни вебхука, ни сдвига `next_billing_at`.
         count: {type: integer, minimum: 1}
@@ -5451,115 +5362,46 @@ components:
     CatalogErrorItem:
       type: object
       description: |
-        Failed-позиция приёма каталога (GET /catalog/errors). `error_message` обезличен:
-        сырые ответы Kaspi заменяются generic-текстом; для распознанных слагов — actionable.
+        Отказанная операция каталога (GET /catalog/errors). `operation` показывает, что
+        именно отказало; `error_message` обезличен: сырые ответы Kaspi заменяются
+        generic-текстом, для распознанных слагов остаётся actionable.
       properties:
         id: {type: integer, example: 456}
         external_ref: {type: string, nullable: true, example: "1C-000456"}
         name: {type: string, example: "Фильтр воздушный"}
         barcode: {type: string, nullable: true, example: "4600000000001"}
         ntin: {type: string, nullable: true, example: "00000000000001"}
+        operation: {type: string, enum: [create, update, delete], example: update}
         error_code: {type: string, nullable: true, example: catalog_item_duplicate}
         error_message: {type: string, description: "Обезличенный клиентский текст (без сырых ответов Kaspi).", example: "Такая позиция уже есть в каталоге."}
         queued_at: {type: string, format: date-time, description: "created_at, +05:00.", example: "2026-07-11T10:00:00+05:00"}
-        failed_at: {type: string, format: date-time, description: "updated_at, +05:00.", example: "2026-07-11T10:03:00+05:00"}
-        batch_id: {type: string, nullable: true, format: uuid, description: "UUID батча приёма (до появления батчей — null)."}
-    CatalogBatch:
-      type: object
-      description: |
-        Агрегат bulk-батча каталога (POST /catalog инжест-путь · GET /catalog/batches/{id}).
-
-        ⚠️ **Инвариант totals зависит от `kind`:**
-          * `ingest` — `total = created + updated + skipped + failed` (`deleted` всегда 0);
-          * `delete` — `total = deleted + skipped + failed` (`created`/`updated` всегда 0).
-
-        `skipped` включает идемпотентные skip'ы (позиция уже такая же, как в каталоге Kaspi) +
-        intra-batch дубли + matched-без-работы; у батча удаления — позиции, ушедшие из работы
-        не через удаление (например, переизданные повторной заливкой).
-
-        Ключ `deleted` присутствует ВСЕГДА (у `ingest` — ноль), чтобы форма ответа не зависела
-        от вида батча.
-      properties:
-        batch_id: {type: string, format: uuid, example: "8f14e45f-ceea-467e-9a2c-0000000000aa"}
-        kind:
-          type: string
-          enum: [ingest, delete]
-          description: "Вид батча. Определяет, какой инвариант totals применять (см. описание схемы)."
-          example: ingest
-        status:
-          type: string
-          enum: [accepted, processing, completed, partially_failed]
-          description: "processing — строки в очереди дрипа; completed/partially_failed — все финализированы (partially_failed = были failed)."
-          example: processing
-        totals:
-          type: object
-          properties:
-            total: {type: integer, description: "Принятые items (без rejected).", example: 6870}
-            created: {type: integer, example: 5868}
-            updated: {type: integer, example: 3}
-            deleted: {type: integer, description: "Позиции, снятые в Kaspi. Ненулевой только у `kind: delete`.", example: 0}
-            skipped: {type: integer, example: 996}
-            failed: {type: integer, example: 3}
-        pending_remaining: {type: integer, description: "Сколько строк батча ещё не финализировано (0 = готово).", example: 1002}
-        poll_url: {type: string, description: "URL GET /catalog/batches/{id}.", example: "https://api.apipay.kz/api/v1/catalog/batches/8f14e45f-ceea-467e-9a2c-0000000000aa"}
-        created_at: {type: string, format: date-time, nullable: true, example: "2026-07-11T10:00:00+00:00"}
-        completed_at: {type: string, format: date-time, nullable: true, example: null}
+        failed_at: {type: string, format: date-time, description: "Момент отказа операции, ISO 8601.", example: "2026-07-11T10:03:00+05:00"}
     WebhookCatalogItemProcessed:
       type: object
       description: |
         Payload вебхука catalog.item_processed. Таймстамп UTC +00:00. Сверяйте по
-        catalog_item.external_ref (ключ маппинга 1С, UNIQUE per org).
+        catalog_item.external_ref (ключ маппинга 1С, UNIQUE в пределах оси организации).
       properties:
         event: {type: string, example: catalog.item_processed}
         catalog_item:
           type: object
           properties:
             id: {type: integer, example: 12345}
-            external_ref: {type: string, nullable: true, description: "Клиентская ссылка 1С (ключ сверки, UNIQUE per org).", example: "1c-товар-0042"}
+            external_ref: {type: string, nullable: true, description: "Клиентская ссылка 1С (ключ сверки, UNIQUE в пределах боевой/песочной оси организации).", example: "1c-товар-0042"}
             kaspi_item_id: {type: string, nullable: true, example: "MP-987654"}
             name: {type: string, example: "Кофе зерновой 1 кг"}
             barcode: {type: string, nullable: true, example: "4870000000001"}
             ntin: {type: string, nullable: true, example: "07622300000001"}
             gtin: {type: string, nullable: true, example: "07622300000001"}
             ntin_missing: {type: boolean, description: "true = есть barcode, нет НТИН → позиция не попадёт в фискальный чек (notify-only).", example: false}
-            status: {type: string, enum: [active, failed], example: active}
-            error_code: {type: string, nullable: true, description: "snake_case-код (non-null только при status=failed).", example: null}
+            status: {type: string, enum: [active, pending, deleting, deleted, failed], example: active, description: "Тот же производный статус, что у GET /catalog — словарь один на обе поверхности. Вид открытой операции дополнительно виден в operation."}
+            sellable: {type: boolean, description: "Можно ли ставить позицию в счёт: снимаемую позицию корзина отбивает.", example: true}
+            in_kaspi_catalog: {type: boolean, description: "Уйдёт ли позиция как каталожный товар с маркировкой Нацкаталога. false = счёт создастся, но позиция уедет быстрой продажей и маркировки в фискальном чеке не будет. ⚠️ В песочнице всегда false (синтетическая идентичность тестовой оси) — о боевой позиции это ничего не говорит.", example: true}
+            operation: {type: string, nullable: true, enum: [create, update, delete], description: "Отказанная операция; null после успешного завершения.", example: null}
+            error_code: {type: string, nullable: true, description: "snake_case-код отказа operation.", example: null}
             error_message: {type: string, nullable: true}
+            failed_at: {type: string, format: date-time, nullable: true}
         timestamp: {type: string, format: date-time, example: "2026-07-09T14:37:00+00:00"}
-    WebhookCatalogBatchProcessed:
-      type: object
-      description: |
-        Payload вебхука catalog.batch_processed. Таймстамп UTC +00:00. Дедуп по
-        `(batch_id, status)`. `sample_failed` — до 50 позиций БЕЗ error_message и имён
-        товаров (anti-leak); полные ошибки — GET /catalog/errors?batch_id=.
-      properties:
-        event: {type: string, example: catalog.batch_processed}
-        batch_id: {type: string, format: uuid, example: "8f14e45f-ceea-467e-9a2c-0000000000aa"}
-        kind:
-          type: string
-          enum: [ingest, delete]
-          description: "Вид батча — определяет, какой инвариант totals применять (см. CatalogBatch)."
-          example: ingest
-        status: {type: string, enum: [completed, partially_failed], example: partially_failed}
-        totals:
-          type: object
-          properties:
-            total: {type: integer, example: 6870}
-            created: {type: integer, example: 5868}
-            updated: {type: integer, example: 3}
-            deleted: {type: integer, description: "Ненулевой только у `kind: delete`.", example: 0}
-            skipped: {type: integer, example: 996}
-            failed: {type: integer, example: 3}
-        sample_failed:
-          type: array
-          description: "До 50 отвергнутых позиций (external_ref + error_code, без текста)."
-          items:
-            type: object
-            properties:
-              external_ref: {type: string, nullable: true, example: "1C-000456"}
-              error_code: {type: string, nullable: true, example: catalog_item_duplicate}
-        poll_url: {type: string, example: "https://api.apipay.kz/api/v1/catalog/batches/8f14e45f-ceea-467e-9a2c-0000000000aa"}
-        timestamp: {type: string, format: date-time, example: "2026-07-11T10:12:00+00:00"}
     WebhookReceiptEvent:
       type: object
       description: |
@@ -5713,14 +5555,41 @@ components:
           enum: [active, pending, deleting, deleted, failed]
           example: active
           description: >-
-            `pending` — заведена у нас, ждёт отправки в Kaspi; `active` — продаётся;
-            `deleting` — снятие запланировано или выполняется, продавать позицию уже нельзя;
-            `deleted` — снята; `failed` — провести позицию не удалось: причина в полях
-            `error_code`/`error_message` самой позиции, ошибки заливки дополнительно
-            доступны через `GET /catalog/errors` (окно по умолчанию — 7 дней).
-            ⛔ Позиция в `deleting` НЕ принимается в корзину ни на одной платёжной
-            поверхности — см. `CartItem.catalog_item_id`. Она восстановима: пришлите её
-            обычным `POST /catalog`, и удаление отменится.
+            Производный статус позиции (вычисляется из её состояния, не хранится):
+            `active` — в каталоге, незакрытых create/delete нет; `pending` — создаётся, в
+            каталоге Kaspi её сейчас нет; `deleting` — снимается; `deleted` — снята;
+            `failed` — операция над позицией брошена после исчерпания попыток. Значения
+            взаимоисключающие, приоритет веток фиксирован
+            (failed → pending → deleting → deleted → active): открытая операция проверяется
+            выше состояния позиции, поэтому снятая позиция с открытым повторным созданием
+            читается как `pending`, а не как `deleted`. Вид самой операции — в `operation`.
+        sellable:
+          type: boolean
+          description: >-
+            Примут ли позицию в корзину счёта / QR / подписки. `false` у снятой позиции и у
+            позиции с открытым намерением удаления — даже если попытки удаления прекращены;
+            повторный `POST /catalog` или `PATCH` возвращает её в продажу.
+        in_kaspi_catalog:
+          type: boolean
+          description: >-
+            Есть ли у позиции боевая идентичность номенклатуры Kaspi. `false` — счёт
+            создастся, но позиция уедет разовой продажей: маркировка Нацкаталога в
+            фискальный чек по ней не проводится. ⚠️ Это НЕ то же самое, что `sellable`:
+            позиция может продаваться без каталожной идентичности и наоборот.
+            ⚠️ **В песочнице флаг всегда `false`** — песочные позиции носят синтетическую
+            идентичность номенклатуры, которой в Kaspi не существует. Это свойство тестового
+            контура, а не предсказание для боевой позиции: маркировку проверяют только на
+            боевой оси организации, `false` в песочнице поломкой не является.
+        operation:
+          type: string
+          nullable: true
+          enum: [create, update, delete]
+          description: >-
+            Единственное не закрытое намерение над позицией. null — намерения нет;
+            create/update/delete — заявленная операция. При отказе значение сохраняется вместе с error_code,
+            error_message и failed_at. ⛔ Любая позиция с operation=delete не принимается в
+            корзину, даже если попытки удаления прекращены; повторный POST/PATCH заменяет
+            намерение и возвращает позицию в работу.
         error_message: {type: string, nullable: true}
         error_code: {$ref: '#/components/schemas/ErrorCode'}
         created_at: {type: string, format: date-time}
@@ -5729,7 +5598,7 @@ components:
       type: object
       description: |
         Позиция POST /catalog, не прошедшая per-item валидацию. Возвращается в массиве
-        `rejected[]` ответа (`202`/`201`), не роняя запрос. Валидные позиции того же батча
+        `rejected[]` ответа `202`, не роняя запрос. Валидные позиции того же запроса
         обрабатываются штатно (`data[]`).
       required: [index, error_code, error_message]
       properties:
@@ -6240,41 +6109,26 @@ x-webhooks:
       tags: [Webhooks]
       summary: Позиция каталога обработана
       description: |
-        Позиция каталога заведена в Kaspi (`status: active`) либо отвергнута
-        (`status: failed`, причина в `error_code`). Шлётся всегда, отключить его нельзя.
+        Позиция каталога обработана. `status` здесь — **тот же производный статус, что у
+        листинга** `GET /catalog` (`active|pending|deleting|deleted|failed`), с тем же
+        приоритетом веток: поле с одним именем не несёт двух словарей, и значение в push
+        всегда совпадает с тем, что вернёт `GET /catalog` по этой позиции. Рядом едут
+        `sellable` (примут ли позицию в корзину) и `in_kaspi_catalog` (уедет ли она
+        каталожным товаром с маркировкой Нацкаталога).
+        `operation` — незакрытое либо отказавшее намерение (`create|update|delete`), null —
+        работа завершена; причина отказа лежит в `error_code`, момент — в `failed_at`.
+        Шлётся всегда, отключить его нельзя.
         Неуспешная доставка повторяется до трёх раз с нарастающей паузой.
         Сверяйте по `external_ref` (ключ маппинга 1С,
-        UNIQUE per org). При bulk-заливке предпочтителен поллинг targeted-GET
-        `GET /catalog?external_refs[]=…`; вебхук равноправен для точечных операций.
+        UNIQUE в пределах оси организации). Для большой заливки используйте targeted-GET
+        `GET /catalog?external_refs[]=…` для сверки и счётчики `GET /catalog/queue` для
+        остатка; вебхук приходит по каждой завершённой или отказанной строке.
         Доставки логируются в `GET /catalog/webhook-logs` (ротация 3 дня).
-        **При bulk-заливке через per-item очередь (батч-дрип) per-item НЕ шлётся** — его
-        заменяет агрегатный `catalog.batch_processed`.
       requestBody:
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/WebhookCatalogItemProcessed'
-      responses:
-        '200':
-          description: Принято.
-  catalog.batch_processed:
-    post:
-      tags: [Webhooks]
-      summary: Bulk-батч каталога обработан
-      description: |
-        Итог bulk-заливки каталога (POST /catalog инжест-путь): ОДИН агрегированный вебхук
-        вместо лавины per-item. Шлётся при завершении батча (все строки финализированы),
-        всегда — отключить его нельзя.
-        Вебхук шлётся на переход processing→terminal; повторы возможны — дедуплицируйте по
-        `(batch_id, status)`. `sample_failed` — до 50 `{external_ref, error_code}` БЕЗ текста
-        ошибки (детали — `GET /catalog/errors?batch_id=`). Сценарий: батч `completed`/
-        `partially_failed` → при `failed>0` вытяните ошибки через `GET /catalog/errors?batch_id=`,
-        полный прогресс — `GET /catalog/batches/{id}`.
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/WebhookCatalogBatchProcessed'
       responses:
         '200':
           description: Принято.

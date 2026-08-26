@@ -16,7 +16,7 @@ Configure webhooks in [ApiPay.kz Dashboard](https://apipay.kz) → Settings → 
 
 ## Events
 
-ApiPay sends 21 event types:
+ApiPay sends 20 event types:
 
 | Event | Description |
 |-------|-------------|
@@ -26,8 +26,7 @@ ApiPay sends 21 event types:
 | `qr_refund.identified` | The customer scanned the refund QR (session → `customer_identified`) |
 | `qr_refund.completed` | The QR refund was completed (`refunded_amount`, `receipt_url`) |
 | `qr_refund.expired` | The refund QR expired before the customer was identified |
-| `catalog.item_processed` | A catalog item was processed (`status`: `active`/`failed`); in a queued bulk upload it is replaced by the aggregated `catalog.batch_processed` |
-| `catalog.batch_processed` | The outcome of a bulk catalog operation as a single aggregate (`kind`, `totals`, `sample_failed[]`). `kind: ingest` — an upload, `kind: delete` — a bulk deletion |
+| `catalog.item_processed` | An operation on a catalog item was closed. Sent **for every item, always** — there is no bulk aggregate any more |
 | `receipt.issued` | A fiscal receipt was successfully issued (Kaspi OFD) |
 | `receipt.failed` | Issuing a fiscal receipt failed |
 | `subscription.created` | A subscription was created |
@@ -42,7 +41,9 @@ ApiPay sends 21 event types:
 | `cashbox.shift_close_failed` | Closing a cash register shift failed (`error_code`) |
 | `webhook.test` | Test event from the dashboard |
 
-> Full payloads for the `qr_refund.*` and `catalog.*` events are in `openapi.yaml`, section `x-webhooks`.
+> Full payloads for the `qr_refund.*` events are in `openapi.yaml`, section `x-webhooks`.
+
+> ⛔ The `catalog.batch_processed` event is **never sent**: the aggregate for bulk catalog operations has been removed. Same address, same signature — just silence, and no error tells you so. If you were waiting on that webhook as the "upload finished" signal, switch to `catalog.item_processed` plus your own list of `external_ref` values.
 
 ### invoice.status_changed
 
@@ -268,6 +269,53 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
 | `refund.items` | array \| null | Refund line items (only for itemized refunds): `catalog_item_id`, `name`, `price`, `count`, `amount`. |
 | `invoice.available_for_refund` | number | Amount still available for refund. Comes as a number (float), unlike `amount` and `total_refunded` (strings). |
 | `invoice.status` | string | Invoice status after the refund. A full refund does **not** change the status (stays `paid` — or `partially_refunded` if there was an earlier partial one) + `is_fully_refunded=true`; the first partial refund moves it to `partially_refunded` (and an `invoice.status_changed` is also sent). |
+
+### catalog.item_processed
+
+Sent when an operation on a catalog item is closed — a creation, an edit or a removal, successful or failed.
+
+> ⚠️ **The event arrives for every item, always.** There is no bulk aggregate any more: uploading 50 items produces **up to 50 deliveries** instead of one. Your receiver has to handle that.
+
+```json
+{
+  "event": "catalog.item_processed",
+  "catalog_item": {
+    "id": 12345,
+    "external_ref": "1C-000123",
+    "kaspi_item_id": "MP-000000",
+    "name": "Coffee Beans 1 kg",
+    "barcode": "4870000000001",
+    "ntin": "00000000000001",
+    "gtin": null,
+    "ntin_missing": false,
+    "status": "active",
+    "sellable": true,
+    "in_kaspi_catalog": true,
+    "operation": null,
+    "error_code": null,
+    "error_message": null,
+    "failed_at": null
+  },
+  "timestamp": "2026-08-26T14:37:00+00:00"
+}
+```
+
+**Payload fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `catalog_item.external_ref` | string \| null | Your own reference for the item (for example a 1C item code) — the reconciliation key. |
+| `catalog_item.status` | string | The same derived status and the same vocabulary as `GET /catalog`: `active`, `pending`, `deleting`, `deleted`, `failed`. The push and the listing always agree. |
+| `catalog_item.operation` | string \| null | What was happening to the item: `create`, `update`, `delete`. `null` after a successful completion; on a failure the value is kept. |
+| `catalog_item.sellable` | boolean | Whether the item is accepted into an invoice cart, a QR or a subscription. |
+| `catalog_item.in_kaspi_catalog` | boolean | Whether the item has a production Kaspi nomenclature identity. Always `false` in the sandbox. |
+| `catalog_item.error_code` | string \| null | The failure code of the operation. |
+| `catalog_item.failed_at` | string \| null | The moment of failure (ISO 8601). |
+| `catalog_item.ntin_missing` | boolean | `true` — the item has a barcode but no NTIN: it will not enter a fiscal receipt as a marked good. |
+
+More on statuses, the `operation` axis and the flags: [Catalog](catalog.md#item-statuses).
+
+"The bulk work is done" is a conclusion you draw from your own list of `external_ref` values. The remaining queue and the failures are also visible through `GET /catalog/queue` and `GET /catalog/errors`.
 
 ### receipt.issued
 

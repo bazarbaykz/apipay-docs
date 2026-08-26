@@ -162,6 +162,20 @@ curl https://api.apipay.kz/api/v1/invoices/42/refunds \
 | `completed` | Successfully completed |
 | `failed` | Failed (e.g., Kaspi rejection) |
 
+### Why a Refund Failed
+
+For a refund with status `failed`, the reason arrives as a code in `error_code` — in `GET /invoices/{id}/refunds` and in the `invoice.refunded` webhook (`refund.error_code`):
+
+| Code | What it means | What to do |
+|------|---------------|------------|
+| `refund_window_expired` | Kaspi rejected the refund: the refund window may have expired, or the refund was already made | Do not retry |
+| `refund_rejected_by_kaspi` | Kaspi rejected the refund on this operation. The rejection may be temporary | Retry later; if that fails, make the refund by hand in the Kaspi Pay app |
+| `refund_requires_buyer_confirmation` | This operation needs a QR refund — the buyer confirms it themselves | Create a QR refund via `POST /qr-refunds` and show the QR to the buyer |
+
+> ⛔ The server does not retry a failed refund on its own: a row with status `failed` is final at once. A retry means a **new refund request** from your side.
+
+The full list of codes is in [Error Codes](errors.md).
+
 ## Refund Rules
 
 1. **Only paid invoices** — Refund invoices with `status: "paid"` or `"partially_refunded"`

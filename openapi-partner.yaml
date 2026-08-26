@@ -101,6 +101,10 @@ tags:
     description: Тариф мерчанта — каталог, статус/мониторинг, оплата, история платежей
   - name: Health
     description: Агрегированный health аккаунта партнёра
+  - name: KYC
+    description: Анкета клиента — статус и выдача ссылки на заполнение
+  - name: Subscription sync
+    description: Синхронизация подписки мерчанта с биллингом партнёра и журнал приёма
 paths:
   /organizations:
     get:
@@ -143,6 +147,26 @@ paths:
           description: Фильтр по sandbox-режиму (принимает true/false/1/0)
           schema:
             type: boolean
+        - name: is_test
+          in: query
+          required: false
+          description: >-
+            Фильтр по тестовым организациям (принимает true/false/1/0).
+            Отдельный от `sandbox_mode`: у боевой организации `sandbox_mode`
+            остаётся `true` до первой авторизации кассира.
+          schema:
+            type: boolean
+        - name: kyc_status
+          in: query
+          required: false
+          description: >-
+            Фильтр по статусу анкеты. Принимает один статус или список через
+            запятую: `?kyc_status=required,needs_changes` — это клиенты, которым
+            анкету нужно заполнить или переделать. Неизвестное значение и пустая
+            строка отбиваются 422 (а не игнорируются молча).
+          schema:
+            type: string
+          example: required,needs_changes
         - name: search
           in: query
           required: false
@@ -180,6 +204,7 @@ paths:
                     idn: "123456789012"
                     status: verified
                     sandbox_mode: false
+                    is_test: false
                     has_catalog: false
                     kaspi_connected: true
                     session_mode: self
@@ -255,6 +280,23 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/ForbiddenNotOperating"
+        "409":
+          description: >-
+            `external_id` принадлежит организации, которую вы ранее удалили
+            (`DELETE /organizations/{organization}`). Удалённая организация не
+            воскрешается: её API-ключи деактивированы. Для нового клиента
+            используйте новый `external_id`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: organization_deleted
+                error_code: organization_deleted
+                message: >-
+                  Организация с таким external_id удалена — заведите нового
+                  клиента с новым external_id.
         "422":
           $ref: "#/components/responses/LaravelValidationError"
         "429":
@@ -568,8 +610,6 @@ paths:
                     error: entrance_auth_disabled
                     error_code: entrance_auth_disabled
                     message: Подключение кассира временно недоступно, идут технические работы.
-        "429":
-          $ref: "#/components/responses/RateLimited"
   /organizations/{organization}/kaspi-auth/verify-otp:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
@@ -644,6 +684,7 @@ paths:
                       name: ТОО Синие птицы
                       status: verified
                       sandbox_mode: false
+                      is_test: false
                       kaspi_connected: true
                     process_status: active
                 invalid_otp:
@@ -665,11 +706,11 @@ paths:
             `no_process` (авторизация не начата/истекла), `cashier_unavailable`
             (подключить этого кассира сейчас нельзя; повтор не поможет),
             `context_expired` (Kaspi потерял контекст процесса — нужен новый
-            `init`, а не повтор OTP).
+            `init`, а не повтор OTP), `organization_identity_conflict`
+            (Kaspi identity не совпала либо уже занята другой Organization).
 
 
-            ⚠️ Кода `org_transferred` на партнёрских поверхностях нет: организация
-            в партнёрском контуре автоматически к другому владельцу не переходит.
+            Cashier auth никогда не переносит владельца автоматически.
           content:
             application/json:
               schema:
@@ -699,8 +740,9 @@ paths:
                 message: Номер не зарегистрирован как кассир Kaspi.
         "502":
           description: >-
-            Не удалось завершить подключение кассира на стороне Kaspi.
-            Повторите подключение с шага `init`.
+            `organization_identity_unavailable` — Kaspi не вернул единую полную
+            пару IDN + OrganizationId; persisted session и Organization не изменены.
+            Остальные сбои Kaspi также могут отвечать HTTP 502.
           content:
             application/json:
               schema:
@@ -763,6 +805,14 @@ paths:
                     example: none
                   process_status:
                     $ref: "#/components/schemas/ProcessStatus"
+                  attempt_status:
+                    type: string
+                    description: >-
+                      Статус отдельной попытки авторизации. Когда попытки нет — строка
+                      `none`, не null. Persisted session не очищается в начале reauth.
+                      Значения контрактом не фиксированы — ветвитесь по `status` и
+                      `process_status`, а не по этому полю.
+                    example: none
                   kaspi_connected:
                     type: boolean
                     example: false
@@ -775,6 +825,7 @@ paths:
                 success: true
                 status: none
                 process_status: idle
+                attempt_status: none
                 kaspi_connected: false
                 expires_at: null
         "401":
@@ -1646,6 +1697,393 @@ paths:
                 message: Не найдено.
         "429":
           $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/kyc:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      tags: [KYC]
+      summary: Статус анкеты мерчанта
+      description: >-
+        До одобрения анкеты у мерчанта действует суточный потолок счетов, поэтому статус
+        нужен вам для сопровождения клиента. `required_action` — производное поле: не
+        зашивайте у себя маппинг наших статусов.
+      operationId: getPartnerOrganizationKyc
+      responses:
+        "200":
+          description: Статус анкеты
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  kyc:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [required, submitted, needs_changes, approved, blocked]
+                      required_action:
+                        type: string
+                        enum: [submit_profile, wait_review, fix_and_resubmit, none, contact_support]
+                      can_submit:
+                        type: boolean
+                      comment:
+                        type: string
+                        nullable: true
+                        description: >-
+                          Замечание модератора. Приходит только при `needs_changes` —
+                          передайте его клиенту дословно.
+                      submitted_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      submitted_via:
+                        type: string
+                        nullable: true
+                        enum: [merchant, invite]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+  /organizations/{organization}/kyc/invite:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [KYC]
+      summary: Выдать клиенту ссылку на анкету
+      description: >-
+        Возвращает персональную ссылку на анкету KYC — передайте её мерчанту. Он заполняет и
+        подтверждает анкету сам, аккаунт в ApiPay ему для этого не нужен.
+
+
+        ⛔ Подать анкету за мерчанта нельзя: в ней есть подтверждение о неторговле
+        запрещённым — юридическое заверение, которое должен давать тот, у кого факты.
+
+
+        ⚠️ Ссылка показывается **один раз**: у нас хранится только её хеш. Новая выдача
+        отзывает предыдущую.
+
+
+        ⚠️ Эта дверь работает только с организациями, которые вы завели сами. Организацию,
+        где владельцем остаётся мерчант, она не видит — ссылку для неё выдают из кабинета.
+      operationId: issuePartnerKycInvite
+      responses:
+        "201":
+          description: Ссылка выдана
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  invite_url:
+                    type: string
+                    example: https://apipay.kz/invite/2f6c…
+                  expires_at:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenNotOperating"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "409":
+          description: >-
+            Организация тестовая (`test_organization`) либо анкета уже подана/проверена
+            (`kyc_already_submitted`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/subscription:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    put:
+      tags: [Subscription sync]
+      summary: Синхронизировать подписку мерчанта
+      description: >-
+        Объявляет **текущее состояние** подписки мерчанта в вашем биллинге; мы приводим
+        его тариф в соответствие. Форма декларативная — присылайте состояние целиком, а не
+        отдельные события: повтор того же запроса безопасен, пропущенная доставка чинится
+        следующей, порядок доставки значения не имеет.
+
+
+        Требует **двух** заголовков помимо ключа: `X-ApiPay-Timestamp` (unix-секунды) и
+        `X-ApiPay-Signature` = `sha256=<hmac_sha256("{timestamp}.{МЕТОД}.{путь}.{тело}", secret)>`,
+        где `secret` — отдельный секрет приёма, выданный ApiPay (это НЕ секрет ваших исходящих
+        вебхуков). Метод и путь входят в подпись: организация задаётся путём, и без них
+        перехваченный запрос можно было бы переиграть на другую вашу организацию. Метка
+        времени должна быть свежей — расхождение в несколько минут отклоняется. Тело
+        подписывается сырым: пересборка JSON ломает подпись.
+
+
+        ⛔ Тариф двигается **только вперёд и только вверх**: более ранняя дата не укорачивает
+        оплаченный срок (ответ `unchanged`), понижение тира отклоняется. Отзыва тарифа через
+        этот эндпоинт нет: `suspended`/`cancelled` фиксируются, но срок не трогают —
+        выданный период истечёт сам. Поэтому синхронизируйте помесячно.
+
+
+        ⚠️ Суточный лимит счетов и название тарифа мы берём из ваших договорных условий, а не
+        из запроса. Если вы их прислали, они вернутся в блоке `ignored` вместе с тем, что
+        реально применено.
+      operationId: syncPartnerSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [active, suspended, cancelled]
+                  description: Состояние подписки на вашей стороне.
+                  example: active
+                tier:
+                  type: string
+                  description: >-
+                    Идентификатор тарифа ApiPay. Обязателен при `state: active`.
+                  example: business
+                paid_through:
+                  type: string
+                  format: date-time
+                  description: >-
+                    Дата, до которой подписка оплачена. Обязательна при `state: active`.
+                  example: "2026-09-12T18:50:12+05:00"
+                cause:
+                  type: string
+                  description: Повод изменения на вашей стороне (только для журнала).
+                  example: autoprolongation
+                trial:
+                  type: boolean
+                  description: >-
+                    Признак пробного периода у вас. Информационный: наш собственный
+                    пробный период он не расходует.
+                  example: false
+                external_tariff_id:
+                  type: string
+                  description: >-
+                    Ваш устойчивый идентификатор тарифа. Настоятельно рекомендуется:
+                    названия тарифов меняются, идентификаторы — нет.
+                partner_context:
+                  type: object
+                  description: >-
+                    Произвольный контекст для журнала. ⛔ Персональных данных здесь быть
+                    не должно.
+              example:
+                state: active
+                cause: autoprolongation
+                tier: business
+                paid_through: "2026-09-12T18:50:12+05:00"
+                trial: false
+                external_tariff_id: 23ca69d4-2657-40c4-8ba1-6ce24ddeac2e
+      responses:
+        "200":
+          description: >-
+            Состояние принято. `result`: `applied` — тариф изменён; `unchanged` — уже
+            соответствует (в том числе если ваша дата не дальше текущей); `noted` —
+            приостановка/отмена зафиксирована, тариф не тронут.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionSyncResult"
+        "401":
+          description: >-
+            Нет ключа, подпись не сошлась (`invalid_signature`), метка времени устарела
+            (`signature_expired`) либо приём не настроен (`inbound_not_configured`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: >-
+            Приём выключен (`inbound_sync_disabled`), назначение тарифа недоступно
+            (`assignment_not_enabled`) либо аккаунт неактивен (`partner_not_active`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Организация не найдена или не ваша (`organization_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            Организация тестовая (`test_organization`), удалена (`organization_deleted`),
+            оплачивает тариф самостоятельно (`claimed_paying_organization`), имеет
+            индивидуальные условия (`custom_tariff_locked`), жёсткое тарифное ограничение
+            (`hard_limited_org`), запрошено понижение тира
+            (`tier_downgrade_not_allowed`) либо по ней идёт другая тарифная операция
+            (`tariff_payment_pending`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "413":
+          description: Тело запроса превышает допустимый размер (`payload_too_large`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            Неизвестное состояние (`unsupported_state`), не хватает `tier`/`paid_through`
+            (`subscription_terms_required`), дата в прошлом (`invalid_paid_through`),
+            тариф вне вашей сетки (`tier_not_in_partner_grid`) либо срок уходит дальше
+            чем на год (`assignment_horizon_exceeded`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          description: >-
+            Частота вызовов превышена либо слишком часто меняется тариф этой организации
+            (`tier_switch_rate_limited`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /subscription-syncs:
+    get:
+      tags: [Subscription sync]
+      summary: Журнал синхронизаций подписки
+      description: >-
+        Что мы приняли и почему отказали — по каждому вашему вызову, включая отказы.
+      operationId: listPartnerSubscriptionSyncs
+      parameters:
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+        - name: organization_id
+          in: query
+          required: false
+          description: >-
+            Организация. Чужой или несуществующий id даёт пустую страницу, а не
+            отказ — существование чужих записей мы не подтверждаем.
+          schema:
+            type: integer
+        - name: result
+          in: query
+          required: false
+          description: Неизвестное значение — 422, а не пустая страница.
+          schema:
+            type: string
+            enum: [applied, unchanged, noted, rejected, failed]
+        - name: state
+          in: query
+          required: false
+          description: Состояние подписки, которое вы присылали в этом вызове.
+          schema:
+            type: string
+            enum: [active, suspended, cancelled]
+        - name: from
+          in: query
+          required: false
+          description: >-
+            Нижняя граница окна по времени приёма (`received_at`), включительно.
+            Голая дата трактуется в Asia/Almaty — в той же зоне, в которой ответ
+            рендерит даты.
+          schema:
+            type: string
+            format: date
+          example: "2026-08-01"
+        - name: to
+          in: query
+          required: false
+          description: >-
+            Верхняя граница, включительно. Дата без времени охватывает сутки
+            целиком. Должна быть не раньше `from`, иначе 422.
+          schema:
+            type: string
+            format: date
+          example: "2026-08-31"
+      responses:
+        "200":
+          description: Страница журнала
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SubscriptionSyncRecord"
+                  current_page:
+                    type: integer
+                  per_page:
+                    type: integer
+                  total:
+                    type: integer
+                  last_page:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Неизвестное значение фильтра либо `to` раньше `from`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /subscription-syncs/{sync}:
+    parameters:
+      - name: sync
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Subscription sync]
+      summary: Одна запись журнала синхронизаций
+      description: >-
+        То же, что в списке, плюс исходное тело запроса (`payload`).
+      operationId: getPartnerSubscriptionSync
+      responses:
+        "200":
+          description: Запись журнала
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sync:
+                    $ref: "#/components/schemas/SubscriptionSyncRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Запись не найдена или не ваша (`sync_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /health:
     get:
       tags: [Health]
@@ -1663,6 +2101,16 @@ paths:
                 $ref: "#/components/schemas/PartnerHealth"
               example:
                 success: true
+                account:
+                  mode: production
+                  type: operating
+                  api_access_status: granted
+                  tariff_billing_mode: assignment
+                  inbound_sync:
+                    enabled: true
+                    secret_configured: true
+                    secret_hint: "••••a1b2"
+                    accepting: true
                 api: { status: ok }
                 organizations:
                   total: 12
@@ -1671,6 +2119,12 @@ paths:
                   tariff_active: 7
                   tariff_expired: 2
                   on_trial: 3
+                  kyc:
+                    required: 2
+                    submitted: 1
+                    needs_changes: 0
+                    approved: 9
+                    blocked: 0
                 webhooks: { delivered_24h: 340, failed_24h: 5, success_rate: 98.6 }
                 rate_limits: { partner_api_per_min: 120 }
         "401":
@@ -1718,7 +2172,25 @@ components:
           example: pending
         sandbox_mode:
           type: boolean
+          description: >-
+            Кассир Kaspi ещё не подключён. НЕ синоним `is_test`: у боевой
+            организации остаётся `true` до первой успешной авторизации кассира.
           example: false
+        is_test:
+          type: boolean
+          description: >-
+            Организация создана, пока ваш аккаунт был в режиме sandbox. Неизменяемо.
+            Такие организации живут по мок-контуру и **удаляются** при переводе
+            аккаунта в production — боевых данных в них не бывает.
+          example: false
+        kyc_status:
+          type: string
+          enum: [required, submitted, needs_changes, approved, blocked]
+          description: >-
+            Статус анкеты клиента. До одобрения у мерчанта действует суточный
+            потолок счетов, поэтому статус виден и в карточке. Комментарий
+            модератора сюда не кладётся — он только в `GET .../kyc`.
+          example: approved
         has_catalog:
           type: boolean
           example: false
@@ -1753,6 +2225,41 @@ components:
         has_active_payment:
           type: boolean
           example: false
+        tariff:
+          type: object
+          description: >-
+            Действующие тарифные условия — по чему мерчант работает прямо сейчас.
+            Тот же словарь отдают синхронизация подписки (блок `applied`) и
+            `GET /tariff-plans`. Сумм здесь нет: цена — в `GET .../tariff`.
+          properties:
+            tier:
+              type: string
+              nullable: true
+              description: >-
+                Базовый идентификатор тарифа либо `null`, если строки тарифа нет.
+                Значением `custom` не бывает никогда — договорные условия
+                отмечаются флагом `is_custom`.
+              example: business
+            tier_label:
+              type: string
+              description: >-
+                Отображаемое имя условий. У договорных условий — их собственное
+                имя, поэтому равенства с `tier` ждать не нужно.
+              example: Бизнес
+            daily_limit:
+              type: integer
+              nullable: true
+              description: Суточный потолок счетов по действующим условиям
+              example: 100
+            is_custom:
+              type: boolean
+              description: Условия договорные, а не из общей сетки
+              example: false
+            limits_source:
+              type: string
+              enum: [config, partner_grid, org_override]
+              description: Откуда взялся лимит — общие условия, ваша сетка или льгота клиента
+              example: partner_grid
         created_at:
           type: string
           format: date-time
@@ -1849,7 +2356,7 @@ components:
           type: string
           format: uri
           description: Ссылка на PDF счёта; открывается без авторизации — передавайте её только покупателю
-          example: https://apipay.kz/invoices/xxxxxxxx/download
+          example: https://api.apipay.kz/invoices/xxxxxxxx/download
         buyer_name:
           type: string
           example: ТОО "Ромашка"
@@ -1914,12 +2421,128 @@ components:
           type: string
           format: uri
           description: Ссылка на PDF счёта; открывается без авторизации — передавайте её только покупателю
-          example: https://apipay.kz/invoices/xxxxxxxx/download
+          example: https://api.apipay.kz/invoices/xxxxxxxx/download
         created_at:
           type: string
           format: date-time
           description: Asia/Almaty (+05:00)
           example: "2026-07-09T12:00:00+05:00"
+    SubscriptionSyncResult:
+      type: object
+      description: Результат синхронизации подписки.
+      properties:
+        success:
+          type: boolean
+          example: true
+        sync_id:
+          type: integer
+          description: Идентификатор записи журнала — по нему смотрят разбор постфактум.
+          example: 8123
+        result:
+          type: string
+          enum: [applied, unchanged, noted]
+          example: applied
+        organization_id:
+          type: integer
+          example: 829
+        external_id:
+          type: string
+          nullable: true
+          example: crm-client-42
+        tariff_unchanged:
+          type: boolean
+          description: >-
+            Присутствует при `result: noted`. Явное напоминание, что приостановка на вашей
+            стороне срок мерчанта НЕ укоротила.
+          example: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Действующая дата окончания тарифа (при `result: noted`)."
+        applied:
+          type: object
+          description: Что реально действует у мерчанта после синхронизации.
+          properties:
+            tier:
+              type: string
+              example: business
+            tier_label:
+              type: string
+              example: Бизнес
+            daily_limit:
+              type: integer
+              nullable: true
+              example: 100
+            limits_source:
+              type: string
+              enum: [config, partner_grid, org_override]
+              example: partner_grid
+            expires_at:
+              type: string
+              format: date-time
+              example: "2026-09-12T23:50:12+05:00"
+            status:
+              type: string
+              example: active
+        ignored:
+          type: object
+          additionalProperties: true
+          description: >-
+            Поля, которые вы прислали, но которые определяются вашими договорными условиями,
+            а не запросом. Формат — `{ поле: { sent, applied } }`.
+          example:
+            daily_limit:
+              sent: 999
+              applied: 100
+    SubscriptionSyncRecord:
+      type: object
+      description: Запись журнала синхронизаций.
+      properties:
+        id:
+          type: integer
+        organization_id:
+          type: integer
+          nullable: true
+        state:
+          type: string
+          example: active
+        cause:
+          type: string
+          nullable: true
+        requested_tier:
+          type: string
+          nullable: true
+        requested_paid_through:
+          type: string
+          format: date-time
+          nullable: true
+        applied_tier:
+          type: string
+          nullable: true
+        applied_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        result:
+          type: string
+          enum: [applied, unchanged, noted, rejected, failed]
+        outcome_code:
+          type: string
+          nullable: true
+          description: "Точная причина отказа или успеха — слаг ошибки либо applied/unchanged/noted."
+        http_status:
+          type: integer
+        external_tariff_id:
+          type: string
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          additionalProperties: true
+          description: Исходное тело запроса. Отдаётся только в карточке одной записи.
     TariffSnapshot:
       type: object
       description: Снимок подписки мерчанта на ApiPay.
@@ -1932,6 +2555,26 @@ components:
           type: string
           nullable: true
           example: business
+        tier_label:
+          type: string
+          nullable: true
+          description: >-
+            Витринное имя тарифа. Если для вас задана сетка с white-label именем —
+            приходит оно.
+          example: Бизнес
+        daily_limit:
+          type: integer
+          nullable: true
+          description: >-
+            ДЕЙСТВУЮЩИЙ суточный лимит счетов этой организации. При заданной сетке
+            партнёра — значение из неё, иначе из общего каталога тарифов.
+          example: 100
+        is_custom:
+          type: boolean
+          description: >-
+            У организации индивидуальные договорные условия с ApiPay. Такой тариф
+            нельзя сменить ни оплатой, ни назначением (`409 custom_tariff_locked`).
+          example: false
         is_trial:
           type: boolean
           example: false
@@ -2056,6 +2699,70 @@ components:
             status:
               type: string
               example: ok
+        account:
+          type: object
+          description: >-
+            Состояние вашего партнёрского аккаунта. Отдаётся всегда актуальным
+            (в отличие от агрегатов ниже, которые кэшируются на несколько секунд):
+            по нему проверяют, что переключение режима уже применилось.
+          properties:
+            mode:
+              type: string
+              enum: [sandbox, production]
+              description: >-
+                В sandbox новые организации создаются тестовыми, kaspi-auth мокается,
+                а боевые организации недоступны для партнёрских операций.
+              example: production
+            type:
+              type: string
+              enum: [referral, operating]
+              example: operating
+            api_access_status:
+              type: string
+              enum: [none, pending, granted, rejected]
+              description: Условие перехода в production — `granted`.
+              example: granted
+            tariff_billing_mode:
+              type: string
+              enum: [payment, assignment]
+              description: >-
+                `payment` — тариф мерчанта оплачивается через `.../tariff/pay`
+                или `.../tariff/invoice`; `assignment` — вы назначаете тариф
+                бесплатно через `.../tariff/assign` (включает только ApiPay).
+              example: payment
+            inbound_sync:
+              type: object
+              description: >-
+                Состояние приёма входящих синхронизаций подписки
+                (`PUT .../subscription`). Проверяйте здесь, а не боевым запросом:
+                при закрытой двери запрос отвечает 401/403 и отличить «не тот
+                секрет» от «приём выключен» по ответу нельзя.
+              properties:
+                enabled:
+                  type: boolean
+                  description: Тумблер приёма (включает ApiPay)
+                  example: true
+                secret_configured:
+                  type: boolean
+                  description: >-
+                    Секрет подписи задан и читается. `false` при выключенном
+                    приёме значит только то, что секрет ещё не выдан.
+                  example: true
+                secret_hint:
+                  type: string
+                  nullable: true
+                  description: >-
+                    Последние 4 символа выданного секрета под маской — чтобы
+                    сверить, тем ли секретом подписывает ваше окружение. `null`,
+                    если секрета нет.
+                  example: "••••a1b2"
+                accepting:
+                  type: boolean
+                  description: >-
+                    Дверь открыта: тумблер включён И секрет задан. Единственный
+                    признак, по которому стоит принимать решение, — не собирайте
+                    его из двух предыдущих полей у себя.
+                  example: true
         organizations:
           type: object
           properties:
@@ -2075,6 +2782,23 @@ components:
               type: integer
             on_trial:
               type: integer
+            kyc:
+              type: object
+              description: >-
+                Раскладка клиентов по статусу анкеты. Поимённо тех же клиентов
+                отдаёт `GET /organizations?kyc_status=...` — поллить каждую
+                организацию по отдельности не нужно.
+              properties:
+                required:
+                  type: integer
+                submitted:
+                  type: integer
+                needs_changes:
+                  type: integer
+                approved:
+                  type: integer
+                blocked:
+                  type: integer
         webhooks:
           type: object
           properties:
@@ -2256,6 +2980,132 @@ components:
 # HTTP-ответов API (+05:00).
 # ---------------------------------------------------------------------------
 x-webhooks:
+  kyc.status_changed:
+    post:
+      summary: Решение по анкете KYC мерчанта
+      description: >-
+        Отправляется на `webhook_url` ПАРТНЁРА, когда модератор принял решение по анкете
+        вашего мерчанта: одобрил, отклонил, вернул на доработку или отменил решение.
+        Подпись — `X-Webhook-Signature: sha256=<HMAC-SHA256(body, webhook_secret)>`.
+
+
+        Событие описывает **переход**: оба статуса зафиксированы в момент решения, поэтому
+        повторная доставка не «догоняет» более позднее состояние. `comment` приходит только
+        при `needs_changes` — передайте его клиенту дословно.
+
+
+        ⚠️ Приходит только по организациям, которыми вы управляете (созданным вами или
+        заклеймленным). Мерчант, пришедший по вашей реферальной ссылке, ведёт KYC сам.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  example: kyc.status_changed
+                scope:
+                  type: string
+                  example: partner
+                partner_id:
+                  type: integer
+                organization_id:
+                  type: integer
+                external_id:
+                  type: string
+                  nullable: true
+                previous_status:
+                  type: string
+                  example: submitted
+                kyc_status:
+                  type: string
+                  enum: [required, submitted, needs_changes, approved, blocked]
+                comment:
+                  type: string
+                  nullable: true
+                source:
+                  type: string
+                  example: Partner Key
+                is_sandbox:
+                  type: boolean
+                timestamp:
+                  type: string
+                  format: date-time
+      responses:
+        "200":
+          description: Принято
+  tariff.activated:
+    post:
+      summary: Тариф мерчанта оплачен и активирован
+      description: >-
+        Отправляется на `webhook_url` ПАРТНЁРА, когда мерчант оплатил тариф по
+        выставленному вами счёту. Подпись — `X-Webhook-Signature:
+        sha256=<HMAC-SHA256(body, webhook_secret)>`.
+
+
+        ⛔ На ваше собственное назначение тарифа (`POST .../tariff/assign`) событие НЕ
+        отправляется: это было бы эхо на ваш же запрос. Результат назначения приходит
+        синхронным ответом.
+
+
+        ⚠️ Даты здесь в Asia/Almaty (+05:00) — в отличие от `timestamp` некоторых других
+        событий, приходящего в UTC.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  example: tariff.activated
+                scope:
+                  type: string
+                  example: partner
+                partner_id:
+                  type: integer
+                organization_id:
+                  type: integer
+                payment_id:
+                  type: integer
+                invoice_number:
+                  type: integer
+                  nullable: true
+                  description: Сквозной номер счёта, если оплата шла по счёту юрлицу
+                tier:
+                  type: string
+                  example: business
+                upgrade_from:
+                  type: string
+                  nullable: true
+                  description: >-
+                    Тариф, с которого перешли. Заполнен только у счёта на переход:
+                    там сумма — разница базовых цен, а период всегда 1 месяц. У
+                    обычной оплаты — `null`.
+                period_months:
+                  type: integer
+                  example: 1
+                amount:
+                  type: integer
+                  description: Сумма оплаты в тенге
+                expires_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: Asia/Almaty (+05:00)
+                source:
+                  type: string
+                  example: Partner Key
+                is_sandbox:
+                  type: boolean
+                timestamp:
+                  type: string
+                  format: date-time
+                  description: Asia/Almaty (+05:00)
+      responses:
+        "200":
+          description: Принято
   invoice.status_changed:
     post:
       summary: Изменение статуса счёта

@@ -65,6 +65,9 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 | `PATCH /catalog/{id}` | Обновление товара |
 | `DELETE /catalog/{id}` | Удаление товара |
 | `POST /catalog/bulk-delete` | Массовое удаление позиций каталога |
+| `GET /catalog/queue` | Остаток очереди каталога: сколько позиций ждут создания, правки и снятия |
+| `GET /catalog/errors` | Отказавшие операции каталога за период |
+| `POST /catalog/scan` | Поиск товара в Нацкаталоге по штрихкоду |
 | `GET /catalog/units` | Единицы измерения |
 | `POST /subscriptions` | Создание подписки |
 | `GET /subscriptions` | Список подписок |

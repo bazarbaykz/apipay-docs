@@ -11,9 +11,13 @@ Usage: API_KEY=your_key python manage_catalog.py
 import os
 import requests
 import sys
+import uuid
 
 API_KEY = os.environ.get('API_KEY')
 API_BASE_URL = 'https://api.apipay.kz/api/v1'
+
+# Both catalog list endpoints cap a chunk at 200 values.
+CHUNK_SIZE = 200
 
 
 def upload_image(file_path: str) -> dict:
@@ -32,23 +36,21 @@ def upload_image(file_path: str) -> dict:
     return response.json()
 
 
-def create_items(items: list, sync_token: str = None) -> dict:
+def create_items(items: list, idempotency_key: str = None) -> dict:
     """Create catalog items (batch, 1-100 items per request).
 
-    sync_token marks every item the request mentions, including the ones that
-    needed no work. It is what a later bulk-delete uses to find the remainder.
+    The answer is always 202 "accepted": in production the items get status
+    "pending" and are pushed to Kaspi afterwards. An exact repeat under the same
+    Idempotency-Key answers 200 with idempotent_replay: true.
     """
-    payload = {'items': items}
-    if sync_token:
-        payload['sync_token'] = sync_token
+    headers = {'X-API-Key': API_KEY, 'Content-Type': 'application/json'}
+    if idempotency_key:
+        headers['Idempotency-Key'] = idempotency_key
 
     response = requests.post(
         f'{API_BASE_URL}/catalog',
-        headers={
-            'X-API-Key': API_KEY,
-            'Content-Type': 'application/json'
-        },
-        json=payload
+        headers=headers,
+        json={'items': items}
     )
 
     if not response.ok:
@@ -73,56 +75,119 @@ def list_items(page: int = 1, per_page: int = 50) -> dict:
     return response.json()
 
 
-def bulk_delete(body: dict) -> dict:
-    """Bulk-delete catalog items (POST, not DELETE: 1C clients handle a body poorly)."""
+def queue_status() -> dict:
+    """Catalog queue remainder: total (create), updating and deleting counters.
+
+    There is no overall handle for a bulk operation, so this endpoint plus
+    GET /catalog/errors is how you follow the work through.
+    """
+    response = requests.get(
+        f'{API_BASE_URL}/catalog/queue',
+        headers={'X-API-Key': API_KEY}
+    )
+
+    if not response.ok:
+        error = response.json()
+        raise Exception(f"Queue Error: {error.get('message', 'Unknown error')}")
+
+    return response.json()
+
+
+def list_errors(date_from: str = None, date_to: str = None) -> dict:
+    """Failed catalog operations. The window filters by failed_at.
+
+    Without date_from the last 7 days are returned.
+    """
+    params = {}
+    if date_from:
+        params['from'] = date_from
+    if date_to:
+        params['to'] = date_to
+
+    response = requests.get(
+        f'{API_BASE_URL}/catalog/errors',
+        headers={'X-API-Key': API_KEY},
+        params=params
+    )
+
+    if not response.ok:
+        error = response.json()
+        raise Exception(f"Errors Error: {error.get('message', 'Unknown error')}")
+
+    return response.json()
+
+
+def bulk_delete(body: dict, idempotency_key: str = None) -> dict:
+    """Bulk-delete catalog items (POST, not DELETE: 1C clients handle a body poorly).
+
+    The body takes exactly one target list: ids[] or external_refs[], up to 200
+    values. There is no filter mode - the integrator builds the removal list.
+    """
+    headers = {'X-API-Key': API_KEY, 'Content-Type': 'application/json'}
+    if idempotency_key:
+        headers['Idempotency-Key'] = idempotency_key
+
     response = requests.post(
         f'{API_BASE_URL}/catalog/bulk-delete',
-        headers={
-            'X-API-Key': API_KEY,
-            'Content-Type': 'application/json'
-        },
+        headers=headers,
         json=body
     )
 
     payload = response.json()
 
     if not response.ok:
-        # reason narrows catalog_delete_filter_invalid / catalog_delete_scope_required.
-        # The list of reason values is open - keep a generic branch.
+        # catalog_delete_scope_required - no list, or both lists at once.
+        # catalog_match_overflow      - more than 200 values in the list.
+        # catalog_bulk_delete_mismatch - expected_count no longer matches; the
+        #                                body carries actual_count and nothing
+        #                                was deleted.
         code = payload.get('error_code') or payload.get('error')
-        reason = payload.get('reason')
-        raise Exception(f"Bulk delete error: {code}" + (f" ({reason})" if reason else ''))
+        raise Exception(f"Bulk delete error: {code}")
 
     return payload
 
 
-def full_sync(sync_token: str, items: list) -> dict:
-    """Upload the whole feed under one run marker, then remove what it did not touch.
+def full_sync(items: list, gone_external_refs: list) -> list:
+    """Upload the current feed, then remove the items you know are gone.
+
+    The removal list is yours to build: the server cannot tell an interrupted
+    export from an honest shrink of the catalog, so it will not guess a
+    destructive set for you.
 
     The deletion is a background operation that can run for a day: 202 means
-    "accepted", not "deleted" - watch poll_url or the catalog.batch_processed
-    webhook with kind: delete.
+    "accepted", not "deleted". There is no overall handle - follow the work
+    through GET /catalog/queue, targeted GET /catalog?external_refs[]=,
+    GET /catalog/errors and the per-item catalog.item_processed webhook.
 
     The API key must be issued by the organization owner, otherwise the call is
     refused with 403 catalog_delete_owner_key_required.
     """
-    # 1. Upload every chunk of the run with the SAME sync_token.
+    # 1. Upload the current catalog, 100 items per request.
     for start in range(0, len(items), 100):
-        create_items(items[start:start + 100], sync_token)
+        create_items(items[start:start + 100])
 
-    # 2. Scout: how many items would be removed, and which ones.
-    #    include_never_stamped also removes items that never took part in any run -
-    #    those added by hand at the till or pulled in from the Kaspi catalog.
-    filter_ = {'sync_token_not': sync_token, 'include_never_stamped': False}
-    preview = bulk_delete({'filter': filter_, 'dry_run': True})
-    print(f"Would delete: {preview['would_delete']}")
+    # 2. Remove the items that are gone, in chunks of 200 or fewer.
+    results = []
+    for start in range(0, len(gone_external_refs), CHUNK_SIZE):
+        chunk = gone_external_refs[start:start + CHUNK_SIZE]
 
-    if preview['would_delete'] == 0:
-        return None
+        # 2a. Scout: how many items would be removed, and which ones.
+        preview = bulk_delete({'external_refs': chunk, 'dry_run': True})
+        print(f"Would delete: {preview['would_delete']}")
 
-    # 3. Confirm with the number from the dry run. A mismatch means the catalog
-    #    changed in between: 409 catalog_bulk_delete_mismatch carries actual_count.
-    return bulk_delete({'filter': filter_, 'expected_count': preview['would_delete']})
+        if preview['would_delete'] == 0:
+            continue
+
+        # 2b. Confirm with the number from the dry run and a UNIQUE key per
+        #     chunk. A mismatch means the set changed in between: 409
+        #     catalog_bulk_delete_mismatch carries actual_count, nothing is
+        #     deleted, repeat the dry run.
+        results.append(bulk_delete(
+            {'external_refs': chunk, 'expected_count': preview['would_delete']},
+            idempotency_key=f'catalog-sync-{uuid.uuid4()}'
+        ))
+
+    return results
 
 
 def main():
@@ -148,10 +213,24 @@ def main():
             print(f"  rejected: {bad}")
         print('Accepted items are created with status "pending" and synced to Kaspi asynchronously.')
 
-        # Full synchronization. Use one marker per run - a timestamp or a job id.
-        # sync = full_sync('run-2026-08-15-a', whole_feed)
-        # if sync:
-        #     print(f"Queued for removal: {sync['queued']}")
+        # How much work is still open. total counts creations, updating counts
+        # edits waiting for Kaspi to confirm them, deleting counts removals.
+        queue = queue_status()
+        print(f"\nQueue: {queue['total']} to create, "
+              f"{queue['updating']} updating, {queue['deleting']} deleting "
+              f"(state: {queue['queue']['state']})")
+
+        # What failed lately (last 7 days by default).
+        failures = list_errors()
+        print(f"Failed operations: {failures['total']}")
+        for row in failures['data'][:5]:
+            print(f"  {row['external_ref']}: {row['operation']} -> "
+                  f"{row['error_code']} at {row['failed_at']}")
+
+        # Full synchronization: upload the current feed and remove what is gone.
+        # sync = full_sync(whole_feed, ['1C-000123', '1C-000124'])
+        # for chunk in sync:
+        #     print(f"Queued for removal: {chunk['queued']}")
 
     except Exception as e:
         print(f'Error: {e}')

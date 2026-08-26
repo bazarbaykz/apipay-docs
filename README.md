@@ -69,6 +69,9 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 | `PATCH /catalog/{id}` | Update catalog item |
 | `DELETE /catalog/{id}` | Delete catalog item |
 | `POST /catalog/bulk-delete` | Bulk-delete catalog items |
+| `GET /catalog/queue` | Catalog queue remainder: items waiting to be created, edited and removed |
+| `GET /catalog/errors` | Failed catalog operations over a period |
+| `POST /catalog/scan` | Look up a product in the National Catalog by barcode |
 | `GET /catalog/units` | List measurement units |
 | `POST /subscriptions` | Create subscription |
 | `GET /subscriptions` | List subscriptions |

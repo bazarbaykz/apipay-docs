@@ -127,11 +127,22 @@ X-Partner-Key: pk_your_partner_key_here
 **Ответ** при успехе: `{ "success": true, "mode": "self", "organization": { ... } }`.
 При неверном коде: `{ "success": false, "error": "invalid_otp" }`.
 
+**Личность организации Kaspi.** Пара «БИН + идентификатор организации в Kaspi» закрепляется при первой привязке и дальше не меняется. Подключение кассира само по себе владельца **не переносит**:
+
+| Код | HTTP | Что значит |
+|-----|------|------------|
+| `organization_identity_conflict` | 409 | Организация Kaspi не совпала с закреплённой либо эта пара уже занята другой организацией. Ответ намеренно не раскрывает реквизиты чужой организации. Если владелец бизнеса действительно сменился, обращение идёт в поддержку 77003076512 |
+| `organization_identity_unavailable` | 502 | Kaspi не вернул достоверные данные. Привязка не блокируется, и ранее подтверждённая пара сохраняется: попытка входа просто завершается, повтор — с нового запроса кода |
+
+Другие терминальные исходы этого шага: `context_expired` (409, Kaspi потерял контекст — нужен новый `init`, а не повтор OTP), `no_process` (409), `cashier_unavailable` (409), `not_registered` (422, номер не заведён кассиром — сессия закрыта, повтор бессмыслен).
+
 ### GET /api/partner/organizations/{id}/kaspi-auth/status
 
 Статус авторизации кассира.
 
-**Ответ:** `{ "success": true, "status": "pending|active|...", "kaspi_connected": true, "expires_at": "..." }`
+**Ответ:** `{ "success": true, "status": "pending|active|...", "process_status": "...", "attempt_status": "none", "kaspi_connected": true, "expires_at": "..." }`
+
+Поле `attempt_status` — статус отдельной попытки авторизации. Это всегда строка; когда попытки нет — `none`. Значения контрактом не фиксированы: ветвитесь по `status` и `process_status`, а не по нему. Рабочая сессия в начале переавторизации не очищается, поэтому `status` и `attempt_status` читаются раздельно.
 
 ### POST /api/partner/organizations/{id}/api-key
 
@@ -273,9 +284,9 @@ X-Partner-Key: pk_your_partner_key_here
 |------|----------|
 | 401 | Неверный или отсутствующий `X-Partner-Key` |
 | 403 | Нет доступа к запрошенному ресурсу |
-| 409 | Конфликт — `no_process` (авторизация не начата или истекла), `already_exists` |
+| 409 | Конфликт — `no_process` (авторизация не начата или истекла), `already_exists`, `organization_identity_conflict` |
 | 422 | Ошибка валидации — `invalid_phone`, `not_cashier` или `webhook_url` с приватным/внутренним адресом |
-| 502 | Kaspi API недоступен — `sms_failed` |
+| 502 | Kaspi API недоступен — `sms_failed`, `organization_identity_unavailable` |
 
 Коды тарифных ручек перечислены в разделе [Тарифы мерчантов](#тарифы-мерчантов) — у каждой ручки свой набор. Тело отказа всегда несёт `success: false`, `error` и `error_code` с одним значением; стройте логику по `error_code`.
 

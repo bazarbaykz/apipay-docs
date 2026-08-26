@@ -164,29 +164,46 @@ echo ""
 
 echo "15. Bulk Delete: dry run (how many items would go)"
 echo "--------------------------------------------------"
-echo "# Upload the whole feed first, sending the same sync_token in every request."
-echo "# The key must be issued by the organization owner."
+echo "# Build the removal list yourself: exactly one of ids[] or external_refs[],"
+echo "# up to 200 values per request. The key must be issued by the org owner."
 echo 'curl -X POST $BASE_URL/catalog/bulk-delete \'
 echo '  -H "X-API-Key: $API_KEY" \'
 echo '  -H "Content-Type: application/json" \'
-echo '  -d '\''{"filter": {"sync_token_not": "run-2026-08-15-a"}, "dry_run": true}'\'
+echo '  -d '\''{"external_refs": ["1C-000123", "1C-000124"], "dry_run": true}'\'
 echo ""
 
 echo "16. Bulk Delete: confirm with the number from the dry run"
 echo "---------------------------------------------------------"
-echo "# 202 means accepted, not deleted: watch poll_url or the"
-echo "# catalog.batch_processed webhook with kind: delete."
+echo "# 202 means accepted, not deleted, and the operation has no overall handle:"
+echo "# follow it through /catalog/queue, /catalog/errors and targeted /catalog."
+echo "# Use a UNIQUE Idempotency-Key per chunk."
 echo 'curl -X POST $BASE_URL/catalog/bulk-delete \'
 echo '  -H "X-API-Key: $API_KEY" \'
 echo '  -H "Content-Type: application/json" \'
-echo '  -d '\''{"filter": {"sync_token_not": "run-2026-08-15-a"}, "expected_count": 6870}'\'
+echo '  -H "Idempotency-Key: catalog-sync-2026-08-26-chunk-01" \'
+echo '  -d '\''{"external_refs": ["1C-000123", "1C-000124"], "expected_count": 2}'\'
+echo ""
+
+echo "17. Catalog Queue (how much work is left)"
+echo "-----------------------------------------"
+echo "# total = items waiting to be created, updating = edits waiting for Kaspi,"
+echo "# deleting = items waiting to be taken off sale."
+echo 'curl "$BASE_URL/catalog/queue" \'
+echo '  -H "X-API-Key: $API_KEY"'
+echo ""
+
+echo "18. Catalog Errors (what failed)"
+echo "--------------------------------"
+echo "# The window filters by failed_at; without from, the last 7 days."
+echo 'curl "$BASE_URL/catalog/errors?from=2026-08-26" \'
+echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
 # =====================================================
 # SUBSCRIPTIONS
 # =====================================================
 
-echo "17. Create Subscription"
+echo "19. Create Subscription"
 echo "-----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions \'
 echo '  -H "X-API-Key: $API_KEY" \'
@@ -201,25 +218,25 @@ echo '    "description": "Monthly subscription"'
 echo '  }'\'
 echo ""
 
-echo "18. List Subscriptions"
+echo "20. List Subscriptions"
 echo "----------------------"
 echo 'curl "$BASE_URL/subscriptions?status=active" \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
-echo "19. Pause Subscription"
+echo "21. Pause Subscription"
 echo "----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions/1/pause \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
-echo "20. Resume Subscription"
+echo "22. Resume Subscription"
 echo "-----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions/1/resume \'
 echo '  -H "X-API-Key: $API_KEY"'
 echo ""
 
-echo "21. Cancel Subscription"
+echo "23. Cancel Subscription"
 echo "-----------------------"
 echo 'curl -X POST $BASE_URL/subscriptions/1/cancel \'
 echo '  -H "X-API-Key: $API_KEY"'
