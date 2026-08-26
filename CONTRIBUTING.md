@@ -63,6 +63,16 @@ If you'd like to add code examples:
 
 ## Documentation Style Guide
 
+### How the repository is laid out
+
+Two GitBook spaces are built from this one branch, described by `docs.yaml` in the root.
+Each space keeps its own `.gitbook.yaml`, `SUMMARY.md` and `README.md` **inside its own
+directory** — `docs/ru/` and `docs/en/`. The `README.md` in the repository root is the
+GitHub landing page, not a page of either book.
+
+Alongside the chapters, each space holds `code-examples/` and `reference/`. Both
+directories exist in both locales and are covered by the parity check.
+
 ### Where the truth lives
 
 Three layers, each with its own source. Know which one you are editing.

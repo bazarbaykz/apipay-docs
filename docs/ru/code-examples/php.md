@@ -99,7 +99,7 @@ switch ($code) {
 }
 ```
 
-Полный список кодов — в разделе [Ошибки](../docs/ru/errors.md).
+Полный список кодов — в разделе [Ошибки](../errors.md).
 
 ## Статус `processing` — это не отказ
 
@@ -109,7 +109,7 @@ switch ($code) {
 удалось, причина в `error_code` и `error_message`).
 
 Узнать о переходе можно двумя способами: подписаться на вебхук
-`invoice.status_changed` (см. [Вебхуки](../docs/ru/webhooks.md)) или опрашивать
+`invoice.status_changed` (см. [Вебхуки](../webhooks.md)) или опрашивать
 `GET /invoices/{id}`. Пока счёт в `processing`, не создавайте его повторно —
 получите второй счёт на ту же сумму. Если повтор запроса всё же возможен
 (ретрай по таймауту сети), передавайте `external_order_id_idempotency`:
@@ -118,7 +118,7 @@ switch ($code) {
 
 ## Готовые примеры
 
-Рабочие скрипты целиком лежат в [`../examples/php/`](../examples/php/):
+Рабочие скрипты целиком лежат в [`examples/php/`](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/php):
 
 | Файл | Что показывает |
 |------|----------------|

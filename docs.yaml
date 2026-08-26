@@ -1,0 +1,24 @@
+$schema: https://api.gitbook.com/openapi.yaml#/components/schemas/GitSyncSiteConfig
+site:
+  title: ApiPay.kz — Kaspi Pay REST API
+  structure:
+    - type: section
+      key: documentation
+      title: Documentation
+      path: documentation
+      children:
+        - type: space
+          key: docs-ru
+          title: Русский
+          path: docs
+          default: true
+          content:
+            directory: ./docs/ru
+            language: ru
+        - type: space
+          key: docs-en
+          title: English
+          path: en
+          content:
+            directory: ./docs/en
+            language: en

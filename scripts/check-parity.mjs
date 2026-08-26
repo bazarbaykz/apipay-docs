@@ -50,12 +50,19 @@ function stripFences(src) {
  * The shape of a document: the sequence of heading levels, the number of fenced blocks and
  * the number of table rows. Comparing heading TEXT is useless — the two locales are in
  * different languages and a plain diff reports the whole file as changed. Shape is not.
+ *
+ * ⚠️ Headings and table rows are counted with fenced blocks removed. A shell example is
+ * full of `# step one` comments, and counting those as level-1 headings makes the check
+ * both noisy and misleading: dropping a comment from an example would fail the gate with
+ * «heading structure diverges at #7», pointing nowhere near the cause. Fences themselves
+ * are counted on the original text, before they are stripped.
  */
 function shape(src) {
+  const prose = stripFences(src)
   return {
-    levels: (src.match(/^#{1,6}(?= )/gm) || []).map((h) => h.length),
+    levels: (prose.match(/^#{1,6}(?= )/gm) || []).map((h) => h.length),
     fences: (src.match(/^```/gm) || []).length / 2,
-    tableRows: (src.match(/^\|/gm) || []).length,
+    tableRows: (prose.match(/^\|/gm) || []).length,
   }
 }
 
@@ -94,17 +101,37 @@ function loadAllow() {
 // line-by-line parity from them.
 const NOT_CHAPTERS = new Set(['SUMMARY', 'README'])
 
-function chapters() {
-  if (!fs.existsSync(RU)) return []
-  return fs
-    .readdirSync(RU)
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => f.replace(/\.md$/, ''))
-    .filter((f) => !NOT_CHAPTERS.has(f))
-    .sort()
+// Walks the whole space, not just its top level: each space also holds subdirectories
+// (code examples, reference pages), and a page that lives one level down needs its
+// counterpart just as much as a chapter does. Names are returned relative to the space,
+// e.g. `code-examples/curl`.
+function chapters(dir = RU, prefix = '') {
+  if (!fs.existsSync(dir)) return []
+  const out = []
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue
+    const rel = prefix ? `${prefix}/${e.name}` : e.name
+    if (e.isDirectory()) {
+      out.push(...chapters(path.join(dir, e.name), rel))
+    } else if (e.name.endsWith('.md')) {
+      const name = rel.replace(/\.md$/, '')
+      if (!NOT_CHAPTERS.has(path.basename(name))) out.push(name)
+    }
+  }
+  return out.sort()
 }
 
 // ── 1. Structural parity ru ↔ en ──────────────────────────────────────────────
+// The walk starts from docs/ru because Russian is the source — but a page that exists
+// only in English is just as broken, and walking one side alone would let it through in
+// silence. Hence the reverse pass.
+function checkOrphans(list) {
+  const ru = new Set(list)
+  for (const ch of chapters(EN)) {
+    if (!ru.has(ch)) problems.push(`${ch}: exists in docs/en but not in docs/ru`)
+  }
+}
+
 function checkShape(list, allow) {
   for (const ch of list) {
     if (allow.shape_skip.includes(ch)) continue
@@ -186,11 +213,14 @@ function checkCoChange() {
   } catch {
     return // not a git environment, or the base is missing — skip silently
   }
+  // ⚠️ Compared by path relative to the space, not by basename: two spaces hold a
+  // `curl.md` each in different subdirectories, and collapsing to the file name would let
+  // an edit to one be "covered" by an edit to an unrelated namesake.
   const touched = (dir) =>
     new Set(
       changed
         .filter((f) => f.startsWith(`docs/${dir}/`) && f.endsWith('.md'))
-        .map((f) => path.basename(f, '.md'))
+        .map((f) => f.slice(`docs/${dir}/`.length).replace(/\.md$/, ''))
     )
   const ru = touched('ru')
   const en = touched('en')
@@ -210,6 +240,7 @@ if (!list.length) {
   process.exit(1)
 }
 
+checkOrphans(list)
 checkShape(list, allow)
 checkIdentifierParity(list)
 checkAgainstContract(list, allow)

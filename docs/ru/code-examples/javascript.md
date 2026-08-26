@@ -60,18 +60,18 @@ APIPAY_API_KEY=your_api_key node create-invoice.js
 ```
 
 Логику стройте по `error_code`, а не по тексту `message` — текст может меняться.
-Полный список кодов — в разделе [Ошибки](../docs/ru/errors.md).
+Полный список кодов — в разделе [Ошибки](../errors.md).
 
 ## Статус `processing` — это не отказ
 
 Ответ `201` приходит со `status: "processing"`: счёт принят нами, но в Kaspi ещё
 не ушёл. Финальный статус придёт вебхуком `invoice.status_changed`
-(см. [Вебхуки](../docs/ru/webhooks.md)) либо по `GET /invoices/{id}`. Не создавайте
+(см. [Вебхуки](../webhooks.md)) либо по `GET /invoices/{id}`. Не создавайте
 счёт заново, пока он в `processing`, — получите второй счёт на ту же сумму.
 
 ## Готовые примеры
 
-Рабочие скрипты целиком лежат в [`../examples/javascript/`](../examples/javascript/):
+Рабочие скрипты целиком лежат в [`examples/javascript/`](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/javascript):
 
 | Файл | Что показывает |
 |------|----------------|

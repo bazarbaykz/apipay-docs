@@ -15,8 +15,8 @@
   ],
   "excludeFiles": [
     "CONTRIBUTING.md",
-    "SUMMARY.md",
-    "SUMMARY.en.md"
+    "docs/ru/SUMMARY.md",
+    "docs/en/SUMMARY.md"
   ],
   "rules": [
     "Base URL: https://api.apipay.kz/api/v1",

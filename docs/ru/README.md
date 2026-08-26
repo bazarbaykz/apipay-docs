@@ -1,14 +1,14 @@
 # ApiPay.kz — REST API для Kaspi Pay
 
 [![API Version](https://img.shields.io/badge/API-v2.1.0-blue.svg)](https://api.apipay.kz/api/v1)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/ru/getting-started.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/bazarbaykz/apipay-docs/blob/main/LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-available-green.svg)](getting-started.md)
 
 **REST API для Kaspi Pay — автоматизация счетов, возвратов, подписок и управления каталогом.**
 
 ApiPay.kz — независимый сервис с REST API для Kaspi Pay. Автоматизируйте выставление счетов по номеру телефона, обрабатывайте возвраты, управляйте подписками и каталогом товаров.
 
-[English Documentation](README.md)
+[English Documentation](../en/README.md)
 
 ## Быстрый старт
 
@@ -97,34 +97,34 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 
 ## Документация
 
-- [Начало работы](docs/ru/getting-started.md) — Подготовка, подключение, первый счёт
-- [Счета](docs/ru/invoices.md) — Создание, список, отмена счетов
-- [Подписки](docs/ru/subscriptions.md) — Автоматические списания по расписанию
-- [Каталог](docs/ru/catalog.md) — Управление каталогом товаров
-- [Возвраты](docs/ru/refunds.md) — Полные и частичные возвраты
-- [Webhooks](docs/ru/webhooks.md) — Уведомления о платежах в реальном времени
-- [Клиенты](docs/ru/clients.md) — Проверка номера перед выставлением счёта
-- [Фискальные чеки](docs/ru/receipts.md) — Чеки Kaspi OFD для оплат наличными и через POS другого банка
-- [Касса](docs/ru/cashbox.md) — Кассовые смены Kaspi, наличные, сверка и отчёты
-- [Коды ошибок](docs/ru/errors.md) — HTTP коды и обработка ошибок
-- [Partner API](docs/ru/partner-api.md) — Для CRM-интеграторов: подключайте мерчантов и выставляйте счета от их имени
+- [Начало работы](getting-started.md) — Подготовка, подключение, первый счёт
+- [Счета](invoices.md) — Создание, список, отмена счетов
+- [Подписки](subscriptions.md) — Автоматические списания по расписанию
+- [Каталог](catalog.md) — Управление каталогом товаров
+- [Возвраты](refunds.md) — Полные и частичные возвраты
+- [Webhooks](webhooks.md) — Уведомления о платежах в реальном времени
+- [Клиенты](clients.md) — Проверка номера перед выставлением счёта
+- [Фискальные чеки](receipts.md) — Чеки Kaspi OFD для оплат наличными и через POS другого банка
+- [Касса](cashbox.md) — Кассовые смены Kaspi, наличные, сверка и отчёты
+- [Коды ошибок](errors.md) — HTTP коды и обработка ошибок
+- [Partner API](partner-api.md) — Для CRM-интеграторов: подключайте мерчантов и выставляйте счета от их имени
 
 ## Примеры кода
 
 Готовые к запуску примеры на разных языках:
 
-- [JavaScript/Node.js](examples/javascript/)
-- [Python](examples/python/)
-- [PHP](examples/php/)
-- [cURL](examples/curl/)
+- [JavaScript/Node.js](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/javascript)
+- [Python](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/python)
+- [PHP](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/php)
+- [cURL](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/curl)
 
 ## OpenAPI Спецификация
 
-Полная OpenAPI 3.0 спецификация доступна в [openapi.yaml](openapi.yaml).
+Полная OpenAPI 3.0 спецификация доступна в [openapi.yaml](https://github.com/bazarbaykz/apipay-docs/blob/main/openapi.yaml).
 
 Вы можете импортировать её в [Swagger Editor](https://editor.swagger.io/), [Postman](https://www.postman.com/) или любой другой OpenAPI-совместимый инструмент.
 
-У [Partner API](docs/ru/partner-api.md) отдельная спецификация: [openapi-partner.yaml](openapi-partner.yaml).
+У [Partner API](partner-api.md) отдельная спецификация: [openapi-partner.yaml](https://github.com/bazarbaykz/apipay-docs/blob/main/openapi-partner.yaml).
 
 ## Поддержка
 
@@ -134,11 +134,11 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 
 ## Лицензия
 
-Проект распространяется под лицензией MIT — см. файл [LICENSE](LICENSE).
+Проект распространяется под лицензией MIT — см. файл [LICENSE](https://github.com/bazarbaykz/apipay-docs/blob/main/LICENSE).
 
 ## Вклад в проект
 
-Мы рады вашим предложениям! Пожалуйста, прочитайте [CONTRIBUTING.md](CONTRIBUTING.md).
+Мы рады вашим предложениям! Пожалуйста, прочитайте [CONTRIBUTING.md](https://github.com/bazarbaykz/apipay-docs/blob/main/CONTRIBUTING.md).
 
 ---
 

@@ -8,6 +8,7 @@ on:
       - 'openapi-partner.yaml'
       - 'llms.txt'
       - 'scripts/**'
+      - 'docs.yaml'
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - 'openapi-partner.yaml'
       - 'llms.txt'
       - 'scripts/**'
+      - 'docs.yaml'
   workflow_dispatch:
 
 jobs:

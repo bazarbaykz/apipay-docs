@@ -43,4 +43,4 @@ APIPAY_API_KEY=ваш_ключ python create_invoice.py
 
 Статус `processing` в ответе означает, что счёт принят и поставлен в очередь — в Kaspi он ещё не ушёл. Дождитесь вебхука `invoice.status_changed` (или опросите `GET /invoices/{id}`): клиент увидит запрос на оплату только после того, как статус станет `pending`.
 
-Полные примеры — создание счёта, проверка клиента, подписки, каталог, обработчик вебхуков — лежат в [`../examples/python/`](../examples/python/).
+Полные примеры — создание счёта, проверка клиента, подписки, каталог, обработчик вебхуков — лежат в [`examples/python/`](https://github.com/bazarbaykz/apipay-docs/tree/main/examples/python).
