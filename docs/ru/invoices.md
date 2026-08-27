@@ -49,7 +49,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices \
 |------|-----|-------------|----------|
 | `amount` | number | Да* | Сумма в тенге, **только целая**: 1 - 99 999 999. Дробная → `422 amount_must_be_whole_tenge`; проверяется и `amount`, и итог `cart_items` после скидок. Нужны тиыны — используйте `POST /invoices/qr`. *Не обязательно при наличии cart_items. |
 | `phone_number` | string | Да | Телефон клиента (формат: 8XXXXXXXXXX) |
-| `description` | string | Нет | Описание платежа (макс. 500 символов) |
+| `description` | string | Нет | Описание платежа (макс. 60 символов — Kaspi показывает покупателю только первые 60) |
 | `external_order_id` | string | Нет | Ваш ID заказа для сопоставления (макс. 255 символов) |
 | `cart_items` | array | Нет | Массив товаров корзины (заменяет amount) |
 | `discount_percentage` | number | Нет | Глобальный % скидки (1-99). Применяется ко всему чеку. |

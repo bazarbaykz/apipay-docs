@@ -297,7 +297,8 @@ paths:
         Два режима суммы: без корзины (`amount`) или с корзиной (`cart_items`, сумма
         считается сервером). Организация с каталогом может выставить счёт и одной суммой,
         без `cart_items`. Обратное неверно: организация без каталога с `cart_items`
-        получит `422 This organization does not support catalog.`
+        получит `422` с `error_code: catalog_not_supported`.
+        Так же ведёт себя `POST /invoices/bulk` — per-item, тем же кодом.
         Для `POST /invoices/qr` и `POST /static-qr` правило другое — там у организации
         с каталогом корзина обязательна.
 
@@ -356,7 +357,11 @@ paths:
             `amount_must_be_whole_tenge` (сумма с тиынами по телефонному счёту не
             принимается; округлите либо используйте `POST /invoices/qr`);
             позиция корзины с `operation=delete` — `errors["cart_items.N.catalog_item_id"]`,
-            отдельного `error_code` у этой ветки нет (см. `CartItem.catalog_item_id`).
+            отдельного `error_code` у этой ветки нет (см. `CartItem.catalog_item_id`);
+            `field_too_long` (страховочный код: значение поля превышает допустимую длину —
+            укоротите его; имя поля в `errors`, повтор с тем же телом бесполезен);
+            `description_too_long` (описание длиннее, чем Kaspi показывает покупателю — с
+            2026-09-05 для всех, для организаций с 26.08.2026 уже сейчас).
           content:
             application/json:
               schema:
@@ -427,7 +432,12 @@ paths:
                     $ref: '#/components/schemas/BulkInvoiceItem'
       responses:
         '201':
-          description: Батч обработан (см. поэлементные результаты)
+          description: |
+            Батч обработан (см. поэлементные результаты). Отказ отдельной позиции не отменяет
+            остальные и не меняет код ответа — разбирайте `invoices[]` построчно.
+            Среди построчных `error_code` может прийти `field_too_long`: значение поля превышает
+            допустимую длину, эту позицию нужно повторить с укороченным значением,
+            соседние счета при этом уже созданы.
           content:
             application/json:
               schema:
@@ -1187,12 +1197,15 @@ paths:
               тело несёт `message` и `error_code` (`catalog_requires_cart_items` /
               `catalog_not_supported`), но **без** `errors`, как на `POST /invoices/qr`;
             * `cart_items.*.catalog_item_id` не принадлежит вашей организации, имеет
-              `status=deleted`, стоит в очереди на снятие (`status=deleting`) или без цены —
+              `status=deleted`, стоит в очереди на снятие (`status=deleting`), имеет брошенное
+              создание (`status=failed` при `operation=create`) или без цены —
               `errors["cart_items.0.catalog_item_id"]` с тем же текстом, что вернуло бы
               создание счёта (`Catalog item does not belong to your organization.` /
               `… has been deleted.` / `Catalog item is being deleted…` /
-              `… has no price set.`). Позицию из очереди снятия можно вернуть обычным
-              `POST /catalog`, после чего она снова принимается в корзину;
+              `Catalog item was not created in Kaspi…` / `… has no price set.`). Позицию из
+              очереди снятия можно вернуть обычным `POST /catalog`, после чего она снова
+              принимается в корзину; брошенное создание возобновляется только
+              `PATCH /catalog/{id}`;
             * `kaspi_connection_id` чужой или неактивный — `errors.kaspi_connection_id`
               (`422`, а не `404`: код ответа не раскрывает существование чужого кассира);
             * `connection_ambiguous` — у организации больше одного активного кассира и нет
@@ -2758,8 +2771,11 @@ paths:
         снятие) → `deleted` (позиция снята) → `active`. Открытая операция проверяется ВЫШЕ
         состояния позиции. Поэтому снятая позиция со следом брошенной операции читается как
         `failed`, а снятая позиция, для которой уже открыто повторное создание, — как
-        `pending`: она создаётся заново (в каталоге Kaspi её сейчас нет, `sellable=false`),
-        и вид намерения виден в `operation`.
+        `pending`: она создаётся заново (в каталоге Kaspi её сейчас нет), и вид намерения
+        виден в `operation`. Продавать её при этом можно — `sellable=true`, как и у любой
+        позиции, создание которой В РАБОТЕ. ⚠️ Если создание брошено после исчерпания попыток
+        (`status=failed`), позиция НЕ продаётся: `sellable=false` — подтверждения Kaspi не
+        будет, пока вы не отправите `PATCH /catalog/{id}`.
 
         Ось операции отдаётся отдельно и ортогональна статусу:
         `operation=create|update|delete|null` плюс `error_code`/`error_message` при отказе.
@@ -2941,12 +2957,32 @@ paths:
         **Переиздание снятого / операция матча по `external_ref`:** если `external_ref`
         указывает на снятый товар — он автоматически переиздаётся: ТА ЖЕ строка (тот же
         `id`) получает `operation: create` и заново отправляется в Kaspi. ⚠️ До подтверждения
-        Kaspi она читается как `status: pending` — она создаётся заново, но в каталоге Kaspi
-        её пока нет, поэтому `sellable=false`; вид намерения виден в `operation`.
-        Если у строки есть отказанная операция, автоматического повтора нет: она возвращается
-        с текущими `status`, `operation`, `error_code` и `failed_at`. Исправьте данные через
-        `PATCH /catalog/{id}` либо нажмите «Повторить» в кабинете; повтор исполняет сохранённую
-        `operation`, а не выводит её из наличия `kaspi_item_id`.
+        Kaspi она читается как `status: pending` — она создаётся заново, и в каталоге Kaspi
+        её пока нет, но в счёт её ставить уже можно (`sellable=true`, как у любой позиции,
+        создание которой в работе); вид намерения виден в `operation`. ⚠️ Брошенное создание
+        (`status: failed`) продажу блокирует — `sellable=false`.
+
+        **Что сделано с позицией — поле `outcome`.** `matched_existing: true` говорит только
+        «мы нашли вашу строку» и НЕ говорит, открылась ли по ней работа. Что именно
+        произошло, читайте в `outcome`: `created` — заведена новая строка; `matched` —
+        сматчилась существующая, правка применена или поставлена в очередь; `reissued` —
+        переиздана снятая позиция; `unchanged` — строка уже совпадает с каталогом Kaspi,
+        работа не нужна; `revived` — брошенное создание открыто заново; `not_started` —
+        брошенное создание найдено, но работа НЕ открыта. Поле аддитивное: в остальных
+        ответах каталога оно `null`.
+
+        **Повторная заливка брошенного создания (`status: failed`).** Она открывает работу
+        заново (`outcome: revived`, `status` снова `pending`) в двух случаях: прошлый отказ
+        не был отказом Kaspi по существу позиции (проблемы связи и авторизации, недоставленная
+        партия) — либо вы прислали позицию с изменённым наименованием, ценой, штрихкодом,
+        НТИН или GTIN, то есть исправили то, из-за чего она отбилась. Дословный повтор того же
+        тела работу НЕ открывает: ответ придёт с `outcome: not_started`, прежними
+        `status: failed`, `error_code` и `failed_at`, и Kaspi не будет позван.
+        Чтобы дожать такую позицию принудительно, используйте `PATCH /catalog/{id}` (он же
+        «Повторить» в кабинете): он исполняет сохранённую `operation` всегда, независимо от
+        причины отказа. ⚠️ Если вы шлёте `Idempotency-Key`, повтор ОБЯЗАН идти с НОВЫМ ключом:
+        точный повтор тела со старым ключом отвечает `200` + `idempotent_replay: true` и до
+        матчинга не доходит вовсе — ни реанимации, ни отказа вы не увидите.
       operationId: createCatalogItems
       parameters:
         - name: Idempotency-Key
@@ -3688,9 +3724,13 @@ paths:
       tags: [Subscriptions]
       summary: Создать подписку
       description: |
-        Создаёт рекуррентную подписку. Правила суммы зависят от организации:
-        **без каталога** — `amount` обязателен (100–1 000 000), `cart_items` запрещён;
-        **с каталогом** — `cart_items` обязателен (сумма считается сервером), `amount` игнорируется.
+        Создаёт рекуррентную подписку. Сумму задают одним из двух способов:
+        **`amount`** (100–1 000 000) либо **`cart_items`** — тогда сумма считается сервером
+        по актуальным ценам каталога, а `amount` из тела игнорируется. Передать нужно
+        ровно что-то одно: без корзины `amount` обязателен, отказ приходит по полю `amount`.
+        Организация **с каталогом** может вести подписку и просто на сумму, без `cart_items`.
+        Обратное неверно: у организации **без каталога** `cart_items` дают `422` с
+        `error_code: catalog_not_supported`.
         `bill_immediately=true` — первый счёт сразу; иначе по расписанию в `next_billing_at`.
 
         ⛔ **Сумма списания — только целые тенге.** Списание выставляется счётом на номер
@@ -3795,8 +3835,14 @@ paths:
       tags: [Subscriptions]
       summary: Обновить подписку
       description: |
-        Все поля опциональны. `cart_items` на не-каталог организации → `422`. При передаче
-        `cart_items` сумма пересчитывается.
+        Все поля опциональны. `cart_items` на не-каталог организации → `422` с
+        `error_code: catalog_not_supported`. При передаче `cart_items` сумма пересчитывается
+        по актуальным ценам каталога, а `amount` из тела игнорируется.
+
+        **Снять корзину** и вернуть подписку на фиксированную сумму — передать
+        `"cart_items": null` **вместе с `amount`**. Сумма при этом обязательна: иначе подписка
+        осталась бы с числом, посчитанным по уже неактуальному составу. ⚠️ `null` и отсутствие
+        поля — разные намерения: если `cart_items` не передан вовсе, корзина не трогается.
 
         ⛔ Позиция корзины с `operation=delete` отбивается `422` так же, как при создании —
         текст в `errors["cart_items.N.catalog_item_id"]`.
@@ -3813,7 +3859,11 @@ paths:
             schema:
               type: object
               properties:
-                amount: {type: number, minimum: 100, maximum: 1000000}
+                amount:
+                  type: number
+                  minimum: 100
+                  maximum: 1000000
+                  description: Обязателен, если этим же запросом снимают корзину (cart_items=null).
                 billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28); в коротком месяце берётся последний доступный день. У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье; значения 8–28 валидацию проходят, но на этих периодах не действуют — списание просто уходит на +7 или +14 дней от предыдущего. У `daily` не используется."}
                 description: {type: string, maxLength: 255}
                 subscriber_name: {type: string, maxLength: 255}
@@ -3824,8 +3874,13 @@ paths:
                 metadata: {type: object}
                 cart_items:
                   type: array
+                  nullable: true
                   minItems: 1
                   maxItems: 100
+                  description: >-
+                    Новый состав корзины. `null` — снять корзину и вести подписку на
+                    фиксированную сумму (тогда `amount` обязателен). Поле не передано —
+                    корзина не трогается.
                   items:
                     $ref: '#/components/schemas/CartItemSimple'
       responses:
@@ -3973,7 +4028,13 @@ paths:
     post:
       tags: [Sandbox]
       summary: Создать sandbox-счёт подписки
-      description: "**Только sandbox.** Создаёт один sandbox-счёт для активной sandbox-подписки и шлёт вебхук. Кулдаун 30 секунд."
+      description: |
+        **Только sandbox.** Создаёт один sandbox-счёт для активной sandbox-подписки и шлёт
+        вебхук. Кулдаун 30 секунд.
+
+        У подписки с корзиной сумма и состав считаются ТЕМ ЖЕ путём, что боевое списание —
+        по актуальным ценам каталога, а не по хранимому `amount`. Поэтому переоценка позиции
+        меняет сумму следующей симуляции, а непригодная позиция даёт `422`.
       operationId: simulateSubscriptionInvoice
       parameters:
         - $ref: '#/components/parameters/SubscriptionPathId'
@@ -3995,6 +4056,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: cart_unavailable — позиция корзины непригодна к продаже или снимается
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: not_sandbox — только для sandbox-подписок
           content:
@@ -4451,7 +4518,8 @@ components:
         `trial_daily_limit`, `tariff_limit_reached` (лимит оплаченного тарифа; `meta.mode`
         различает суточный потолок и бюджет 30-дневного блока), `outstanding_recipient_limit`,
         `outstanding_org_limit`, `recipient_fanout_exceeded`, `kyc_daily_limit_reached`
-        (новый мерчант на проверке — 1 счёт/день до ручного одобрения).
+        (мерчант без одобренной анкеты — боевые счета закрыты, `meta.limit=0`; песочница
+        работает и анкеты не требует).
       headers:
         Retry-After:
           description: Секунд до повторной попытки.
@@ -4664,6 +4732,9 @@ components:
         - catalog_item_duplicate
         - catalog_match_overflow
         - catalog_item_invalid
+        - catalog_delivery_incomplete
+        - catalog_create_unresolved
+        - catalog_create_blocked
         - idempotency_key_conflict
         - catalog_multi_tradepoint
         - catalog_batch_filter_removed
@@ -4680,6 +4751,8 @@ components:
         - trial_daily_limit
         - tariff_limit_reached
         - content_rejected
+        - field_too_long
+        - description_too_long
         - kyc_daily_limit_reached
         - kyc_rejected
         - qr_refund_expired
@@ -4856,6 +4929,11 @@ components:
             deletion and use it in invoices.` — позиция восстановима: пришлите её обычным
             `POST /catalog`, удаление отменится, и она снова станет доступна для счетов.
             Позиция с `status=deleted` даёт отдельный текст (`Catalog item has been deleted.`).
+            ⛔ Позиция, создание которой брошено (`status=failed`, `operation=create`), тоже не
+            принимается: в каталоге Kaspi её нет. Текст —
+            `Catalog item was not created in Kaspi. Update it via PATCH /api/v1/catalog/{id}
+            to retry, then use it in invoices.` ⚠️ Здесь работает именно `PATCH`: повторный
+            `POST /catalog` брошенное создание не возобновляет.
             ⚠️ Форма отказа зависит от поверхности: `POST /invoices`, `/invoices/qr`,
             `/static-qr` и создание/обновление подписки отдают `422`, а `POST /invoices/bulk`
             остаётся `201` и возвращает позицию в `invoices[]` как `failed` с
@@ -4904,6 +4982,15 @@ components:
         description:
           type: string
           maxLength: 500
+          description: |
+            Описание счёта. Уходит в Kaspi как комментарий к платежу.
+
+            ⚠️ Kaspi показывает покупателю только **первые 60 символов** — всё, что длиннее,
+            он отбрасывает молча, не сообщая об этом ни вам, ни нам. Поэтому с **2026-09-05**
+            описание длиннее 60 символов будет отклоняться с `error_code: description_too_long`
+            (HTTP 422). До этой даты длинные описания принимаются как прежде.
+
+            ⛔ Организации, зарегистрированные с 26.08.2026, живут на лимите 60 сразу.
         internal_comment:
           type: string
           maxLength: 255
@@ -4989,7 +5076,14 @@ components:
       properties:
         phone_number: {type: string, pattern: '^8\d{10}$', example: "87001234567"}
         amount: {type: number, nullable: true, minimum: 1, multipleOf: 1, maximum: 99999999.99, description: "Только целые тенге; дробная → позиция failed с amount_must_be_whole_tenge."}
-        description: {type: string, maxLength: 500}
+        description:
+          type: string
+          maxLength: 500
+          description: >-
+            С 2026-09-05 — не длиннее 60 символов (организациям, зарегистрированным
+            с 26.08.2026, — уже сейчас): Kaspi показывает покупателю только первые 60.
+            Превышение приходит построчным отказом в `invoices[]` с
+            `error_code: description_too_long`, ответ остаётся `201`.
         internal_comment: {type: string, maxLength: 255, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна."}
         external_order_id: {type: string, maxLength: 255}
         external_order_id_idempotency: {type: string, maxLength: 191}
@@ -5054,7 +5148,8 @@ components:
       type: object
       description: |
         Данные будущего счёта. Укажите `amount` **либо** `cart_items` (для мерчантов с
-        каталогом — `cart_items`). `description` ≤ 100 символов (лимит Kaspi на имя позиции).
+        каталогом — `cart_items`). `description` ≤ 100 символов (лимит Kaspi на имя позиции),
+        а для листов с оплатой по номеру телефона — ещё и лимит описания счёта (см. поле).
         Позиции каталога и `kaspi_connection_id` проверяются на принадлежность вашей
         организации **сразу** — до печати листа (`422`, см. операцию).
       properties:
@@ -5070,7 +5165,20 @@ components:
               count: {type: integer, minimum: 1, example: 1}
               price: {type: number, nullable: true, example: 5000}
         discount_percentage: {type: number, nullable: true, minimum: 1, maximum: 99}
-        description: {type: string, maxLength: 100, nullable: true, example: "Заказ №1024"}
+        description:
+          type: string
+          maxLength: 100
+          nullable: true
+          example: "Заказ №1024"
+          description: |
+            Наименование позиции в чеке Kaspi — до 100 символов (предел Kaspi).
+
+            ⚠️ Лист должен принимать оплату **по номеру телефона** (запасной путь есть на
+            странице каждого листа), поэтому описание обязано укладываться ещё и в лимит
+            описания счёта: с 2026-09-05 — 60 символов, у организаций, зарегистрированных
+            с 26.08.2026, — уже сейчас. Слишком длинное описание отбивается при выпуске
+            листа с `error_code: description_too_long`, а не ломает телефонный путь молча.
+            ⛔ Изменить описание у выпущенного листа нельзя — только `DELETE` и новый лист.
         external_order_id: {type: string, maxLength: 255, nullable: true, description: "Ссылка на сделку в вашей системе (придёт в вебхуке)."}
         single_use: {type: boolean, default: true, description: "true — одна сделка (замок «Оплачено» после оплаты)."}
         kaspi_connection_id: {type: integer, nullable: true, description: "Кассир/точка (по умолчанию primary)."}
@@ -5418,7 +5526,7 @@ components:
             gtin: {type: string, nullable: true, example: "07622300000001"}
             ntin_missing: {type: boolean, description: "true = есть barcode, нет НТИН → позиция не попадёт в фискальный чек (notify-only).", example: false}
             status: {type: string, enum: [active, pending, deleting, deleted, failed], example: active, description: "Тот же производный статус, что у GET /catalog — словарь один на обе поверхности. Вид открытой операции дополнительно виден в operation."}
-            sellable: {type: boolean, description: "Можно ли ставить позицию в счёт: снимаемую позицию корзина отбивает.", example: true}
+            sellable: {type: boolean, description: "Можно ли ставить позицию в счёт: снимаемую позицию корзина отбивает. Позиция, создание которой в работе, продаётся — счёт по ней уйдёт разовой продажей до подтверждения Kaspi; брошенное создание (status=failed) не продаётся.", example: true}
             in_kaspi_catalog: {type: boolean, description: "Уйдёт ли позиция как каталожный товар с маркировкой Нацкаталога. false = счёт создастся, но позиция уедет быстрой продажей и маркировки в фискальном чеке не будет. ⚠️ В песочнице всегда false (синтетическая идентичность тестовой оси) — о боевой позиции это ничего не говорит.", example: true}
             operation: {type: string, nullable: true, enum: [create, update, delete], description: "Отказанная операция; null после успешного завершения.", example: null}
             error_code: {type: string, nullable: true, description: "snake_case-код отказа operation.", example: null}
@@ -5573,6 +5681,20 @@ components:
         ntin_missing: {type: boolean, description: "true, если у товара есть barcode, но нет НТИН → не попадёт в фискальный чек как маркированный. Notify-only: дорезолвите НТИН через POST /catalog/scan + PATCH. Присутствует во всех ответах каталога."}
         matched_existing: {type: boolean, description: "Только в ответе POST /catalog: позиция сматчена с уже существующим товаром (match-and-merge) — вернулся его живой id, новая строка не создавалась. В остальных ответах — false."}
         name_differs: {type: boolean, description: "Только в ответе POST /catalog при matched_existing=true по ярусу 3 (совпал barcode/НТИН, но наименование другое): имя существующего товара НЕ перезаписано. Правьте имя явным PATCH /catalog/{id}."}
+        outcome:
+          type: string
+          nullable: true
+          enum: [created, matched, reissued, unchanged, revived, not_started]
+          example: created
+          description: >
+            Что сделано с позицией. Только в ответе POST /catalog, в остальных ответах каталога
+            null. `created` — заведена новая строка; `matched` — сматчилась существующая, правка
+            применена или поставлена в очередь; `reissued` — переиздана снятая позиция;
+            `unchanged` — строка уже совпадает с каталогом Kaspi, работа не нужна; `revived` —
+            брошенное создание открыто заново; `not_started` — брошенное создание найдено, но
+            работа НЕ открыта (дословный повтор уже отбитого), чините PATCH /catalog/{id}.
+            ⚠️ Читайте именно это поле: matched_existing говорит лишь «строка найдена» и не
+            отличает открытую работу от её отсутствия.
         status:
           type: string
           enum: [active, pending, deleting, deleted, failed]
@@ -5591,7 +5713,13 @@ components:
           description: >-
             Примут ли позицию в корзину счёта / QR / подписки. `false` у снятой позиции и у
             позиции с открытым намерением удаления — даже если попытки удаления прекращены;
-            повторный `POST /catalog` или `PATCH` возвращает её в продажу.
+            повторный `POST /catalog` или `PATCH` возвращает её в продажу. Позиция, создание
+            которой в работе (`status=pending`), продаётся: счёт по ней уйдёт разовой продажей,
+            пока Kaspi не подтвердит создание — см. `in_kaspi_catalog`.
+            ⚠️ `false` и у позиции, создание которой БРОШЕНО (`status=failed`,
+            `operation=create`): в каталоге Kaspi её нет и само оно там не появится. Вернуть её
+            в продажу можно только через `PATCH /catalog/{id}` — повторный `POST /catalog`
+            брошенное создание не возобновляет.
         in_kaspi_catalog:
           type: boolean
           description: >-
@@ -5649,7 +5777,7 @@ components:
           type: number
           minimum: 100
           maximum: 1000000
-          description: Обязателен без каталога; на каталог-организации игнорируется (сумма из cart_items).
+          description: Обязателен, когда cart_items не передан. С корзиной игнорируется — сумму считает сервер.
         billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28); в коротком месяце берётся последний доступный день. У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье; значения 8–28 валидацию проходят, но на этих периодах не действуют — списание просто уходит на +7 или +14 дней от предыдущего. У `daily` не используется."}
         description: {type: string, maxLength: 255}
         subscriber_name: {type: string, maxLength: 255}
@@ -5663,7 +5791,7 @@ components:
           type: array
           minItems: 1
           maxItems: 100
-          description: Обязателен для каталог-организаций; запрещён без каталога.
+          description: Опционален. Доступен только организации с каталогом; без каталога даёт 422 catalog_not_supported.
           items:
             $ref: '#/components/schemas/CartItemSimple'
         bill_immediately: {type: boolean, default: false}

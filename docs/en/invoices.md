@@ -49,7 +49,7 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 |-------|------|----------|-------------|
 | `amount` | number | Yes* | Amount in KZT, **whole tenge only**: 1 - 99,999,999. A fractional value → `422 amount_must_be_whole_tenge`; both `amount` and the `cart_items` total after discounts are checked. If you need tiyn, use `POST /invoices/qr`. *Not required with cart_items. |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
-| `description` | string | No | Payment description (max 500 chars) |
+| `description` | string | No | Payment description (max 60 chars — Kaspi shows the buyer only the first 60) |
 | `external_order_id` | string | No | Your order ID (max 255 chars) |
 | `cart_items` | array | No | Array of cart items (replaces amount) |
 | `discount_percentage` | number | No | Global discount percentage (1-99). Applied to the entire invoice. |
