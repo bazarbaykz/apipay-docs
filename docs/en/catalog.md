@@ -350,7 +350,7 @@ These are two **different** facts and cannot be expressed by one flag. You do no
 
 | Field | What it means |
 |-------|---------------|
-| `sellable` | Whether the item is accepted into an invoice cart, a QR or a subscription. `false` for a removed item and for an item with an open deletion intent — even if the attempts have stopped |
+| `sellable` | Whether the item is accepted into an invoice cart, a QR or a subscription. `false` for a removed item, for an item with an open deletion intent (even if the attempts have stopped) and for an item whose creation was abandoned (`status: failed` with `operation: create`). The first two cases are returned to sale by a repeated `POST /catalog` or `PATCH`; an abandoned creation is reliably resumed only by `PATCH /catalog/{id}`: a repeated `POST /catalog` does not always resume it |
 | `in_kaspi_catalog` | Whether the item has a production Kaspi nomenclature identity. With `false` the invoice is still created, but the item goes through as a one-off sale, and no National Catalog marking is carried into the fiscal receipt |
 
 > ⚠️ **In the sandbox `in_kaspi_catalog` is always `false`** — test items carry a synthetic nomenclature identity. That is a property of the test environment, not a prediction about a production item: check marking on the organization's production side.
