@@ -34,7 +34,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `billing_time` | string | No | Charge time in Almaty as `HH:MM`, within a 06:00–22:00 window. Defaults to `13:00` |
 | `first_billing_at` | string | No | Date of the first charge (YYYY-MM-DD, Almaty calendar). Without it the first charge is `started_at` plus one period. The date cannot be in the past or more than two years ahead, and together with `bill_immediately` it returns a `422`. Can only be set at creation |
 | `total_cycles` | integer | No | How many **paid** charges to make over the whole life of the subscription (1–600). Empty means open-ended. An unpaid attempt does not consume a cycle; once the limit is reached the subscription moves to `expired` |
-| `description` | string | No | Payment description (max 60 chars — Kaspi shows the buyer only the first 60) |
+| `description` | string | No | Payment description (max 60 chars — Kaspi shows the buyer only the first 60). Without it the charge invoice goes out with the text «Оплата подписки №{id}», or «Оплата подписки №{id} (песочница)» in the sandbox |
 | `subscriber_name` | string | No | Subscriber name (max 255 chars) |
 | `external_subscriber_id` | string | No | Your external subscriber ID (max 255 chars) |
 | `started_at` | string | No | Start date (YYYY-MM-DD, default: today) |
