@@ -1579,10 +1579,13 @@ paths:
           description: >-
             `invalid_tariff_plan` — неизвестная пара tier_id/period_months;
             `invalid_upgrade_plan` — такой ступени перехода нет в прайсе;
-            `upgrade_period_not_supported` — при `upgrade` период обязан быть 1
-            (конверт `ErrorEnvelope`); либо стандартная Laravel-форма при
-            нарушении правил FormRequest (tier_id/period_months/buyer_bin/
-            buyer_name/buyer_address/contract/upgrade).
+            `upgrade_period_not_supported` — при `upgrade` период обязан быть 1;
+            `upgrade_remainder_too_long` (только при `upgrade`) — у организации
+            оплачен длинный период, и остаток текущего тарифа не укладывается в
+            месяц, который продаёт переход: доплату считает менеджер ApiPay,
+            обратитесь в поддержку (конверт `ErrorEnvelope`); либо стандартная
+            Laravel-форма при нарушении правил FormRequest (tier_id/period_months/
+            buyer_bin/buyer_name/buyer_address/contract/upgrade).
           content:
             application/json:
               schema:

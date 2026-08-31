@@ -3864,8 +3864,22 @@ paths:
                   minimum: 100
                   maximum: 1000000
                   description: Обязателен, если этим же запросом снимают корзину (cart_items=null).
-                billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28); в коротком месяце берётся последний доступный день. У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье; значения 8–28 валидацию проходят, но на этих периодах не действуют — списание просто уходит на +7 или +14 дней от предыдущего. У `daily` не используется."}
-                description: {type: string, maxLength: 255}
+                billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28). У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье, и значения больше 7 на этих периодах отклоняются (раньше они принимались и молча игнорировались). У `daily` не используется. Взаимоисключающе с `billing_day_from_end`."}
+                billing_day_from_end: {type: integer, minimum: 0, maximum: 1, nullable: true, description: "Опора от конца месяца: 0 — последний день, 1 — предпоследний. Доступна только для `monthly`, `quarterly`, `yearly`. Взаимоисключающе с `billing_day`."}
+                billing_time: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', nullable: true, description: "Время списания по Алматы в формате ЧЧ:ММ. Допустимое окно — 06:00–22:00. По умолчанию 13:00."}
+                total_cycles: {type: integer, minimum: 1, maximum: 600, nullable: true, description: "Сколько ОПЛАЧЕННЫХ списаний сделать за всю жизнь подписки. Пусто — бессрочно. Неоплаченная попытка цикл не расходует."}
+                description:
+                  type: string
+                  maxLength: 255
+                  description: >-
+                    Описание подписки. Уходит в Kaspi комментарием к счёту списания.
+                    ⚠️ Kaspi показывает покупателю только ПЕРВЫЕ 60 СИМВОЛОВ, остальное
+                    отбрасывает молча. С 2026-09-05 изменённое описание длиннее 60
+                    символов отклоняется (HTTP 422); до этой даты длинные описания
+                    принимаются как прежде. ⛔ Организации, зарегистрированные
+                    с 2026-08-26, живут на лимите 60 сразу. Проверяется только
+                    ИЗМЕНЁННОЕ описание: правка других полей у подписки со старым
+                    длинным описанием проходит как раньше.
                 subscriber_name: {type: string, maxLength: 255}
                 external_subscriber_id: {type: string, maxLength: 255}
                 max_retry_attempts: {type: integer, minimum: 1, maximum: 10}
@@ -5779,7 +5793,11 @@ components:
           minimum: 100
           maximum: 1000000
           description: Обязателен, когда cart_items не передан. С корзиной игнорируется — сумму считает сервер.
-        billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28); в коротком месяце берётся последний доступный день. У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье; значения 8–28 валидацию проходят, но на этих периодах не действуют — списание просто уходит на +7 или +14 дней от предыдущего. У `daily` не используется."}
+        billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28). У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье, и значения больше 7 на этих периодах отклоняются (раньше они принимались и молча игнорировались). У `daily` не используется. Взаимоисключающе с `billing_day_from_end`."}
+        billing_day_from_end: {type: integer, minimum: 0, maximum: 1, nullable: true, description: "Опора от конца месяца: 0 — последний день, 1 — предпоследний. Доступна только для `monthly`, `quarterly`, `yearly`. Взаимоисключающе с `billing_day`."}
+        billing_time: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', nullable: true, description: "Время списания по Алматы в формате ЧЧ:ММ. Допустимое окно — 06:00–22:00. По умолчанию 13:00."}
+        first_billing_at: {type: string, format: date, description: "Дата первого списания по календарю Алматы. Несовместима с bill_immediately. Без неё первое списание — started_at плюс период."}
+        total_cycles: {type: integer, minimum: 1, maximum: 600, nullable: true, description: "Сколько ОПЛАЧЕННЫХ списаний сделать за всю жизнь подписки. Пусто — бессрочно. Неоплаченная попытка цикл не расходует."}
         description: {type: string, maxLength: 255}
         subscriber_name: {type: string, maxLength: 255}
         external_subscriber_id: {type: string, maxLength: 255}
@@ -5810,14 +5828,18 @@ components:
         billing_period: {type: string, example: monthly}
         billing_period_label: {type: string, example: Ежемесячно}
         billing_day: {type: integer, nullable: true, example: 1}
+        billing_day_from_end: {type: integer, nullable: true, description: "0 — последний день месяца, 1 — предпоследний."}
         billing_day_label: {type: string, nullable: true}
+        billing_time: {type: string, nullable: true, example: "13:00", description: "Время списания по Алматы."}
+        total_cycles: {type: integer, nullable: true, description: "Сколько оплат запланировано всего. Пусто — бессрочно."}
+        cycles_paid: {type: integer, example: 0, description: "Сколько оплат уже получено."}
         status: {type: string, enum: [active, paused, cancelled, expired], example: active}
         status_label: {type: string, example: Активна}
         status_color: {type: string, example: green}
         started_at: {type: string, format: date-time, nullable: true}
         next_billing_at: {type: string, format: date-time, nullable: true}
-        next_billing_in_days: {type: integer, nullable: true}
-        next_billing_label: {type: string, nullable: true}
+        next_billing_in_days: {type: integer, nullable: true, description: "Дней до списания по календарю Алматы. Отрицательное — просрочено."}
+        next_billing_label: {type: string, nullable: true, example: "через 3 дня"}
         paused_at: {type: string, format: date-time, nullable: true}
         cancelled_at: {type: string, format: date-time, nullable: true}
         failed_attempts: {type: integer, example: 0}
@@ -6392,7 +6414,11 @@ x-webhooks:
     post:
       tags: [Webhooks]
       summary: Подписка истекла
-      description: Grace-период истёк, биллинг остановлен НАВСЕГДА (реактивации нет — создавайте новую подписку).
+      description: >-
+        Биллинг остановлен НАВСЕГДА (реактивации нет — создавайте новую подписку).
+        Причин две: истёк grace-период либо исчерпан `total_cycles`. Во втором случае
+        в КОРНЕ payload, рядом с `event` и `subscription`, приходят
+        `reason: total_cycles_reached`, `cycles_paid` и `total_cycles`.
       requestBody:
         content:
           application/json:
@@ -6431,7 +6457,11 @@ x-webhooks:
     post:
       tags: [Webhooks]
       summary: Подписка отменена
-      description: "`POST /subscriptions/{id}/cancel` (безвозвратно)."
+      description: >-
+        `POST /subscriptions/{id}/cancel` (безвозвратно) — либо явный отказ плательщика
+        в Kaspi: подписка отменяется сразу, и в КОРНЕ payload приходят
+        `reason: payer_refused` и `invoice_id`. Нехватка средств у плательщика отказом
+        не считается и ведёт к обычному повтору.
       requestBody:
         content:
           application/json:

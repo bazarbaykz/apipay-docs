@@ -393,7 +393,7 @@ Sent when a subscription is created.
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "active",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -420,7 +420,7 @@ Sent when a subscription payment succeeds.
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "active",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -525,7 +525,7 @@ Sent when a subscription is paused (`POST /subscriptions/{id}/pause`).
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "paused",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -579,7 +579,7 @@ Sent when a subscription is cancelled.
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "cancelled",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -590,6 +590,8 @@ Sent when a subscription is cancelled.
 ```
 
 The subscription is cancelled irreversibly: `next_billing_at` keeps its last value, and no invoices are issued anymore. To resume, create a new subscription.
+
+A cancellation also arrives without a request from you: if the payer declined the invoice in Kaspi, the subscription is cancelled at once and the payload root carries `reason: payer_refused` and `invoice_id`. Insufficient funds on the payer's side do not count as a refusal — those lead to ordinary retries.
 
 ### webhook.test
 
@@ -624,10 +626,10 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 | `subscription.payment_succeeded` | — | The next subscription invoice was paid. `failed_attempts` is reset; the grace period (if any) is lifted. |
 | `subscription.payment_failed` | — | The subscription invoice expired or was cancelled (`reason`). While attempts are below `max_retry_attempts` the system re-issues the invoice itself — nothing to recreate. |
 | `subscription.grace_period_started` | — | All retries are exhausted; the subscription stays active for `grace_period_days`. Any successful payment lifts the grace period. |
-| `subscription.expired` | — | The grace period ended — billing is stopped for good. To resume, create a new subscription. |
+| `subscription.expired` | — | Billing is stopped for good: either the grace period ended or the `total_cycles` charges were used up — in the latter case the payload root carries `reason: total_cycles_reached`, `cycles_paid` and `total_cycles`. To resume, create a new subscription. |
 | `subscription.paused` | — | The subscription was paused. No invoices are issued. |
 | `subscription.resumed` | — | The subscription was resumed; `next_billing_at` is recalculated from the moment of resumption. |
-| `subscription.cancelled` | — | The subscription was cancelled irreversibly. |
+| `subscription.cancelled` | — | The subscription was cancelled irreversibly: by your request or by an explicit refusal from the payer in Kaspi — in the latter case the payload root carries `reason: payer_refused` and `invoice_id`. |
 | `webhook.test` | — | A manual test from the dashboard. A dummy invoice with `status=test` — just ignore it. |
 
 ## Status transitions

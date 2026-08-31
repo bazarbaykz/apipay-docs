@@ -29,8 +29,12 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `amount` | number | Conditional | Amount in KZT (100 - 1,000,000), **whole tenge only**. Not required when `cart_items` provided |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `billing_period` | string | Yes | Billing cycle (see table below) |
-| `billing_day` | integer | No | Day of charge. For `monthly`, `quarterly`, `yearly` — day of month (1–28). For `weekly` and `biweekly` — **day of week**: 1 = Monday … 7 = Sunday; other values have no effect on these periods. Not used for `daily` |
-| `description` | string | No | Payment description (max 255 chars) |
+| `billing_day` | integer | No | Day of charge. For `monthly`, `quarterly`, `yearly` — day of month (1–28). For `weekly` and `biweekly` — **day of week**: 1 = Monday … 7 = Sunday; a value above 7 on these periods returns a `422`. Not used for `daily`. Mutually exclusive with `billing_day_from_end` |
+| `billing_day_from_end` | integer | No | Anchor from the end of the month: `0` — the last day, `1` — the day before. Only for `monthly`, `quarterly`, `yearly`. Mutually exclusive with `billing_day` |
+| `billing_time` | string | No | Charge time in Almaty as `HH:MM`, within a 06:00–22:00 window. Defaults to `13:00` |
+| `first_billing_at` | string | No | Date of the first charge (YYYY-MM-DD, Almaty calendar). Without it the first charge is `started_at` plus one period. The date cannot be in the past or more than two years ahead, and together with `bill_immediately` it returns a `422`. Can only be set at creation |
+| `total_cycles` | integer | No | How many **paid** charges to make over the whole life of the subscription (1–600). Empty means open-ended. An unpaid attempt does not consume a cycle; once the limit is reached the subscription moves to `expired` |
+| `description` | string | No | Payment description (max 60 chars — Kaspi shows the buyer only the first 60) |
 | `subscriber_name` | string | No | Subscriber name (max 255 chars) |
 | `external_subscriber_id` | string | No | Your external subscriber ID (max 255 chars) |
 | `started_at` | string | No | Start date (YYYY-MM-DD, default: today) |
@@ -69,12 +73,22 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
     "description": "Monthly subscription",
     "billing_period": "monthly",
     "billing_day": 1,
+    "billing_day_from_end": null,
+    "billing_time": "13:00",
+    "total_cycles": null,
+    "cycles_paid": 0,
     "status": "active",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
+    "next_billing_in_days": 28,
+    "next_billing_label": "in 28 days",
     "created_at": "2026-02-01T12:00:00+00:00"
   }
 }
 ```
+
+`next_billing_at` is returned in UTC and carries a time of day: `08:00+00:00` is 13:00 in Almaty.
+`next_billing_in_days` is a **signed** number of days in the Almaty calendar: a negative value
+means overdue. If you compare this field with zero, take the sign into account.
 
 The HTTP status is `201`. The subscription itself is in the `subscription` field; `PUT /subscriptions/{id}`, `pause`, `resume` and `cancel` are shaped the same way.
 
@@ -92,7 +106,7 @@ curl "https://api.apipay.kz/api/v1/subscriptions?status=active&page=1&per_page=2
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `page` | integer | Page number (default: 1) |
-| `per_page` | integer | Items per page (default: 20) |
+| `per_page` | integer | Items per page (default: 20, maximum 100 — a larger value is clamped to 100) |
 | `status` | string | Filter: `active`, `paused`, `cancelled`, `expired` |
 | `phone_number` | string | Filter by phone |
 | `external_subscriber_id` | string | Filter by your subscriber ID |
@@ -122,7 +136,7 @@ curl https://api.apipay.kz/api/v1/subscriptions/1 \
     "billing_period": "monthly",
     "billing_day": 1,
     "status": "active",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "stats": {
       "total_payments": 5,
       "successful_payments": 5,
@@ -167,7 +181,12 @@ curl -X PUT https://api.apipay.kz/api/v1/subscriptions/1 \
   -d '{"amount": 7500, "description": "Premium monthly"}'
 ```
 
-Updatable fields: `amount`, `billing_day`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `metadata`, `cart_items`.
+Updatable fields: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `metadata`, `cart_items`. The first charge date `first_billing_at` can only be set at creation.
+
+> ⚠️ **A subscription description follows the same rule as an invoice description.** From 5 September 2026
+> a changed description longer than 60 characters returns a `422`; organizations registered from 26 August
+> 2026 are already on that limit. Only a **changed** description is validated: editing other fields on a
+> subscription that already has a long description works as before.
 
 ## Pause Subscription
 
@@ -207,6 +226,8 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
+`per_page` accepts up to 100 records per page; a larger value is clamped to 100.
+
 ### Response Item Structure
 
 | Field | Type | Description |
@@ -233,18 +254,28 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
 | `active` | Billing on schedule |
 | `paused` | Temporarily paused, can be resumed |
 | `cancelled` | Permanently cancelled |
-| `expired` | Expired after grace period |
+| `expired` | Expired: the grace period ended or `total_cycles` was exhausted |
 
 ## Grace Period
 
 When a payment fails, the system enters a grace period:
 
 1. **Payment fails** — System automatically retries
-2. **Retries** — Up to `max_retry_attempts` times at `retry_interval_hours` intervals
-3. **Grace period active** — Subscription remains `active` during retries
-4. **Expired** — if the payment still does not go through, the subscription moves to `expired` when the grace period ends: `grace_period_days` after the last failed attempt
+2. **Retries** — Up to `max_retry_attempts` times at `retry_interval_hours` intervals. The interval
+   is respected for refusals on the merits — for example, when the number has no Kaspi
+3. **An expired invoice is the exception** — it is reissued immediately and does not wait for the
+   interval: the payer has already used up the invoice lifetime
+4. **An explicit refusal ends everything** — if the buyer declined the invoice in Kaspi, the
+   subscription is cancelled at once. Insufficient funds on the payer's side do not count as a refusal and
+   lead to an ordinary retry
+5. **Grace period active** — Subscription remains `active` during retries
+6. **Expired** — if the payment still does not go through, the subscription moves to `expired` when the grace period ends: `grace_period_days` after the last failed attempt
 
 Defaults, if you do not pass them at creation: `max_retry_attempts` — 3, `retry_interval_hours` — 24, `grace_period_days` — 3.
+
+> **Missed periods are not billed in a batch.** If a subscription could not charge for a long time —
+> for example, the organization had no connected cashier — then on resumption a **single** invoice is
+> issued for the current period and the schedule moves to the nearest future date.
 
 Webhook events: `subscription.payment_failed`, `subscription.grace_period_started`, `subscription.payment_succeeded`, `subscription.expired`. See [Webhooks](webhooks.md).
 

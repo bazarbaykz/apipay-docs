@@ -393,7 +393,7 @@ ApiPay отправляет 20 типов событий:
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "active",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -420,7 +420,7 @@ ApiPay отправляет 20 типов событий:
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "active",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -525,7 +525,7 @@ ApiPay отправляет 20 типов событий:
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "paused",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -579,7 +579,7 @@ ApiPay отправляет 20 типов событий:
     "amount": "5000.00",
     "billing_period": "monthly",
     "status": "cancelled",
-    "next_billing_at": "2026-03-01T00:00:00+00:00",
+    "next_billing_at": "2026-03-01T08:00:00+00:00",
     "failed_attempts": 0,
     "in_grace_period": false,
     "is_sandbox": false
@@ -590,6 +590,8 @@ ApiPay отправляет 20 типов событий:
 ```
 
 Подписка отменена безвозвратно: `next_billing_at` сохраняет последнее значение, счета больше не выставляются. Для возобновления создайте новую подписку.
+
+Отмена приходит и без вашего запроса: если плательщик отклонил счёт в Kaspi, подписка отменяется сразу, и в корне payload приходят `reason: payer_refused` и `invoice_id`. Нехватка средств у плательщика отказом не считается — там идут обычные повторы.
 
 ### webhook.test
 
@@ -624,10 +626,10 @@ ApiPay отправляет 20 типов событий:
 | `subscription.payment_succeeded` | — | Очередной счёт подписки оплачен. `failed_attempts` сброшен, льготный период (если был) снят. |
 | `subscription.payment_failed` | — | Счёт подписки истёк или отменён (`reason`). Пока попыток меньше `max_retry_attempts` система сама перевыставит счёт — ничего пересоздавать не нужно. |
 | `subscription.grace_period_started` | — | Все попытки исчерпаны; подписка ещё активна `grace_period_days` дней. Любая успешная оплата снимает льготный период. |
-| `subscription.expired` | — | Льготный период истёк — биллинг остановлен навсегда. Для возобновления создайте новую подписку. |
+| `subscription.expired` | — | Биллинг остановлен навсегда: истёк льготный период либо исчерпаны оплаты `total_cycles` — во втором случае в корне payload приходят `reason: total_cycles_reached`, `cycles_paid` и `total_cycles`. Для возобновления создайте новую подписку. |
 | `subscription.paused` | — | Подписка приостановлена. Счета не выставляются. |
 | `subscription.resumed` | — | Подписка возобновлена; `next_billing_at` пересчитан от момента возобновления. |
-| `subscription.cancelled` | — | Подписка отменена безвозвратно. |
+| `subscription.cancelled` | — | Подписка отменена безвозвратно: вашим запросом либо явным отказом плательщика в Kaspi — во втором случае в корне payload приходят `reason: payer_refused` и `invoice_id`. |
 | `webhook.test` | — | Ручной тест из ЛК. Фиктивный счёт со `status=test` — спокойно игнорируйте. |
 
 ## Переходы статусов
