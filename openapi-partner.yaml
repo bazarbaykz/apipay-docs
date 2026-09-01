@@ -14,17 +14,18 @@ info:
 
     Все запросы — заголовок `X-Partner-Key: <ключ>`. Ключ выдаётся один раз и
     хранится только хешем (sha256). Партнёр привязан к `User`; все его
-    организации принадлежат этому User — это граница авторизации. Ключ доступен
-    только **operating**-партнёру (двух-типовая модель `referral | operating`):
-    `referral`-партнёр или неактивный ключ → `403 forbidden`.
+    организации принадлежат этому User — это граница авторизации. Ключ работает
+    только у партнёра, чей доступ к Partner API **одобрен**: партнёр без
+    одобренного доступа и неактивный ключ → `403 forbidden`. Одобрение выдаётся
+    вместе с ключом либо отдельным решением; отзыв доступа гасит ключ.
 
 
     ## Границы этой спецификации
 
     Здесь описана **только** S2S-поверхность ключа `X-Partner-Key` —
     17 эндпоинтов. Партнёрский **кабинет**
-    (`api-key/rotate`, `PUT /mode`, `webhook-logs`, `claim-requests`,
-    `sandbox/toggle`, `production-request`, `managed-organizations` и т.д.) —
+    (`POST /api-key`, `webhook-logs`, `claim-requests`, `sandbox/toggle`,
+    `production-request`, `managed-organizations` и т.д.) —
     отдельная поверхность, и в этот машинный канон она НЕ входит.
 
 
@@ -57,6 +58,29 @@ info:
     сокращённую форму — см. схемы `AuthError` и раздел `responses`. Ошибки
     валидации FormRequest/inline-`validate` отдают стандартную Laravel-форму
     `{ "message", "errors" }` (см. схему `LaravelValidationError`).
+
+
+    ## Права интеграции
+
+    Доступ к организации мерчанта даёт живая связь «интеграция ↔ организация», а состав
+    операций — набор прав, который подтвердил мерчант. Операция вне набора отвечает
+    `403 grant_not_granted`. Ответ одинаков для «права нет», «операция интеграциям не
+    выдаётся» и «операции нет в каталоге прав» — по коду ответа состав набора не
+    восстанавливается. Ретрай бессмысленен: набор меняет мерчант в своём кабинете.
+
+    `403 channel_required` — доступ к этой организации **был и отозван мерчантом**. Ключ при
+    этом остаётся рабочим на других организациях; восстанавливает доступ мерчант. Отдельный
+    код от `grant_not_granted` намеренно — это разные ситуации.
+
+    `404 organization_not_found` — организация вне вашего скоупа: чужая, реферальная,
+    несуществующая, отвязанная вами самими либо сменившая владельца. Ответ намеренно один на
+    все эти случаи и совпадает с ответом на неизвестный идентификатор.
+
+    `403 integration_ambiguous` — на одной организации у вас больше одного живого доступа
+    (две интеграции): назовите, какая из них работает с мерчантом.
+
+    `403 grant_snapshot_unreadable` — сбой на нашей стороне (запись прав нечитаема), а не
+    отказ в праве; обратитесь в поддержку.
 
 
     ## Сквозные правила
@@ -419,7 +443,7 @@ paths:
                 success: false
                 error: already_connected
                 error_code: already_connected
-                message: Произошла ошибка.
+                message: К организации уже подключён кассир. Повторите с force=true, чтобы сменить его.
         "503":
           description: >-
             `entrance_auth_disabled` — подключение/переавторизация кассира временно
@@ -486,9 +510,18 @@ paths:
                     example: true
                   process_status:
                     $ref: "#/components/schemas/ProcessStatus"
+                  cashier_phone_masked:
+                    type: string
+                    nullable: true
+                    description: >-
+                      Эхо номера, который вы прислали, — маскированное. Сверьте его
+                      ДО ввода кода из SMS: опечатка в номере тратит попытку, код
+                      уходит на чужой телефон, и узнать об этом иначе нельзя.
+                    example: "770***67"
               example:
                 success: true
                 process_status: otp_required
+                cashier_phone_masked: "770***67"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -751,7 +784,7 @@ paths:
                 success: false
                 error: http_error
                 error_code: http_error
-                message: Произошла ошибка.
+                message: Сервис авторизации Kaspi временно недоступен, повторите позже.
         "503":
           description: >-
             `entrance_auth_disabled` — подключение/переавторизация кассира временно
@@ -816,6 +849,14 @@ paths:
                   kaspi_connected:
                     type: boolean
                     example: false
+                  current_cashier_phone_masked:
+                    type: string
+                    nullable: true
+                    description: >-
+                      Кассир, подключённый к организации СЕЙЧАС, — маскированный номер;
+                      `null`, если кассира ещё нет. Отвечает на вопрос «кого я заменяю»
+                      до необратимого шага. ⚠️ Это НЕ номер текущей попытки авторизации.
+                    example: "770***77"
                   expires_at:
                     type: string
                     format: date-time
@@ -827,6 +868,7 @@ paths:
                 process_status: idle
                 attempt_status: none
                 kaspi_connected: false
+                current_cashier_phone_masked: null
                 expires_at: null
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -1023,7 +1065,7 @@ paths:
       summary: Каталог тарифов
       description: >-
         Общий каталог тарифов ApiPay (без привязки к организации): 4 тарифа
-        (start/business/pro/pro_max) и 16 планов (4 тарифа × периоды 1/3/6/12
+        (start/business/pro/pro_max) и 12 планов (4 тарифа × периоды 1/3/6
         мес со скидками).
 
 
@@ -1132,7 +1174,7 @@ paths:
                   example: business
                 period_months:
                   type: integer
-                  enum: [1, 3, 6, 12]
+                  enum: [1, 3, 6]
                   example: 3
                 phone:
                   type: string
@@ -1179,7 +1221,7 @@ paths:
         "403":
           description: >-
             `production_access_required` — боевая организация у sandbox-партнёра;
-            либо `forbidden` — ключ не operating.
+            либо `forbidden` — доступ партнёра к Partner API не одобрен.
           content:
             application/json:
               schema:
@@ -1187,6 +1229,8 @@ paths:
               example:
                 success: false
                 error: production_access_required
+                error_code: production_access_required
+                message: Требуется production-доступ.
         "404":
           $ref: "#/components/responses/OrganizationNotFound"
         "409":
@@ -1276,15 +1320,26 @@ paths:
       tags: [Tariff]
       summary: Назначить тариф мерчанту бесплатно (режим assignment)
       description: >-
-        Партнёр в режиме `tariff_billing_mode = assignment` НАЗНАЧАЕТ тариф своему
-        мерчанту бесплатно: деньги он берёт с мерчанта сам и платит ApiPay по договору
-        одним счётом в месяц. Тариф активируется СИНХРОННО — счёта в Kaspi нет,
+        Партнёр, чей ДОСТУП К ЭТОЙ организации работает в режиме `assignment`,
+        НАЗНАЧАЕТ ей тариф бесплатно: деньги он берёт с мерчанта сам и платит ApiPay по
+        договору одним счётом в месяц. Тариф активируется СИНХРОННО — счёта в Kaspi нет,
         телефон плательщика не нужен, вебхука не будет.
 
 
-        ⛔ Режим переключает только ApiPay (админ). Партнёр в дефолтном режиме
+        ⛔ Режим переключает только ApiPay (админ). Доступ в дефолтном режиме
         `payment` получает `403 assignment_not_enabled` и платит через
         `POST .../tariff/pay` либо `.../tariff/invoice` по глобальному прайсу.
+
+
+        ⚠️ Поле `tariff_billing_mode` в `GET /me` и `GET /health` — это ваш ДЕФОЛТ
+        (режим, с которым заводится новый доступ к мерчанту), а не режим конкретной
+        организации. Сегодня ApiPay переключает дефолт и все действующие доступы одним
+        действием, поэтому расхождения между ними у вас нет.
+
+
+        ⛔ Если действующего доступа к организации не записано вовсе, ответ —
+        `403 partner_channel_missing`. Это не «не тот режим», а состояние, которого в
+        норме не бывает: разбирает его ApiPay по обращению, ретрай смысла не имеет.
 
 
         ⛔ Вебхук `tariff.activated` на СВОЁ назначение партнёру НЕ отправляется —
@@ -1315,7 +1370,7 @@ paths:
                   example: business
                 period_months:
                   type: integer
-                  enum: [1, 3, 6, 12]
+                  enum: [1, 3, 6]
                   example: 3
       responses:
         "201":
@@ -1382,10 +1437,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: >-
-            `assignment_not_enabled` — партнёр работает в режиме `payment`, бесплатное
-            назначение ему не выдано; `partner_not_active` — партнёрский аккаунт
-            отключён; `production_access_required` — боевая организация у
-            sandbox-партнёра; `forbidden` — ключ не operating.
+            `assignment_not_enabled` — ваш доступ к этой организации работает в режиме
+            `payment`, бесплатное назначение по нему не выдано; `partner_channel_missing`
+            — действующего доступа к этой организации не записано, обратитесь в поддержку;
+            `partner_not_active` — партнёрский аккаунт отключён;
+            `production_access_required` — боевая организация у sandbox-партнёра;
+            `forbidden` — доступ партнёра не одобрен.
           content:
             application/json:
               schema:
@@ -1475,7 +1532,7 @@ paths:
                   example: business
                 period_months:
                   type: integer
-                  enum: [1, 3, 6, 12]
+                  enum: [1, 3, 6]
                   example: 1
                 buyer_bin:
                   type: string
@@ -1525,7 +1582,7 @@ paths:
         "403":
           description: >-
             `production_access_required` — боевая организация у sandbox-партнёра;
-            либо `forbidden` — ключ не operating.
+            либо `forbidden` — доступ партнёра к Partner API не одобрен.
           content:
             application/json:
               schema:
@@ -1533,6 +1590,8 @@ paths:
               example:
                 success: false
                 error: production_access_required
+                error_code: production_access_required
+                message: Требуется production-доступ.
         "404":
           $ref: "#/components/responses/OrganizationNotFound"
         "409":
@@ -1908,7 +1967,8 @@ paths:
         "403":
           description: >-
             Приём выключен (`inbound_sync_disabled`), назначение тарифа недоступно
-            (`assignment_not_enabled`) либо аккаунт неактивен (`partner_not_active`).
+            (`assignment_not_enabled`), действующего доступа к организации не записано
+            (`partner_channel_missing`) либо аккаунт неактивен (`partner_not_active`).
           content:
             application/json:
               schema:
@@ -2144,7 +2204,8 @@ components:
       name: X-Partner-Key
       description: >-
         Партнёрский ключ (server-to-server). Выдаётся один раз, хранится sha256.
-        Доступен только operating-партнёру.
+        Принадлежит интеграции партнёра — продукту, которым он подключается к
+        организациям мерчантов; ею и определяется набор прав запроса.
   parameters:
     OrganizationId:
       name: organization
@@ -2719,6 +2780,14 @@ components:
             type:
               type: string
               enum: [referral, operating]
+              deprecated: true
+              description: >-
+                ⚠️ УСТАРЕЛО (объявлено 29.08.2026), будет удалено отдельной записью
+                чейнджлога. Историческая метка модели двух типов аккаунта: право
+                работать по машинной двери она не даёт и никогда больше не даст —
+                его даёт заведённая интеграция, и с 27.08.2026 `X-Partner-Key`
+                опознаёт именно её. Вместо `type` читайте `api_access_status`.
+                Пока поле отдаётся, значения не изменились.
               example: operating
             api_access_status:
               type: string
@@ -2729,9 +2798,12 @@ components:
               type: string
               enum: [payment, assignment]
               description: >-
+                ДЕФОЛТ: режим, с которым заводится новый доступ к мерчанту.
                 `payment` — тариф мерчанта оплачивается через `.../tariff/pay`
                 или `.../tariff/invoice`; `assignment` — вы назначаете тариф
                 бесплатно через `.../tariff/assign` (включает только ApiPay).
+                Действующий режим — свойство доступа к конкретной организации,
+                и `.../tariff/assign` спрашивает именно его.
               example: payment
             inbound_sync:
               type: object
@@ -2867,8 +2939,11 @@ components:
       type: object
       description: >-
         Сокращённая форма ошибок слоя аутентификации и проверки доступа.
-        Содержит только `success` и `error`; для
-        `forbidden` (не operating) дополнительно дублируется `error_code`.
+        Содержит `success` и `error`; `error_code` дублирует `error` у
+        `forbidden` (доступ не одобрен) и у `production_access_required`, а у
+        последнего приходит ещё и `message` — то есть полный конверт
+        `ErrorEnvelope`. ⚠️ Разбирайте `error_code`, он канонический; `error`
+        сохранён ради существующих интеграций.
       required: [success, error]
       properties:
         success:
@@ -2879,7 +2954,13 @@ components:
           example: organization_not_found
         error_code:
           type: string
-          description: Присутствует только для `forbidden`
+          description: >-
+            Присутствует у `forbidden` и `production_access_required`
+        message:
+          type: string
+          description: >-
+            Безопасное ru-сообщение. Присутствует у
+            `production_access_required`
     LaravelValidationError:
       type: object
       description: >-
@@ -2907,9 +2988,9 @@ components:
     Unauthorized:
       description: >-
         Неверный/отсутствующий X-Partner-Key: `partner_key_missing` (нет
-        заголовка), `invalid_partner_key` (не найден/неактивен),
-        `partner_user_missing` (у партнёра нет user). Тело — сокращённая форма
-        `{ success:false, error }`.
+        заголовка), `invalid_partner_key` (не найден, отозван либо аккаунт
+        партнёра отключён), `partner_user_missing` (у партнёра нет user). Тело —
+        сокращённая форма `{ success:false, error }`.
       content:
         application/json:
           schema:
@@ -2919,7 +3000,8 @@ components:
             error: invalid_partner_key
     ForbiddenNotOperating:
       description: >-
-        Партнёр не operating (referral-тип или неактивный ключ). Тело
+        Доступ не одобрен либо отозван: интеграция, которой принадлежит ключ, не
+        одобрена или погашена. Тело
         `{ success:false, error:"forbidden", error_code:"forbidden" }`.
       content:
         application/json:
@@ -2932,8 +3014,10 @@ components:
     ProductionRequired:
       description: >-
         Боевая организация у sandbox-партнёра:
-        `production_access_required` (403). Также возможен `forbidden` при
-        не-operating ключе. Тело — сокращённая форма `{ success:false, error }`.
+        `production_access_required` (403). Тот же код и то же тело отдаёт
+        партнёрский кабинет — до 25.08.2026 он отвечал на этом правиле
+        отдельным кодом `production_required`. Также возможен `forbidden`, если
+        доступ партнёра не одобрен (у него `message` нет).
       content:
         application/json:
           schema:
@@ -2941,6 +3025,8 @@ components:
           example:
             success: false
             error: production_access_required
+            error_code: production_access_required
+            message: Требуется production-доступ.
     OrganizationNotFound:
       description: >-
         Организация не принадлежит партнёру или не существует

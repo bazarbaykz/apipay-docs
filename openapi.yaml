@@ -15,6 +15,11 @@ info:
     резолвится строго из ключа — интегратор видит только свою организацию. Ключ выдаётся
     в личном кабинете ApiPay.kz.
 
+    ⚠️ `403 organization_archived` означает, что организация ключа отправлена в архив: ключ
+    остаётся активным, но работать им нельзя, и перевыпуск ключа ничего не меняет — доступ
+    возвращает владелец аккаунта. Отказ приходит на любую операцию. Не путайте с `401`
+    (ключ неверен, истёк или деактивирован) — там как раз помогает перевыпуск.
+
     ## Rate limiting
 
     Общий лимит — **200 запросов/мин на ключ**. Отдельные эндпоинты
@@ -57,6 +62,24 @@ info:
       `error_code` это стабильный snake_case-идентификатор причины (каталог — схема
       `ErrorCode`); `error` дублирует его для обратной совместимости. Стройте
       `switch`-логику по `error_code`, а не по русскому тексту `message`.
+
+    ## Права интеграции (ключи, выданные партнёром)
+
+    Если ключ выдан вам партнёром-интегратором, набор операций определяет **мерчант**: он
+    подтверждает список прав при подключении и может изменить его в своём кабинете.
+    Операция вне выданного набора отвечает `403 grant_not_granted` на обеих поверхностях —
+    и на `/api/v1/*`, и на её кабинетном зеркале. Ответ намеренно одинаков для «права нет»,
+    «операция закрыта интеграциям навсегда» и «операции нет в каталоге прав»: по коду ответа
+    состав чужого набора не восстанавливается. Ретрай бессмысленен — набор меняет мерчант.
+
+    ⚠️ `403 channel_required` означает, что живого доступа к организации у интеграции нет:
+    мерчант его отозвал. Ключ при этом продолжает существовать — восстанавливает доступ
+    мерчант.
+
+    ⚠️ `403 grant_snapshot_unreadable` означает сбой на нашей стороне (запись прав нечитаема),
+    а не отказ в праве; обратитесь в поддержку.
+
+    ⚠️ Ключи, которые мерчант выпустил себе сам, этой проверкой не затронуты.
 
     ## Форматы дат
 
@@ -2137,7 +2160,7 @@ paths:
     get:
       tags: [Tariff & Account]
       summary: Каталог тарифов
-      description: Список тарифов (start/business/pro/pro_max) и планов (тариф × период 1/3/6/12 мес). Это подписка мерчанта на ApiPay.
+      description: Список тарифов (start/business/pro/pro_max) и планов (тариф × период 1/3/6 мес). Это подписка мерчанта на ApiPay.
       operationId: getTariffPlans
       responses:
         '200':
@@ -2496,7 +2519,22 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/CashierManagementDisabled'
+          description: |
+            `cashier_management_disabled` — у ключа нет флага `can_manage_cashiers`.
+            `cashier_change_requires_merchant` — ключ выдан партнёром на организацию, аккаунтом
+            которой партнёр не владеет, и номер отличается от телефона текущего кассира.
+            Переавторизация ТОГО ЖЕ кассира и первое подключение (кассира ещё нет) проходят;
+            смену кассира проводит сам мерчант — своей дверью либо по ссылке-приглашению.
+            Повтор запроса не поможет.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                cashier_management_disabled:
+                  value: {error: cashier_management_disabled, message: "This API key cannot manage cashiers"}
+                cashier_change_requires_merchant:
+                  value: {error: cashier_change_requires_merchant, message: "Changing the cashier requires the merchant"}
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
         '409':
@@ -2870,6 +2908,17 @@ paths:
           schema:
             type: boolean
             default: false
+        - name: source
+          in: query
+          description: >-
+            `own` → только позиции, заведённые вами. По умолчанию параметр НЕ передаётся и
+            список содержит ВЕСЬ каталог мерчанта — включая заведённое им самим и другими его
+            интеграциями; чьё что, видно в поле `source` каждой позиции. Так и задумано:
+            каталог принадлежит мерчанту, а «пустой» список толкнул бы вас залить всё заново
+            и породить дубли. Других значений параметр не принимает.
+          schema:
+            type: string
+            enum: [own]
         - name: per_page
           in: query
           schema:
@@ -3107,6 +3156,11 @@ paths:
         ⛔ `barcodes[]` не принимается: штрихкод не уникален, и одно значение могло бы снести сотни позиций.
         Filter-режима нет: сервер не додумывает разрушающее множество по неполной заливке.
 
+        ⛔ **Интеграция снимает только СВОИ позиции.** Каталог у мерчанта общий, и то, что
+        завёл он сам или другая его интеграция, одним вашим запросом не сносится. Такие
+        идентификаторы вернутся в поле `not_yours` и останутся на месте — во всех телах ответа,
+        включая `dry_run`. Ключа самого мерчанта и запросов из кабинета это не касается.
+
         ⚠️ **Это фоновая операция на СУТКИ.** Позиции снимаются с продажи по одной, и во
         время массового удаления заливка каталога идёт медленнее.
         Порядок величин: 500 позиций — около двух часов, несколько тысяч — около
@@ -3201,6 +3255,14 @@ paths:
                         type: integer
                         description: "⚠️ Здесь ЧИСЛО (историческая форма). В остальных телах — массив id."
                       already_queued_count: {type: integer}
+                      not_yours:
+                        type: array
+                        items: {type: integer}
+                        description: >-
+                          Позиции запроса, которые НЕ заведены вашей интеграцией: их завёл сам
+                          мерчант, они приехали из каталога Kaspi либо их завела другая его
+                          интеграция. Удалены они не будут. Пусто, если запрос идёт ключом
+                          самого мерчанта или из кабинета — у них чужих позиций не бывает.
                   - type: object
                     title: IdempotentReplay
                     properties:
@@ -3213,6 +3275,14 @@ paths:
                       queued: {type: integer, example: 0}
                       already_queued: {type: array, items: {type: integer}}
                       already_queued_count: {type: integer}
+                      not_yours:
+                        type: array
+                        items: {type: integer}
+                        description: >-
+                          Позиции запроса, которые НЕ заведены вашей интеграцией: их завёл сам
+                          мерчант, они приехали из каталога Kaspi либо их завела другая его
+                          интеграция. Удалены они не будут. Пусто, если запрос идёт ключом
+                          самого мерчанта или из кабинета — у них чужих позиций не бывает.
                   - type: object
                     title: SandboxDeleted
                     properties:
@@ -3220,6 +3290,14 @@ paths:
                       deleted: {type: integer}
                       already_queued: {type: array, items: {type: integer}}
                       already_queued_count: {type: integer}
+                      not_yours:
+                        type: array
+                        items: {type: integer}
+                        description: >-
+                          Позиции запроса, которые НЕ заведены вашей интеграцией: их завёл сам
+                          мерчант, они приехали из каталога Kaspi либо их завела другая его
+                          интеграция. Удалены они не будут. Пусто, если запрос идёт ключом
+                          самого мерчанта или из кабинета — у них чужих позиций не бывает.
         '202':
           description: "Позиции приняты в очередь удаления"
           content:
@@ -3242,6 +3320,14 @@ paths:
                   already_queued_count:
                     type: integer
                     description: "Сколько позиций уже стояло в очереди удаления — без обрезки."
+                  not_yours:
+                    type: array
+                    items: {type: integer}
+                    description: >-
+                      Позиции запроса, которые НЕ заведены вашей интеграцией: их завёл сам
+                      мерчант, они приехали из каталога Kaspi либо их завела другая его
+                      интеграция. Удалены они не будут. Пусто, если запрос идёт ключом самого
+                      мерчанта или из кабинета — у них чужих позиций не бывает.
         '400':
           description: |
             `catalog_not_supported` — у организации не включён каталог. ⚠️ Именно 400, а не 422:
@@ -3520,6 +3606,17 @@ paths:
           description: |
             Товар не найден. ⚠️ Сюда же приходит уже СНЯТАЯ позиция (`status: deleted`):
             выборка идёт по живым позициям. Заводите её заново через `POST /catalog`.
+        '409':
+          description: |
+            Позиция заведена ДРУГОЙ интеграцией этой организации (`error_code:
+            catalog_item_foreign_channel`). Позиция при этом видна: в списке она приходит с
+            `source: other`, а `POST /catalog` при совпадении `external_ref`/`barcode`/`ntin`
+            возвращает её `id` — поэтому отказ именно `409`, а не `404`. Изменить и снять её
+            можно только со стороны той интеграции либо из кабинета мерчанта. Позиций без
+            интеграции-автора (`source: shared`) это не касается.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
         '422':
           $ref: '#/components/responses/ValidationError'
     delete:
@@ -3573,6 +3670,17 @@ paths:
           $ref: '#/components/responses/TariffInactive'
         '404':
           description: Товар не найден
+        '409':
+          description: |
+            Позиция заведена ДРУГОЙ интеграцией этой организации (`error_code:
+            catalog_item_foreign_channel`). Позиция при этом видна: в списке она приходит с
+            `source: other`, а `POST /catalog` при совпадении `external_ref`/`barcode`/`ntin`
+            возвращает её `id` — поэтому отказ именно `409`, а не `404`. Изменить и снять её
+            можно только со стороны той интеграции либо из кабинета мерчанта. Позиций без
+            интеграции-автора (`source: shared`) это не касается.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
   "/clients/check":
     post:
       tags: [Clients]
@@ -4371,15 +4479,18 @@ paths:
                   kaspi_connection_id: {type: integer, nullable: true}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "access_denied (не-owner без API-ключа) / cashbox_disabled"}
+        '403': {description: "cashbox_disabled"}
   "/cashbox/settings/auto-close":
     put:
       tags: [Cashbox]
       summary: Тумблер автозакрытия смены
       description: |
         Синхронное переключение. Идемпотентно: если ЖИВОЕ значение в Kaspi уже равно
-        запрошенному — `changed:false` без обращения к кассе. Доступен API-ключу; человеку без ключа
-        (SPA) — только owner организации.
+        запрошенному — `changed:false` без обращения к кассе.
+
+        ⛔ Только ключ, выпущенный ВЛАДЕЛЬЦЕМ организации: иначе
+        `403 cashbox_settings_owner_key_required`. Чтение (`GET /cashbox/settings`)
+        доступно любому ключу организации.
       operationId: setCashboxAutoClose
       requestBody:
         required: true
@@ -4392,7 +4503,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "access_denied / tariff_inactive / cashbox_disabled"}
+        '403': {description: "cashbox_settings_owner_key_required / tariff_inactive / cashbox_disabled"}
         '409': {description: "kaspi_session_not_configured / rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -4403,7 +4514,8 @@ paths:
       summary: Тумблер автоизъятия наличных
       description: |
         Автоизъятие наличных после закрытия смены. Поведение идентично `auto-close`
-        (синхронный write, лок, идемпотентность по живому значению, owner-only на SPA).
+        (синхронный write, лок, идемпотентность по живому значению, ключ владельца
+        организации).
       operationId: setCashboxAutoWithdrawal
       requestBody:
         required: true
@@ -4416,7 +4528,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "access_denied / tariff_inactive / cashbox_disabled"}
+        '403': {description: "cashbox_settings_owner_key_required / tariff_inactive / cashbox_disabled"}
         '409': {description: "kaspi_session_not_configured / rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -4479,6 +4591,20 @@ components:
             properties:
               error: {type: string, example: kaspi_session_invalid}
               message: {type: string, example: "Kaspi session is invalid or expired. Please contact support."}
+    OrganizationArchived:
+      description: |
+        `organization_archived` — организация, к которой привязан ключ, отправлена в архив.
+        Отказ приходит на ЛЮБУЮ операцию этого ключа. Ключ при этом остаётся активным, и
+        перевыпуск ничего не меняет: доступ возвращает владелец аккаунта. Что именно
+        случилось с организацией, ответ не раскрывает намеренно.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: organization_archived
+            error_code: organization_archived
+            message: Организация недоступна — обратитесь к владельцу аккаунта.
     InvoiceCreationUnavailable:
       description: |
         Создание счёта временно недоступно. `error` / `error_code`:
@@ -4756,6 +4882,7 @@ components:
         - catalog_batch_filter_removed
         - catalog_delete_scope_required
         - catalog_delete_owner_key_required
+        - cashbox_settings_owner_key_required
         - catalog_bulk_delete_mismatch
         - catalog_busy
         - request_rate_limited
@@ -4792,6 +4919,10 @@ components:
         - receipt_not_available_for_status
         - receipt_unavailable
         - receipt_rate_limited
+        - grant_not_granted
+        - grant_snapshot_unreadable
+        - channel_required
+        - organization_archived
     QrRefundSession:
       type: object
       description: Снимок сессии QR-возврата. Kaspi наружу не течёт (нет QrReturnId/ExtTranId).
@@ -5488,6 +5619,7 @@ components:
         external_ref: {type: string, nullable: true, example: "1C-000123", description: Клиентская ссылка 1С (ключ маппинга).}
         name: {type: string, example: "Фильтр масляный"}
         queued_at: {type: string, format: date-time, description: "Момент постановки в очередь (created_at), Asia/Almaty +05:00.", example: "2026-07-11T10:00:00+05:00"}
+        source: {type: string, enum: [own, shared, other], example: own, description: "Кто завёл позицию, ГЛАЗАМИ спрашивающего: `own` — вы; `shared` — сам мерчант (кабинет) либо позиция приехала из каталога Kaspi; `other` — другая интеграция этого мерчанта. Имя соседней интеграции не отдаётся. `other` можно читать, но не изменять и не удалять (`409 catalog_item_foreign_channel`). Для мерчантских ключей и сессии кабинета значение всегда `own`."}
     CatalogQueueBlock:
       type: object
       description: |
@@ -5523,6 +5655,7 @@ components:
         error_message: {type: string, description: "Обезличенный клиентский текст (без сырых ответов Kaspi).", example: "Такая позиция уже есть в каталоге."}
         queued_at: {type: string, format: date-time, description: "created_at, +05:00.", example: "2026-07-11T10:00:00+05:00"}
         failed_at: {type: string, format: date-time, description: "Момент отказа операции, ISO 8601.", example: "2026-07-11T10:03:00+05:00"}
+        source: {type: string, enum: [own, shared, other], example: own, description: "Кто завёл позицию, ГЛАЗАМИ спрашивающего: `own` — вы; `shared` — сам мерчант (кабинет) либо позиция приехала из каталога Kaspi; `other` — другая интеграция этого мерчанта. Имя соседней интеграции не отдаётся. `other` можно читать, но не изменять и не удалять (`409 catalog_item_foreign_channel`). Для мерчантских ключей и сессии кабинета значение всегда `own`."}
     WebhookCatalogItemProcessed:
       type: object
       description: |
@@ -5695,7 +5828,8 @@ components:
         unified_goods_id: {type: string, nullable: true, description: "Нацкаталог master-good id."}
         external_ref: {type: string, nullable: true, description: "Клиентская ссылка (1С)."}
         ntin_missing: {type: boolean, description: "true, если у товара есть barcode, но нет НТИН → не попадёт в фискальный чек как маркированный. Notify-only: дорезолвите НТИН через POST /catalog/scan + PATCH. Присутствует во всех ответах каталога."}
-        matched_existing: {type: boolean, description: "Только в ответе POST /catalog: позиция сматчена с уже существующим товаром (match-and-merge) — вернулся его живой id, новая строка не создавалась. В остальных ответах — false."}
+        source: {type: string, enum: [own, shared, other], example: own, description: "Кто завёл позицию, ГЛАЗАМИ спрашивающего: `own` — вы; `shared` — сам мерчант (кабинет) либо позиция приехала из каталога Kaspi; `other` — другая интеграция этого мерчанта. Имя соседней интеграции не отдаётся. `other` можно читать, но не изменять и не удалять (`409 catalog_item_foreign_channel`). Для мерчантских ключей и сессии кабинета значение всегда `own`."}
+        matched_existing: {type: boolean, description: "Только в ответе POST /catalog: позиция сматчена с уже существующим товаром (match-and-merge) — вернулся его живой id, новая строка не создавалась. В остальных ответах — false. ⚠️ Сматчиться можно и с ЧУЖОЙ позицией (`source: other`) — тогда ни имя, ни цена не изменятся."}
         name_differs: {type: boolean, description: "Только в ответе POST /catalog при matched_existing=true по ярусу 3 (совпал barcode/НТИН, но наименование другое): имя существующего товара НЕ перезаписано. Правьте имя явным PATCH /catalog/{id}."}
         outcome:
           type: string
