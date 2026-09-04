@@ -200,6 +200,13 @@ paths:
         Итоги по смене (продажи/возвраты/выручка и сверка с цифрами Kaspi) отдаёт
         отдельный `GET /api/v1/cashbox/reconciliation`.
 
+        ⚠️ **Список — не полная выручка организации.** Счета, выставленные через ApiPay,
+        попадают в него сразу. Продажи, проведённые в приложении Kaspi Pay мимо ApiPay —
+        например другим кассиром, — подтягиваются из истории Kaspi: не мгновенно и не всегда
+        полностью. Подтянутая продажа датируется временем самой операции и появляется внутри
+        уже пройденного периода: для отчётности перезапрашивайте окно, а не только новые
+        записи. Отделить одно от другого можно фильтром `origin`.
+
         **Окно `date_from`/`date_to` задаётся в зоне мерчанта (Asia/Almaty)**, а не в UTC:
 
         - голая дата `2026-08-01` — это КАЛЕНДАРНЫЕ СУТКИ мерчанта целиком
@@ -235,6 +242,18 @@ paths:
             items:
               type: string
               enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded]
+        - name: origin
+          in: query
+          description: |
+            Происхождение счёта.
+            `all` — всё подряд (по умолчанию).
+            `apipay` — счёт выставлен через ApiPay: кабинетом, API-ключом, подпиской или печатным QR.
+            `kaspi` — продажа проведена в приложении Kaspi Pay мимо ApiPay и подтянута из истории Kaspi.
+            Половины не пересекаются: `apipay` + `kaspi` в одном окне дают ровно `all`.
+          schema:
+            type: string
+            enum: [all, apipay, kaspi]
+            default: all
         - name: date_from
           in: query
           description: Начало окна включительно — `Y-m-d` или `Y-m-d H[:ii[:ss]]` (зона Almaty).
@@ -597,12 +616,28 @@ paths:
         `processing`. Поля `total_collected` **нет** — сумма оплаченного это `paid_amount`.
 
         Границы задаются в зоне мерчанта (Asia/Almaty): голая дата = календарные сутки
-        целиком, `Y-m-d H:i` = точная минута. Окно режется по `created_at`.
+        целиком, `Y-m-d H:i` = точная минута. По какому времени резать окно — выбирает
+        `date_field` (по умолчанию `created_at`).
         Явный офсет уважается как указан; в query-строке `+` кодируется как `%2B`.
+
+        Ручка принимает те же фильтры, что и список: `status[]`, `search`, `date_field`,
+        `origin` — чтобы сводка совпадала с таблицей под ней. Границы периода при этом
+        задаются ТОЛЬКО парой `start_date`/`end_date` (или `period`): `date_from`/`date_to`
+        от списка здесь не применяются.
+
+        ⚠️ **Фильтр сужает саму базу агрегата, а не выделяет строки в нём.** При
+        `status[]=paid` поля `cancelled_*` и `expired_*` станут нулями, а `conversion_rate` —
+        `100`. Это ожидаемо: вы спросили статистику по подмножеству.
+
+        ⚠️ `date_field=paid_at` отсеивает неоплаченные счета — у них `paid_at` пуст. Конверсия
+        на таком окне тоже вырождается в `100`.
 
         ⚠️ `paid_amount`, `paid_invoices` и `conversion_rate` здесь считают только статус
         `paid` и **не включают** `partially_refunded` — у мерчанта с частичными возвратами
-        конверсия визуально занижена. Для сверки кассы используйте
+        конверсия визуально занижена. Опаснее всего это в паре с фильтром: запрос
+        `status[]=paid&status[]=partially_refunded` даст `total_invoices`, куда частично
+        возвращённые входят, и `paid_invoices`, куда они не входят, — то есть конверсию
+        заведомо ниже 100 % на выборке, где оплачены все. Для сверки кассы используйте
         `GET /api/v1/cashbox/reconciliation` — там раскладка кассового отчёта и сверка
         с цифрами Kaspi.
       operationId: getInvoiceStats
@@ -627,6 +662,42 @@ paths:
           schema:
             type: string
             pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
+        - name: "status[]"
+          in: query
+          description: |
+            Фильтр по статусам — те же значения, что у `GET /invoices`. ⚠️ Сужает базу
+            агрегата целиком: поля по неотобранным статусам станут нулями.
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded]
+        - name: search
+          in: query
+          description: Поиск, тот же что у `GET /invoices` (описание, телефон, external_order_id и прочее).
+          schema:
+            type: string
+            maxLength: 100
+        - name: date_field
+          in: query
+          description: |
+            По какому времени резать период.
+            `created_at` — момент выставления счёта (по умолчанию).
+            `paid_at` — момент оплаты; неоплаченные счета при этом отсеиваются.
+          schema:
+            type: string
+            enum: [created_at, paid_at]
+            default: created_at
+        - name: origin
+          in: query
+          description: |
+            Происхождение счёта, та же ось, что у `GET /invoices`.
+            `all` (по умолчанию) / `apipay` (выставлено через ApiPay) / `kaspi` (проведено
+            в приложении Kaspi Pay мимо ApiPay и подтянуто из истории Kaspi).
+          schema:
+            type: string
+            enum: [all, apipay, kaspi]
+            default: all
       responses:
         '200':
           description: Статистика
@@ -1619,14 +1690,28 @@ paths:
   "/qr-refunds":
     post:
       tags: [QR Refunds]
-      summary: Старт QR-возврата
+      summary: Старт QR-возврата (немедленный, deprecated)
+      deprecated: true
       description: |
         Создаёт сессию возврата и отдаёт возвратный QR (`qr_token_url`/`qr_image_url`),
-        который мерчант показывает клиенту. Клиент сканирует → сессия переходит в
-        `customer_identified` (вебхук `qr_refund.identified`), после чего доступен список
-        его возвратных операций (`GET .../operations`). Жизненный цикл: `awaiting_scan` →
-        (`customer_identified` | `expired`) → `completed`. TTL QR — минуты (`expires_at`);
-        опрашивайте `GET /qr-refunds/{id}` каждые `poll_interval_seconds` (или ждите вебхук).
+        который мерчант показывает клиенту прямо у кассы. Клиент сканирует → сессия переходит
+        в `customer_identified` (вебхук `qr_refund.identified`), после чего доступен список
+        его возвратных операций (`GET .../operations`).
+
+        ⚠️ **Окно скана — не более 90 секунд**, и это изменение поведения. Раньше `expires_at`
+        брался из `ExpireDate` Kaspi (около пяти минут), тогда как реальное окно составляло
+        ~90 секунд: интегратор видел живой QR у уже мёртвой сессии. Теперь `expires_at` —
+        минимум из подсказки провайдера и нашего потолка, а `scan_wait_timeout_seconds`
+        сообщает ДЕЙСТВУЮЩЕЕ окно. Просроченные `qr_token_url`/`qr_image_url` не выдаются ни
+        в этом ответе, ни в `GET /qr-refunds/{id}`.
+
+        ⛔ Отправив запрос, повторять его нельзя: попытка одноразовая. `502
+        qr_refund_activation_failed` означает «начать не удалось, нужен новый старт», а не
+        «попробуйте ещё раз тем же запросом».
+
+        **Deprecated** в пользу `POST /qr-refunds/links`: покупателя обычно нет рядом с
+        кассой, и отсканировать QR с чужого экрана ему нечем. Эндпоинт остаётся рабочим и
+        удаляться не планируется.
       operationId: startQrRefund
       requestBody:
         content:
@@ -1642,8 +1727,72 @@ paths:
         '400': {description: "organization_required / organization_not_verified / kaspi_session_not_configured / sandbox_limit"}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/TariffInactive'}
+        '202': {description: "qr_refund_activation_in_progress — попытка потрачена, исход ещё не записан; повторять нельзя, состояние читать через GET /qr-refunds/{id}"}
+        '409': {description: "qr_return_scan_timeout — окно скана закрылось до выдачи QR"}
         '422': {description: "connection_ambiguous / невалидный kaspi_connection_id"}
-        '503': {description: "kaspi_session_invalid — сессия кассира недоступна"}
+        '502': {description: "qr_refund_activation_failed — провайдер не подтвердил старт; попытка потрачена"}
+        '503': {description: "kaspi_session_invalid — сессия кассира недоступна; qr_refund_temporarily_unavailable — операция временно недоступна (ни одного вызова провайдера не сделано)"}
+  /qr-refunds/links:
+    post:
+      tags: [QR Refunds]
+      summary: Выпустить ссылку «Возврат ApiPay»
+      description: |
+        Создаёт одноразовую ссылку, которую мерчант отправляет покупателю. **Kaspi при этом
+        не вызывается и таймер не идёт.** Покупатель открывает ссылку и нажимает кнопку —
+        только тогда создаётся возвратный QR и начинается окно скана (не более 90 секунд).
+
+        `customer_url` возвращается **ровно один раз**: в базе хранится только необратимый
+        хеш, и повторно получить адрес нельзя ни через `GET /qr-refunds/{id}`, ни как-либо
+        ещё. Потеряли — выпускайте новую ссылку и отзывайте старую.
+
+        Срок неактивированной ссылки — `link_expires_at` (24 часа) и не продлевается ничем.
+        Одна ссылка материализует не более одной операции у Kaspi.
+
+        Дальнейшее состояние читается через `GET /qr-refunds/{id}`; денежное выполнение —
+        через существующий `POST /qr-refunds/{id}/execute`. ⛔ Ссылка сама по себе денег не
+        двигает и прав на это не даёт.
+      operationId: issueQrRefundLink
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kaspi_connection_id: {type: integer, nullable: true, description: Кассир; по умолчанию primary. Фиксируется при выпуске и не пересматривается}
+      responses:
+        '201':
+          description: Ссылка выпущена
+          content: {application/json: {schema: {$ref: '#/components/schemas/QrRefundLink'}}}
+        '400': {description: "organization_required / organization_not_verified / kaspi_session_not_configured"}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/TariffInactive'}
+        '422': {description: "connection_ambiguous / невалидный kaspi_connection_id"}
+        '429': {description: "qr_refund_link_limit_reached — слишком много неиспользованных ссылок"}
+        '503': {description: "qr_refund_temporarily_unavailable / kaspi_session_invalid"}
+  "/qr-refunds/links/{id}":
+    delete:
+      tags: [QR Refunds]
+      summary: Отозвать неактивированную ссылку
+      description: |
+        Гасит ссылку, которую покупатель ещё не открыл. Повторный отзыв той же ссылки
+        идемпотентен и возвращает тот же снимок.
+
+        ⛔ Отозвать уже активированную ссылку нельзя: `409 qr_refund_link_not_revocable`.
+        После активации сессия живёт своим окном скана и завершится сама.
+
+        ⚠️ Роут доступен и при истёкшем тарифе: запереть дверь изнутри мерчант обязан мочь
+        всегда. Выпуск новой ссылки при этом остаётся платной операцией.
+      operationId: revokeQrRefundLink
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200':
+          description: "Ссылка отозвана: статус `expired`, `error_code` = `qr_refund_link_revoked`"
+          content: {application/json: {schema: {$ref: '#/components/schemas/QrRefundSession'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {description: "Ссылка не найдена (not_found) — чужая и несуществующая неотличимы"}
+        '409': {description: "qr_refund_link_not_revocable — ссылку уже открыли либо она терминальна"}
+        '503': {description: "qr_refund_temporarily_unavailable"}
   "/qr-refunds/{id}":
     get:
       tags: [QR Refunds]
@@ -1701,10 +1850,34 @@ paths:
       summary: Выполнить возврат (синхронно)
       description: |
         Полный возврат — без `amount`/`items`. Частичный — `amount` ИЛИ `items`
-        (взаимоисключимы). Ответ `200` = возврат выполнен (терминал), дополнительно
-        приходит вебхук `qr_refund.completed`. Ошибка операции (уже возвращено / не
-        подлежит / сумма) → `422`, сессия остаётся `customer_identified` (можно повторить
-        с другой операцией). Истечение QR/личности → `409 qr_refund_expired`.
+        (взаимоисключимы).
+
+        `200` = возврат выполнен и доказан (терминал), приходит вебхук `qr_refund.completed`.
+
+        ⛔ **Ошибки делятся на два класса, и разница принципиальна.**
+
+        До отправки денег (`403`, `409 qr_refund_not_identified|qr_refund_expired`, `422`,
+        `503`) сессия остаётся `customer_identified` — денежный запрос не уходил, повторить
+        с другой операцией или суммой можно.
+
+        После отправки денег ответ всегда `202`, и повторять запрос **нельзя**:
+
+        - `202 qr_refund_execution_uncertain` — ответ Kaspi не доказал ни успех, ни отказ
+          (обрыв, таймаут чтения, неопознанная форма). Kaspi мог возврат применить. В теле —
+          снимок сессии в статусе `execution_uncertain`, приходит вебхук
+          `qr_refund.execution_uncertain`;
+        - `202 qr_refund_execution_result_unavailable` — исход сохранён, но состояние сессии
+          достоверно неизвестно. Снимка в теле нет намеренно.
+
+        Оба разбираются вручную через поддержку. `Retry-After` не отдаётся.
+
+        Повторный `execute` поверх уже идущего возврата → `409 qr_refund_execution_in_progress`,
+        поверх недоказанного → `409 qr_refund_execution_uncertain`. Денег ни один из них не
+        двигает.
+
+        Отказ Kaspi «на счёте мерчанта нет денег на возврат» → `422 refund_insufficient_funds`:
+        это ошибка ДО отправки денег, сессия остаётся `customer_identified`, и после
+        пополнения счёта возврат повторяется на ней же, пока не истёк срок идентификации.
       operationId: executeQrRefund
       parameters:
         - {name: id, in: path, required: true, schema: {type: integer}}
@@ -1715,13 +1888,22 @@ paths:
             schema: {$ref: '#/components/schemas/ExecuteQrRefundRequest'}
       responses:
         '200':
-          description: Возврат выполнен
+          description: Возврат выполнен и доказан
           content: {application/json: {schema: {$ref: '#/components/schemas/QrRefundExecuted'}}}
+        '202':
+          description: |
+            ⛔ Возврат отправлен, исход не доказан. Повторять запрос НЕЛЬЗЯ.
+            `qr_refund_execution_uncertain` — со снимком сессии;
+            `qr_refund_execution_result_unavailable` — без снимка.
+          content: {application/json: {schema: {$ref: '#/components/schemas/QrRefundExecutionAccepted'}}}
+        '400': {description: organization_not_verified}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "tariff_inactive / not_sandbox (поле simulate вне песочницы)"}
+        '403': {description: "tariff_inactive / qr_refund_actor_no_longer_authorized / not_sandbox (поле simulate вне песочницы)"}
         '404': {description: not_found}
-        '409': {description: "qr_refund_not_identified / qr_refund_expired / qr_refund_completed"}
-        '422': {description: "operation_not_returnable / refund_amount_exceeds_available / partial_refund_requires_return_items"}
+        '409': {description: "qr_refund_not_identified / qr_refund_expired / qr_refund_completed / qr_refund_execution_in_progress / qr_refund_execution_uncertain"}
+        '422': {description: "operation_not_returnable / refund_amount_exceeds_available / partial_refund_requires_return_items / refund_insufficient_funds"}
+        '502': {description: "kaspi_error — Kaspi недоступен либо ответил неразбираемо на ревалидации ДО отправки денег. Сессия остаётся customer_identified, повтор допустим"}
+        '503': {description: "qr_refund_execution_disabled / qr_refund_execution_context_unavailable / kaspi_session_invalid / kaspi_session_unavailable"}
   "/qr-refunds/{id}/simulate":
     post:
       tags: [Sandbox]
@@ -2759,6 +2941,44 @@ paths:
           $ref: '#/components/responses/CashierManagementDisabled'
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
+  "/connections/{connection}/auth/logout":
+    post:
+      tags: [Connections]
+      summary: Отключить кассира (disconnect)
+      description: |
+        Отключает кассира: сессия и незавершённая попытка авторизации закрываются, подключение
+        переходит в `status: inactive` и `session_mode: external`, а `kaspi_user_id`
+        освобождается — тот же номер после этого можно подключить в другой организации.
+        Строка кассира остаётся в `GET /connections`: это не `DELETE /connections/{connection}`,
+        и отключить можно и основного, и единственного кассира (у `DELETE` это `422`).
+        Идемпотентно: повтор на уже отключённой строке → `200`. Отдельного лимита у метода нет —
+        действует общий лимит v1. После отключения `auth/init` снова подключает эту же строку.
+
+        ⚠️ Пока кассир отключён, приём платежей этой точкой не работает: создание счетов
+        отвечает `kaspi_session_not_configured`.
+
+        ⚠️ Денежное последствие. После отключения возвраты по счетам, оплаченным через этого
+        кассира, через API не проходят: запрос принимается, но возврат завершается статусом
+        `failed` — приходит вебхук `invoice.refunded` со `status: failed`. Такие возвраты
+        проводят вручную в приложении Kaspi Pay. Проведите нужные возвраты до отключения.
+      operationId: connectionAuthLogout
+      parameters:
+        - $ref: '#/components/parameters/ConnectionId'
+      responses:
+        '200':
+          description: Кассир отключён (или уже был отключён)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: {type: boolean, example: true}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/CashierManagementDisabled'
+        '404':
+          $ref: '#/components/responses/ConnectionNotFound'
   "/catalog/units":
     get:
       tags: [Catalog]
@@ -3783,23 +4003,47 @@ paths:
       description: |
         Подписки организации. Пагинация — **meta-обёртка** `{data, links, meta}`
         (`meta.current_page`/`total`/`per_page`/`last_page`/`from`/`to`). Фильтры — точное
-        совпадение (не LIKE). Сортировка фиксированная: `created_at DESC`. Даты — UTC `+00:00`.
+        совпадение (не LIKE), между собой соединяются по «И». Сортировка фиксированная:
+        `created_at DESC`. Даты — UTC `+00:00`.
+
+        Каждый фильтр принимает **одно значение или массив**: `status=active` и
+        `status[]=active&status[]=paused` — законные формы, массив означает «любое из».
+        ⚠️ Неизвестное значение `status` отдаёт `422` — список допустимых значений объявлен
+        здесь же.
+        `phone_number` нормализуется: `+7 (700) 123-45-67`, `77001234567` и `87001234567`
+        находят одну и ту же подписку.
       operationId: listSubscriptions
       parameters:
         - name: status
           in: query
-          description: Точный фильтр по статусу.
+          description: |
+            Точный фильтр по статусу. Одно значение либо массив (`status[]=`).
           schema:
-            type: string
-            enum: [active, paused, cancelled, expired]
+            oneOf:
+              - type: string
+                enum: [active, paused, cancelled, expired]
+              - type: array
+                items:
+                  type: string
+                  enum: [active, paused, cancelled, expired]
         - name: external_subscriber_id
           in: query
+          description: Одно значение либо массив.
           schema:
-            type: string
+            oneOf:
+              - type: string
+              - type: array
+                items: {type: string}
         - name: phone_number
           in: query
+          description: |
+            Номер в любой форме — приводится к каноническому `8XXXXXXXXXX`.
+            Одно значение либо массив.
           schema:
-            type: string
+            oneOf:
+              - type: string
+              - type: array
+                items: {type: string}
         - name: per_page
           in: query
           schema:
@@ -3828,6 +4072,8 @@ paths:
                     $ref: '#/components/schemas/PaginationMeta'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
     post:
       tags: [Subscriptions]
       summary: Создать подписку
@@ -4318,7 +4564,7 @@ paths:
         продажи, возвраты и их разность) и цифру кассы Kaspi (`kaspi`) — и структурные причины, по которым
         их **нельзя приравнять** (`discrepancies`). ⛔ Это НЕ доказательство равенства: касса
         Kaspi и счета ApiPay — разные леджеры (Kaspi видит в том числе наличные и офлайн-продажи,
-        а наша половина — только оплаты по счетам ApiPay), а итог смены приходит единой суммой,
+        а наша половина — оплаты по счетам, которые числятся в ApiPay), а итог смены приходит единой суммой,
         где эти части не выделены. Поэтому разницу мы не вычисляем: в ответе только обе цифры и
         причины расхождения. Активной сессии кассира ручка не требует — она работает по смене,
         уже полученной через `GET /cashbox/shifts`. Смены, которую ещё не листали, для сверки
@@ -4463,8 +4709,14 @@ paths:
       tags: [Cashbox]
       summary: Текущие тумблеры кассы
       description: |
-        Сохранённое состояние обоих тумблеров. Значения tri-state: `null` = живое
-        значение с кассы ещё не читали.
+        Состояние обоих тумблеров. Значения tri-state: `null` = значение неизвестно
+        (`null` — это НЕ «выключено»).
+
+        Обычно ответ отдаётся из сохранённого состояния. Если по тумблеру состояния ещё
+        нет, оно один раз дочитывается с кассы и сохраняется — дальше запрос снова
+        бесплатный. Дочитывание не переключает тумблер и ничего не меняет на кассе; если
+        оно не удалось (касса недоступна, у точки нет кассира или номера кассы), ответ
+        остаётся `200` со значением `null`.
       operationId: getCashboxSettings
       responses:
         '200':
@@ -4479,7 +4731,8 @@ paths:
                   kaspi_connection_id: {type: integer, nullable: true}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "cashbox_disabled"}
+        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
   "/cashbox/settings/auto-close":
     put:
       tags: [Cashbox]
@@ -4847,6 +5100,7 @@ components:
         - refund_window_expired
         - refund_rejected_by_kaspi
         - refund_requires_buyer_confirmation
+        - refund_insufficient_funds
         - invoice_already_paid
         - invoice_already_cancelled
         - invoice_not_found_in_kaspi
@@ -4901,6 +5155,23 @@ components:
         - qr_refund_expired
         - qr_refund_not_identified
         - qr_refund_completed
+        - qr_refund_execution_in_progress
+        - qr_refund_execution_uncertain
+        - qr_refund_execution_result_unavailable
+        - qr_refund_execution_context_unavailable
+        - qr_refund_execution_disabled
+        - qr_refund_temporarily_unavailable
+        - qr_refund_link_limit_reached
+        - qr_refund_link_not_revocable
+        - qr_refund_link_revoked
+        - qr_refund_link_expired
+        - qr_return_scan_timeout
+        - qr_return_identity_timeout
+        - qr_return_not_found
+        - qr_refund_activation_in_progress
+        - qr_refund_activation_failed
+        - qr_refund_actor_no_longer_authorized
+        - organization_not_verified
         - operation_not_returnable
         - refund_amount_exceeds_available
         - cashbox_disabled
@@ -4928,17 +5199,82 @@ components:
       description: Снимок сессии QR-возврата. Kaspi наружу не течёт (нет QrReturnId/ExtTranId).
       properties:
         id: {type: integer, example: 42}
-        status: {type: string, enum: [awaiting_scan, customer_identified, completed, expired, failed]}
+        status: {type: string, enum: [awaiting_customer, activating, awaiting_scan, customer_identified, executing, completed, execution_uncertain, expired, failed]}
+        execution_started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Когда была взята денежная претензия. Заполнено с `executing` и далее.
+        execution_uncertain_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Когда исход возврата был признан недоказанным. Заполнено только у
+            `execution_uncertain`.
+        # ⛔ Ключи присутствуют ВСЕГДА, пустые как `null`: поле, то появляющееся, то
+        # исчезающее, заставляет интегратора писать две ветки разбора одного ответа.
+        # Отсюда `nullable` поверх `$ref` — в 3.0 это выражается только через `allOf`.
+        error_code:
+          nullable: true
+          allOf: [{$ref: '#/components/schemas/ErrorCode'}]
+        error_message: {type: string, nullable: true}
         client_name: {type: string, nullable: true, example: "Иван И."}
-        qr_token_url: {type: string, nullable: true}
-        qr_image_url: {type: string, nullable: true}
-        expires_at: {type: string, format: date-time, nullable: true}
+        qr_token_url:
+          type: string
+          nullable: true
+          description: |
+            Возвратный QR немедленного старта. ⛔ У сессии, выпущенной как ссылка покупателю,
+            здесь ВСЕГДА `null`: её цель отдаётся один раз на публичной странице. После
+            дедлайна и на терминальном статусе поле обнуляется и у немедленного старта.
+        qr_image_url: {type: string, nullable: true, description: Та же цель картинкой; те же правила обнуления}
+        link_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Срок НЕАКТИВИРОВАННОЙ ссылки (24 часа с выпуска). Не путать с `expires_at`: тот
+            появляется только после нажатия покупателя и означает окно скана. Не продлевается
+            ничем — ни открытием страницы, ни перезагрузкой, ни неудачной попыткой.
+        scan_started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Начало окна скана. Единственный авторитет дедлайна.
+        provider_requested_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Момент выхода запроса в сеть. У боевой сессии равен `scan_started_at`; у песочной
+            всегда `null` — сеть там не звалась.
+        expires_at: {type: string, format: date-time, nullable: true, description: Конец окна скана. Не более 90 секунд от `scan_started_at`}
         identified_at: {type: string, format: date-time, nullable: true}
         completed_at: {type: string, format: date-time, nullable: true}
         refunded_amount: {type: string, nullable: true, example: "500.00"}
         receipt_url: {type: string, nullable: true}
-        poll_interval_seconds: {type: integer, nullable: true, description: Только в ответе старта}
-        scan_wait_timeout_seconds: {type: integer, nullable: true, description: Только в ответе старта}
+        poll_interval_seconds: {type: integer, nullable: true, description: Действующий интервал опроса}
+        scan_wait_timeout_seconds:
+          type: integer
+          nullable: true
+          description: |
+            ДЕЙСТВУЮЩЕЕ окно скана в секундах — уже прижатое потолком, а не подсказка
+            провайдера. ⚠️ Не более 90; раньше здесь могло оказаться около пяти минут.
+    QrRefundLink:
+      type: object
+      description: |
+        Ответ на выпуск ссылки «Возврат ApiPay». ⛔ `customer_url` отдаётся РОВНО ОДИН РАЗ:
+        в базе только необратимый хеш, и восстановить адрес нельзя ничем.
+      properties:
+        id: {type: integer, example: 42}
+        status: {type: string, enum: [awaiting_customer]}
+        customer_url:
+          type: string
+          description: |
+            Одноразовая ссылка для покупателя. ⛔ Предъявительская: кто её открыл, тот может
+            подтвердить возврат. Не публиковать, не класть в аналитику и в отчёты об ошибках.
+          example: https://qr.apipay.kz/refund/0PxK5tG2mQ8vY1nB4wR7sL3dF6hJ9cA0eU2iO5pT8xE
+        link_expires_at: {type: string, format: date-time, description: Срок неактивированной ссылки}
     QrRefundOperation:
       type: object
       properties:
@@ -5004,7 +5340,7 @@ components:
             error_code:
               type: string
               nullable: true
-              enum: [operation_not_returnable, refund_amount_exceeds_available, qr_refund_expired, kaspi_error]
+              enum: [operation_not_returnable, refund_amount_exceeds_available, qr_refund_expired, refund_insufficient_funds, kaspi_error]
     QrRefundExecuted:
       type: object
       properties:
@@ -5014,21 +5350,40 @@ components:
         receipt_url: {type: string, nullable: true}
         client_name: {type: string, nullable: true}
         completed_at: {type: string, format: date-time, nullable: true}
+    QrRefundExecutionAccepted:
+      type: object
+      description: |
+        Тело ответа `202` у execute. ⛔ Это НЕ ошибка запроса: он принят, единственная
+        денежная попытка потрачена, а исход не доказан — Kaspi мог возврат применить.
+        Повторять `execute` нельзя.
+
+        У `qr_refund_execution_uncertain` присутствуют и поля снимка сессии (она в статусе
+        `execution_uncertain`). У `qr_refund_execution_result_unavailable` их НЕТ намеренно:
+        состояние сессии в этот момент достоверно неизвестно, и выдумывать его нельзя.
+      allOf:
+        - $ref: '#/components/schemas/QrRefundSession'
+        - type: object
+          properties:
+            error: {type: string, description: Дублирует error_code (общий конверт ошибок)}
+            error_code: {$ref: '#/components/schemas/ErrorCode'}
+            message: {type: string}
+          required: [error, error_code, message]
     WebhookQrRefund:
       type: object
-      description: Payload событий qr_refund.identified/completed/expired.
+      description: Payload событий qr_refund.identified/completed/expired/execution_uncertain.
       properties:
-        event: {type: string, enum: [qr_refund.identified, qr_refund.completed, qr_refund.expired]}
+        event: {type: string, enum: [qr_refund.identified, qr_refund.completed, qr_refund.expired, qr_refund.failed, qr_refund.execution_uncertain]}
         qr_refund:
           type: object
           properties:
             id: {type: integer}
-            status: {type: string, enum: [customer_identified, completed, expired]}
+            status: {type: string, enum: [customer_identified, completed, expired, failed, execution_uncertain]}
             client_name: {type: string, nullable: true, example: "Иван И."}
             expires_at: {type: string, format: date-time, nullable: true}
             refunded_amount: {type: string, nullable: true, description: Только при completed}
             receipt_url: {type: string, nullable: true, description: Только при completed}
             error_code: {$ref: '#/components/schemas/ErrorCode'}
+            error_message: {type: string, nullable: true, description: Закреплён за событием, не читается с живой сессии}
             is_sandbox: {type: boolean}
         source: {type: string, nullable: true}
         timestamp: {type: string, format: date-time}
@@ -5271,6 +5626,7 @@ components:
         status: {type: string, example: processing}
         paid_at: {type: string, format: date-time, nullable: true, description: "null при создании."}
         phone: {type: string, example: "87001234567"}
+        is_imported: {type: boolean, description: "`true` — продажа подтянута из истории Kaspi (проведена в приложении Kaspi Pay мимо ApiPay). Та же ось, что у фильтра `origin` в `GET /invoices`.", example: false}
         created_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
         kaspi_source_type: {type: string, description: "Только если non-null."}
         kaspi_sale_type: {type: string, description: "Только если non-null."}
@@ -5286,6 +5642,7 @@ components:
         status: {type: string, example: pending}
         paid_at: {type: string, format: date-time, nullable: true}
         phone: {type: string, nullable: true, description: "null для QR-счёта без номера."}
+        is_imported: {type: boolean, description: "`true` — продажа подтянута из истории Kaspi (проведена в приложении Kaspi Pay мимо ApiPay). Та же ось, что у фильтра `origin` в `GET /invoices`.", example: false}
         created_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
         is_qr_token: {type: boolean, example: true}
         qr_token_url: {type: string, description: "Ссылка Kaspi для QR.", example: "https://qr.kaspi.kz/..."}
@@ -5400,6 +5757,7 @@ components:
         internal_comment: {type: string, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна.", example: "Айгуль, самовывоз"}
         is_sandbox: {type: boolean, example: false}
         is_recurring: {type: boolean, description: "Счёт создан подпиской.", example: false}
+        is_imported: {type: boolean, description: "`true` — продажа подтянута из истории Kaspi (проведена в приложении Kaspi Pay мимо ApiPay). Та же ось, что у фильтра `origin` в `GET /invoices`.", example: false}
         subtotal: {type: string, nullable: true}
         discount_sum: {type: string, nullable: true}
         discount_percentage: {type: string, nullable: true}
@@ -5426,6 +5784,7 @@ components:
         client_name: {type: string, nullable: true, example: Иван Иванов}
         internal_comment: {type: string, nullable: true, description: "Внутренняя заметка мерчанта (правится через PATCH /invoices/{id})."}
         is_sandbox: {type: boolean, example: false}
+        is_imported: {type: boolean, description: "`true` — продажа подтянута из истории Kaspi (проведена в приложении Kaspi Pay мимо ApiPay). Та же ось, что у фильтра `origin` в `GET /invoices`.", example: false}
         total_refunded: {type: string, example: "0.00"}
         is_fully_refunded: {type: boolean, example: false}
         kaspi_invoice_id: {type: string, nullable: true, example: "13234689513"}
@@ -5801,8 +6160,8 @@ components:
       description: Кассир организации. Поля `kaspi_user_id` и `cashier_phone` маскируются.
       properties:
         id: {type: integer, example: 7}
-        label: {type: string, nullable: true, example: Касса №1}
-        kaspi_user_id: {type: string, description: "Маскированный идентификатор.", example: "770****4567"}
+        label: {type: string, nullable: true, description: "Отображаемое имя кассира: ручное имя (`POST`/`PUT` `label`), если задано, иначе имя по умолчанию. Ручное имя сохраняется при переавторизации кассира.", example: Касса №1}
+        kaspi_user_id: {type: string, nullable: true, description: "Маскированный идентификатор. `null` у отключённого кассира (после `auth/logout`).", example: "770****4567"}
         session_mode: {type: string, description: "self / external.", example: self}
         status: {type: string, example: active}
         is_primary: {type: boolean, example: true}
@@ -6406,6 +6765,49 @@ x-webhooks:
       summary: QR-возврат просрочен
       description: |
         Возвратный QR истёк до идентификации (`qr_refund.status: expired`). Терминал сессии.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookQrRefund'
+      responses:
+        '200':
+          description: Принято.
+  qr_refund.failed:
+    post:
+      tags: [Webhooks]
+      summary: Подтверждение возврата начать не удалось
+      description: |
+        Активация возврата не состоялась: провайдер не подтвердил выдачу QR либо сохранённая
+        цель оказалась негодной (`qr_refund.status: failed`). Терминал сессии.
+
+        ⚠️ Событие приходит и по немедленному `POST /qr-refunds`, а не только по ссылке:
+        строка сессии создаётся ДО выхода в сеть, поэтому её отказ — такое же терминальное
+        состояние, о котором интегратор обязан узнать.
+
+        ⛔ Повторять нечего: попытка одноразовая и уже потрачена. Нужна НОВАЯ сессия — новая
+        ссылка `POST /qr-refunds/links` либо новый `POST /qr-refunds`. Пара
+        `error_code`/`error_message` закреплена за событием и всегда равна
+        `qr_refund_activation_failed`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookQrRefund'
+      responses:
+        '200':
+          description: Принято.
+  qr_refund.execution_uncertain:
+    post:
+      tags: [Webhooks]
+      summary: Исход возврата не доказан
+      description: |
+        Денежный запрос ушёл, но ответ не доказал ни успех, ни отказ
+        (`qr_refund.status: execution_uncertain`). Терминал для автоматики.
+
+        ⛔ **Деньги, возможно, списаны.** Повторять возврат нельзя ни при каких условиях:
+        второй запрос — это второй возврат живых денег покупателю. Разбирает человек;
+        обратитесь в поддержку. Пара `error_code`/`error_message` закреплена за событием.
       requestBody:
         content:
           application/json:

@@ -1611,7 +1611,11 @@ paths:
             PDF перевыпустят. `custom_tariff_locked` — у организации
             индивидуальные («Custom») условия: обычная выписка блокируется на ЧУЖОЙ
             тариф, счёт на переход (`upgrade=true`) — целиком, независимо от целевого
-            тарифа.
+            тарифа. `upgrade_state_requires_review` (только при `upgrade`) — по
+            организации уже есть платёж, деньги по которому получены, а доступ не
+            выдан: состояние тарифа изменилось между выпиской счёта и его оплатой.
+            Ретрай бесполезен — расчёт разбирает менеджер ApiPay; после разбора
+            выписка снова доступна.
           content:
             application/json:
               schema:
@@ -2402,6 +2406,43 @@ components:
         failure_reason:
           type: string
           nullable: true
+        fulfillment_status:
+          type: string
+          nullable: true
+          description: >-
+            Выдан ли тариф по этому платежу. ⛔ Отвечает НЕ на тот вопрос, что `status`:
+            тот говорит только про деньги, и `completed` значит «деньги получены».
+            `awaiting_settlement` — ждём оплаты; `applied` — тариф выдан;
+            `manual_review` — деньги получены, тариф НЕ выдан, разбирает менеджер
+            ApiPay; `reversed` — платёж возвращён; `voided` — счёт аннулирован.
+            `null` — платёж старше контракта операции, вопрос к нему неприменим.
+          enum: [awaiting_settlement, applied, manual_review, reversed, voided]
+          example: applied
+        fulfillment_error_code:
+          type: string
+          nullable: true
+          description: >-
+            Почему выдача остановлена. Заполнен только при
+            `fulfillment_status: manual_review`.
+          example: stale_upgrade_snapshot
+        paid_window_status:
+          type: string
+          nullable: true
+          description: >-
+            Состояние ОПЛАЧЕННОГО окна услуги: `awaiting_settlement`,
+            `materialized` (границы записаны), `not_applicable` (у платежа нет
+            платного окна — триал, подарок, административная выдача),
+            `manual_review`, `reversed`. `null` — платёж старше контракта.
+          enum: [awaiting_settlement, materialized, not_applicable, manual_review, reversed]
+          example: materialized
+        paid_access_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Конец ОПЛАЧЕННОГО окна услуги, Asia/Almaty. ⚠️ Это не то же, что
+            `expires_at`: последний несёт общую границу доступа вместе с подарочными
+            днями и компенсациями. `null`, пока окно не материализовано.
         invoice:
           description: >-
             Присутствует ТОЛЬКО у платежей `payment_method=invoice` (счёт на
