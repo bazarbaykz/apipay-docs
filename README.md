@@ -44,6 +44,21 @@ Runnable samples in [`examples/`](examples/): [cURL](examples/curl),
 - **Rate limit** — 200 requests per minute per key; some endpoints have tighter limits of their own — see [Errors](docs/en/errors.md#rate-limiting)
 - **Support** — [apipay.kz](https://apipay.kz) · [WhatsApp +7 700 307 65 12](https://wa.me/77003076512) · [GitHub Issues](https://github.com/bazarbaykz/apipay-docs/issues)
 
+## About the service
+
+ApiPay is operated by **ApiPay LLP** (ТОО «ApiPay»), BIN **260740019652**, registered at
+Seifullin Avenue 498, unit 53b, Almalinsky district, Almaty 050012, Kazakhstan. The service
+has been operating since 2 February 2026.
+
+Statements here about how Kaspi Pay itself behaves follow
+[Kaspi's own help](https://guide.kaspi.kz/) — check it for the current rules on the Kaspi
+side.
+
+| | |
+|---|---|
+| Site | [apipay.kz](https://apipay.kz) |
+| Support | [WhatsApp +7 700 307 65 12](https://wa.me/77003076512) |
+
 ## Contributing
 
 Pull requests are welcome for `docs/**` and `examples/**`. Read

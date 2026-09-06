@@ -430,7 +430,33 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/ProductionRequired"
+          description: >-
+            `production_access_required` — боевая организация у sandbox-партнёра (тело —
+            сокращённая форма `{ success:false, error }`); `forbidden` — доступ партнёра не одобрен;
+            `kyc_required` — анкета организации ещё не одобрена, подключение кассира
+            откроется после одобрения (повтор до этого бесполезен; переподключение уже
+            привязанного кассира кодом не отбивается).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                production_access_required:
+                  value:
+                    success: false
+                    error: production_access_required
+                kyc_required:
+                  value:
+                    success: false
+                    error: kyc_required
+                    error_code: kyc_required
+                    message: Подключение кассира откроется после одобрения анкеты.
+                cashier_change_requires_merchant:
+                  value:
+                    success: false
+                    error: cashier_change_requires_merchant
+                    error_code: cashier_change_requires_merchant
+                    message: Смену кассира проводит сам мерчант.
         "404":
           $ref: "#/components/responses/OrganizationNotFound"
         "409":
@@ -525,7 +551,31 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/ProductionRequired"
+          description: >-
+            `production_access_required` — боевая организация у sandbox-партнёра (тело —
+            сокращённая форма `{ success:false, error }`); `forbidden` — доступ партнёра не одобрен;
+            `kyc_required` — анкета организации ещё не одобрена: SMS кассиру не отправляется
+            вовсе. Повтор до одобрения бесполезен; переподключение уже привязанного кассира
+            (тот же номер) кодом не отбивается.
+            `cashier_change_requires_merchant` — организация принадлежит аккаунту мерчанта,
+            а не партнёра, и номер отличается от телефона текущего кассира. Переавторизация
+            ТОГО ЖЕ кассира и первое подключение (кассира ещё нет) проходят; смену кассира
+            проводит сам мерчант — своей дверью либо по ссылке-приглашению. Повтор не поможет.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                production_access_required:
+                  value:
+                    success: false
+                    error: production_access_required
+                kyc_required:
+                  value:
+                    success: false
+                    error: kyc_required
+                    error_code: kyc_required
+                    message: Подключение кассира откроется после одобрения анкеты.
         "404":
           $ref: "#/components/responses/OrganizationNotFound"
         "409":
@@ -731,7 +781,27 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/ProductionRequired"
+          description: >-
+            `production_access_required` — боевая организация у sandbox-партнёра;
+            `forbidden` — доступ партнёра не одобрен; `kyc_required` — терминально: анкета
+            организации не одобрена (редкий случай — одобрение отозвали между
+            `send-phone` и `verify-otp`). Kaspi код при этом уже принял, но подключение
+            не создаётся; нужен новый `init` после одобрения анкеты.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                production_access_required:
+                  value:
+                    success: false
+                    error: production_access_required
+                kyc_required:
+                  value:
+                    success: false
+                    error: kyc_required
+                    error_code: kyc_required
+                    message: Подключение кассира откроется после одобрения анкеты.
         "404":
           $ref: "#/components/responses/OrganizationNotFound"
         "409":
@@ -2184,6 +2254,7 @@ paths:
                   kaspi_connected: 9
                   needs_reauth: 1
                   tariff_active: 7
+                  tariff_frozen: 1
                   tariff_expired: 2
                   on_trial: 3
                   kyc:
@@ -2282,8 +2353,10 @@ components:
           example: created
         payment_status:
           type: string
-          enum: [none, active, expired]
-          description: Read-only, выводится из тарифа
+          enum: [none, active, frozen, expired]
+          description: >-
+            Read-only, выводится из тарифа. `frozen` — часы тарифа остановлены на время
+            приостановки организации; это не истечение.
           example: none
         payment_expires_at:
           type: string
@@ -2654,7 +2727,14 @@ components:
       properties:
         status:
           type: string
-          enum: [none, trial, active, expired]
+          enum: [none, trial, active, frozen, expired]
+          description: >-
+            `frozen` — мерчант приостановил свою организацию, и часы тарифа на это время
+            остановлены: срок не расходуется, а при возвращении возвращается неиспользованный
+            остаток — столько дней, сколько оставалось на момент остановки. Значение
+            перекрывает `expired`, поэтому не считайте паузу истечением. Сохранённый срок —
+            в `freeze.preserved_days`; `expires_at` и `days_remaining` при паузе описывают
+            прежнюю дату и могут быть в прошлом.
           example: active
         tier:
           type: string
@@ -2697,6 +2777,36 @@ components:
         auto_renew:
           type: boolean
           example: false
+        freeze:
+          type: object
+          description: >-
+            Состояние паузы тарифа. Блок присутствует всегда; у обычной организации
+            `is_frozen: false`.
+          properties:
+            is_frozen:
+              type: boolean
+              example: false
+            frozen_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: Момент остановки часов, Asia/Almaty (+05:00), либо null.
+            paused_days:
+              type: integer
+              description: Сколько дней часы уже стоят.
+              example: 0
+            preserved_days:
+              type: integer
+              description: Сколько дней срока сохранено на момент остановки часов.
+              example: 0
+            max_freeze_days:
+              type: integer
+              description: Предел, дольше которого часы не стоят — дальше срок идёт снова.
+              example: 90
+            freezes_left:
+              type: integer
+              description: Сколько остановок ещё доступно в текущем оплаченном периоде.
+              example: 2
         last_payment:
           nullable: true
           allOf:

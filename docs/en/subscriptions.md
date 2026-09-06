@@ -183,9 +183,9 @@ curl -X PUT https://api.apipay.kz/api/v1/subscriptions/1 \
 
 Updatable fields: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `metadata`, `cart_items`. The first charge date `first_billing_at` can only be set at creation.
 
-> ⚠️ **A subscription description follows the same rule as an invoice description.** From 5 September 2026
-> a changed description longer than 60 characters returns a `422`; organizations registered from 26 August
-> 2026 are already on that limit. Only a **changed** description is validated: editing other fields on a
+> ⚠️ **A subscription description follows the same rule as an invoice description.** A changed description
+> longer than 60 characters returns a `422`.
+> Only a **changed** description is validated: editing other fields on a
 > subscription that already has a long description works as before.
 
 ## Pause Subscription

@@ -47,7 +47,9 @@ The customer will receive a payment notification in Kaspi app and can pay there.
 
 When you go live in production, we ask you once to fill a short "Tell us about your business" form (~5 minutes in the dashboard, `/business-profile`): what you sell, where you sell, an approximate average check. We use the answers to tune limits to your turnover.
 
-Until the form is approved, a cautious start applies: **1 real invoice per day** (this daily limit does not apply in the sandbox — test within the sandbox quota). Over that, the API returns `429 kyc_daily_limit_reached` (`meta.reset_at` tells when the limit resets). Approval usually takes **1 business day**, after which the limit is lifted automatically.
+Until the form is approved, no live invoices are issued at all: the very first `POST /invoices` (as well as `POST /invoices/qr` and subscription auto-charges) returns `429 kyc_daily_limit_reached` — `meta.limit` is `0`, and `meta.reset_at` tells when the limit resets. The sandbox is not affected: you can fully build and debug your integration there. Approval usually takes **a few hours**, after which the live side opens automatically. If the organization has a `kyc_deadline` in the future (grace period), the restriction does not apply until the deadline.
+
+⛔ Until the form is approved a cashier cannot be connected: `POST /connections/{id}/auth/init` and `POST /connections/{id}/auth/send-phone` answer `403 kyc_required`, and no SMS is sent to the cashier. The order is: sign-up → business profile → cashier connection → live invoices. The sandbox is available at once and needs no form.
 
 Also: for not-yet-approved organizations a production webhook must be on a real domain — IPs and tunnels (ngrok) are rejected (see [Webhooks](webhooks.md)).
 

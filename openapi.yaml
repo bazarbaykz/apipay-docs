@@ -402,14 +402,15 @@ paths:
             отдельного `error_code` у этой ветки нет (см. `CartItem.catalog_item_id`);
             `field_too_long` (страховочный код: значение поля превышает допустимую длину —
             укоротите его; имя поля в `errors`, повтор с тем же телом бесполезен);
-            `description_too_long` (описание длиннее, чем Kaspi показывает покупателю — с
-            2026-09-05 для всех, для организаций с 26.08.2026 уже сейчас).
+            `description_too_long` (описание длиннее 60 символов — Kaspi показывает
+            покупателю только первые 60; укоротите описание).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorBody'
         '403':
           description: |
+            `static_qr_disabled` — режим ссылок выключен (только static=true).
             `kyc_rejected` — мерчант отклонён на KYC-модерации; `tariff_inactive` — подписка на
             ApiPay не активна (продлите тариф в кабинете). Грейс-периода у тарифа нет —
             блокировка наступает сразу после `expires_at`, который приходит в теле ответа.
@@ -540,6 +541,11 @@ paths:
         ⛔ **Позиция корзины с `operation=delete` отбивается `422`** —
         `errors["cart_items.N.catalog_item_id"]`, отдельного `error_code` у этой ветки нет.
         Как вернуть позицию — см. `CartItem.catalog_item_id`.
+
+        ⚠️ **На время технических работ ручка отвечает `503 invoices_disabled`, счёт НЕ
+        создаётся.** Копить QR нечем: он выпускается в Kaspi синхронно, и без ответа Kaspi
+        не существует ни `qr_token_url`, ни картинки. Телефонные счета (`POST /invoices`,
+        `/invoices/bulk`) в это же время принимаются как обычно и отвечают `201 processing`.
       operationId: createQrInvoice
       requestBody:
         required: true
@@ -549,16 +555,19 @@ paths:
               $ref: '#/components/schemas/CreateQrInvoiceRequest'
       responses:
         '201':
-          description: QR-счёт создан (status=pending)
+          description: QR-счёт создан; при static=true создана одноразовая ссылка без счёта
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/QrInvoiceCreated'
+                oneOf:
+                  - $ref: '#/components/schemas/QrInvoiceCreated'
+                  - $ref: '#/components/schemas/PaymentLinkCreated'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
           description: |
-            `duplicate_idempotency_key` (дубль ключа); `kaspi_session_expired` (сессия кассира
+            `duplicate_idempotency_key` (дубль ключа прямого QR); `idempotency_conflict`
+            (static=true: дубль ключа ссылки; ответ содержит static_qr_id и payment_url); `kaspi_session_expired` (сессия кассира
             мертва — QR не создан, нужна переавторизация).
           content:
             application/json:
@@ -566,6 +575,14 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/DuplicateIdempotencyResponse'
                   - $ref: '#/components/schemas/SessionExpiredResponse'
+                  - allOf:
+                      - $ref: '#/components/schemas/PaymentLinkCreated'
+                      - type: object
+                        required: [error_code]
+                        properties:
+                          error_code: {type: string, enum: [idempotency_conflict]}
+                          error: {type: string, enum: [idempotency_conflict]}
+                          message: {type: string}
         '403':
           description: |
             `kyc_rejected` — мерчант отклонён на KYC-модерации; `tariff_inactive` — подписка на
@@ -1277,7 +1294,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: '`static_qr_disabled` — фича выключена; `tariff_inactive` — подписка на ApiPay не активна.'
+          description: '`tariff_inactive` — подписка на ApiPay не активна.'
           content:
             application/json:
               schema:
@@ -1432,8 +1449,7 @@ paths:
         список строк `{Title, Subtitle, isBoldText}` (сумма, способ оплаты).
 
         Для оплат, НЕ прошедших через Kaspi QR: `payment_type=3` (наличные),
-        `payment_type=5` (POS другого банка). `403 fiscal_receipts_disabled` — только
-        когда приостановлена запись через целевого кассира.
+        `payment_type=5` (POS другого банка).
         Sandbox отдаёт детерминированное превью без Kaspi.
       operationId: previewReceipt
       requestBody:
@@ -1469,7 +1485,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: |
-            `fiscal_receipts_disabled` — приостановлена запись через целевого кассира;
             `tariff_inactive` — подписка на ApiPay не активна (грейса нет, блок сразу
             после `expires_at`; тело несёт `expires_at`).
         '409':
@@ -1493,8 +1508,7 @@ paths:
 
         **Идемпотентность:** `client_operation_id` уникален на организацию — повтор с тем
         же ключом не выбивает второй чек (`409 duplicate_client_operation_id`); повтор
-        после `failed` разрешён. `403 fiscal_receipts_disabled` — только когда
-        приостановлена запись через целевого кассира чека.
+        после `failed` разрешён.
 
         **Песочница.** Чек зеркалит бой: позиция с `barcode`+`ntin` даёт `issued` с
         реальными суммами, позиция без `ntin` — `failed`/`item_not_fiscal`. Kaspi не
@@ -1553,7 +1567,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: |
-            `fiscal_receipts_disabled` — приостановлена запись через целевого кассира;
             `not_sandbox` — simulate прислан вне песочницы; `tariff_inactive` — подписка
             на ApiPay не активна.
         '409':
@@ -1575,6 +1588,11 @@ paths:
                   status: {type: string, description: "Только у duplicate_client_operation_id: статус того чека.", example: issued}
         '422':
           description: Ошибка валидации / connection_ambiguous
+        '503':
+          description: |
+            `receipt_unavailable` — выбивание чеков временно приостановлено на нашей стороне
+            (технические работы). Чек НЕ создан и `client_operation_id` НЕ занят — повторите
+            тот же запрос позже; `Retry-After` в заголовке.
     get:
       tags: [Receipts]
       summary: История фискальных чеков
@@ -1587,9 +1605,7 @@ paths:
         чеки, тестовая — только тестовые.
 
         **Чтение истории не гейтится ничем**: список уже выбитых чеков остаётся доступен
-        всегда. `403 fiscal_receipts_disabled` бывает только на `POST /receipts`
-        и `POST /receipts/preview` — когда выбивание чеков через этого кассира
-        приостановлено.
+        всегда.
       operationId: listReceipts
       parameters:
         - name: status
@@ -1854,30 +1870,42 @@ paths:
 
         `200` = возврат выполнен и доказан (терминал), приходит вебхук `qr_refund.completed`.
 
-        ⛔ **Ошибки делятся на два класса, и разница принципиальна.**
+        ⛔ **Ошибки делятся на три класса, и разница принципиальна.**
 
-        До отправки денег (`403`, `409 qr_refund_not_identified|qr_refund_expired`, `422`,
+        (1) До отправки денег (`403`, `409 qr_refund_not_identified|qr_refund_expired`,
+        `422 operation_not_returnable|refund_amount_exceeds_available|partial_refund_requires_return_items`,
         `503`) сессия остаётся `customer_identified` — денежный запрос не уходил, повторить
         с другой операцией или суммой можно.
 
-        После отправки денег ответ всегда `202`, и повторять запрос **нельзя**:
+        (2) Kaspi ответил и ОТКАЗАЛ. Деньги не двигались, сессия остаётся
+        `customer_identified`, вебхука нет, повторить **можно** — на той же сессии, пока не
+        истёк срок подтверждения покупателя:
 
-        - `202 qr_refund_execution_uncertain` — ответ Kaspi не доказал ни успех, ни отказ
-          (обрыв, таймаут чтения, неопознанная форма). Kaspi мог возврат применить. В теле —
-          снимок сессии в статусе `execution_uncertain`, приходит вебхук
-          `qr_refund.execution_uncertain`;
+        - `422 refund_insufficient_funds` — на счёте мерчанта нет денег на возврат; повтор
+          имеет смысл после пополнения счёта Kaspi Pay;
+        - `502 kaspi_error` — Kaspi отказал по другой причине либо ответил неразбираемо.
+
+        ⚠️ Окно подтверждения покупателя короткое: на той же сессии успевает лишь тот, у кого
+        деньги на счёте Kaspi Pay появляются сразу, — иначе создавайте новую сессию возврата.
+        Число денежных попыток по одной сессии ограничено; исчерпав его, `execute` отвечает
+        `409 qr_refund_execution_attempts_exhausted` и Kaspi не вызывает вовсе.
+
+        (3) Ответ Kaspi не доказал НИЧЕГО. Только здесь `202`, и повторять запрос **нельзя**:
+
+        - `202 qr_refund_execution_uncertain` — обрыв, таймаут чтения, неопознанная форма
+          ответа. Kaspi мог возврат применить. В теле — снимок сессии в статусе
+          `execution_uncertain`, приходит вебхук `qr_refund.execution_uncertain`;
         - `202 qr_refund_execution_result_unavailable` — исход сохранён, но состояние сессии
           достоверно неизвестно. Снимка в теле нет намеренно.
 
         Оба разбираются вручную через поддержку. `Retry-After` не отдаётся.
 
+        ⚠️ Различайте классы (2) и (3) по КОДУ, а не по HTTP-семейству: `502` здесь значит
+        «Kaspi отказал», а «неизвестно, что произошло» отвечает только `202`.
+
         Повторный `execute` поверх уже идущего возврата → `409 qr_refund_execution_in_progress`,
         поверх недоказанного → `409 qr_refund_execution_uncertain`. Денег ни один из них не
         двигает.
-
-        Отказ Kaspi «на счёте мерчанта нет денег на возврат» → `422 refund_insufficient_funds`:
-        это ошибка ДО отправки денег, сессия остаётся `customer_identified`, и после
-        пополнения счёта возврат повторяется на ней же, пока не истёк срок идентификации.
       operationId: executeQrRefund
       parameters:
         - {name: id, in: path, required: true, schema: {type: integer}}
@@ -1900,9 +1928,9 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: "tariff_inactive / qr_refund_actor_no_longer_authorized / not_sandbox (поле simulate вне песочницы)"}
         '404': {description: not_found}
-        '409': {description: "qr_refund_not_identified / qr_refund_expired / qr_refund_completed / qr_refund_execution_in_progress / qr_refund_execution_uncertain"}
-        '422': {description: "operation_not_returnable / refund_amount_exceeds_available / partial_refund_requires_return_items / refund_insufficient_funds"}
-        '502': {description: "kaspi_error — Kaspi недоступен либо ответил неразбираемо на ревалидации ДО отправки денег. Сессия остаётся customer_identified, повтор допустим"}
+        '409': {description: "qr_refund_not_identified / qr_refund_expired / qr_refund_completed / qr_refund_execution_in_progress / qr_refund_execution_uncertain / qr_refund_execution_attempts_exhausted (исчерпан лимит денежных попыток сессии: Kaspi не вызывался, нужна новая сессия)"}
+        '422': {description: "operation_not_returnable / refund_amount_exceeds_available / partial_refund_requires_return_items / refund_insufficient_funds (доказанный отказ Kaspi: деньги не двигались, сессия остаётся customer_identified, повтор допустим, пока жив срок подтверждения покупателя)"}
+        '502': {description: "kaspi_error — Kaspi недоступен, ответил неразбираемо на ревалидации ДО отправки денег либо ДОКАЗАННО отказал в возврате. Деньги не двигались, сессия остаётся customer_identified, повтор допустим"}
         '503': {description: "qr_refund_execution_disabled / qr_refund_execution_context_unavailable / kaspi_session_invalid / kaspi_session_unavailable"}
   "/qr-refunds/{id}/simulate":
     post:
@@ -2641,7 +2669,20 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/CashierManagementDisabled'
+          description: |
+            `cashier_management_disabled` — у ключа нет флага `can_manage_cashiers`.
+            `kyc_required` — анкета «Расскажите о бизнесе» ещё не одобрена: подключить
+            кассира можно после одобрения. Повтор до одобрения бесполезен. Переподключение
+            уже привязанного кассира этим кодом не отбивается.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                cashier_management_disabled:
+                  value: {error: cashier_management_disabled, message: "This API key cannot manage cashiers"}
+                kyc_required:
+                  value: {error: kyc_required, message: "Business profile must be approved before connecting a cashier"}
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
         '409':
@@ -2703,6 +2744,9 @@ paths:
         '403':
           description: |
             `cashier_management_disabled` — у ключа нет флага `can_manage_cashiers`.
+            `kyc_required` — анкета «Расскажите о бизнесе» ещё не одобрена: SMS кассиру
+            не отправляется вовсе. Повтор до одобрения бесполезен; переподключение уже
+            привязанного кассира (тот же номер) этим кодом не отбивается.
             `cashier_change_requires_merchant` — ключ выдан партнёром на организацию, аккаунтом
             которой партнёр не владеет, и номер отличается от телефона текущего кассира.
             Переавторизация ТОГО ЖЕ кассира и первое подключение (кассира ещё нет) проходят;
@@ -2715,6 +2759,8 @@ paths:
               examples:
                 cashier_management_disabled:
                   value: {error: cashier_management_disabled, message: "This API key cannot manage cashiers"}
+                kyc_required:
+                  value: {error: kyc_required, message: "Business profile must be approved before connecting a cashier"}
                 cashier_change_requires_merchant:
                   value: {error: cashier_change_requires_merchant, message: "Changing the cashier requires the merchant"}
         '404':
@@ -2865,7 +2911,21 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/CashierManagementDisabled'
+          description: |
+            `cashier_management_disabled` — у ключа нет флага `can_manage_cashiers`.
+            `kyc_required` — терминально: анкета организации не одобрена (редкий случай —
+            одобрение отозвали между `send-phone` и `verify-otp`). Kaspi код при этом уже
+            принял, но подключение не создаётся; сессия закрыта, нужен новый `init` после
+            одобрения анкеты.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                cashier_management_disabled:
+                  value: {error: cashier_management_disabled, message: "This API key cannot manage cashiers"}
+                kyc_required:
+                  value: {error: kyc_required, message: "Business profile must be approved before connecting a cashier"}
         '404':
           $ref: '#/components/responses/ConnectionNotFound'
         '409':
@@ -4228,10 +4288,9 @@ paths:
                   description: >-
                     Описание подписки. Уходит в Kaspi комментарием к счёту списания.
                     ⚠️ Kaspi показывает покупателю только ПЕРВЫЕ 60 СИМВОЛОВ, остальное
-                    отбрасывает молча. С 2026-09-05 изменённое описание длиннее 60
-                    символов отклоняется (HTTP 422); до этой даты длинные описания
-                    принимаются как прежде. ⛔ Организации, зарегистрированные
-                    с 2026-08-26, живут на лимите 60 сразу. Проверяется только
+                    отбрасывает молча — вынесите в начало то, по чему плательщик узнает
+                    платёж. ⛔ Отклоняется (HTTP 422) изменённое описание длиннее 60
+                    символов. Проверяется только
                     ИЗМЕНЁННОЕ описание: правка других полей у подписки со старым
                     длинным описанием проходит как раньше. Без описания счёт списания
                     уходит с текстом «Оплата подписки №{id}», в песочнице —
@@ -4550,7 +4609,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxDaySummary'}}}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "tariff_inactive / cashbox_disabled — кассовые операции для организации недоступны (в песочнице этот отказ не приходит)"}
+        '403': {description: tariff_inactive}
         '409': {description: "kaspi_session_not_configured / rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -4603,7 +4662,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxShiftList'}}}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '403': {description: tariff_inactive}
         '409': {description: "kaspi_session_not_configured / cashbox_kkm_unknown"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -4649,10 +4708,11 @@ paths:
                   poll_url: {type: string, description: "GET-адрес статуса операции (…/cashbox/operations/{id})."}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '403': {description: tariff_inactive}
         '409': {description: "kaspi_session_not_configured / cashbox_kkm_unknown / cashbox_duplicate_operation"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
+        '503': {description: "cashbox_unavailable — касса Kaspi временно недоступна; операция не создана, повторите с тем же client_operation_id"}
   "/cashbox/operations/{id}":
     get:
       tags: [Cashbox]
@@ -4700,7 +4760,7 @@ paths:
                   expires_at: {type: string, format: date-time}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '403': {description: tariff_inactive}
         '409': {description: kaspi_session_not_configured}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
         '503': {description: "cashbox_report_unavailable — не удалось получить отчёт"}
@@ -4731,7 +4791,7 @@ paths:
                   kaspi_connection_id: {type: integer, nullable: true}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "tariff_inactive / cashbox_disabled"}
+        '403': {description: tariff_inactive}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
   "/cashbox/settings/auto-close":
     put:
@@ -4756,7 +4816,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "cashbox_settings_owner_key_required / tariff_inactive / cashbox_disabled"}
+        '403': {description: "cashbox_settings_owner_key_required / tariff_inactive"}
         '409': {description: "kaspi_session_not_configured / rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -4781,7 +4841,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "cashbox_settings_owner_key_required / tariff_inactive / cashbox_disabled"}
+        '403': {description: "cashbox_settings_owner_key_required / tariff_inactive"}
         '409': {description: "kaspi_session_not_configured / rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -4864,9 +4924,7 @@ components:
         * `kaspi_session_invalid` — сессия кассира Kaspi истекла (переподключите кассира);
         * `invoices_disabled` — приём новых счетов приостановлен (технические работы). Счёт
           НЕ создан — повторите позже. Чтение счетов, отмена, возврат и статусы продолжают
-          работать. Стоп может быть ТОЧЕЧНЫМ по кассиру: 503 отдаётся, если приостановлена
-          запись через кассира, на которого адресован счёт (`kaspi_connection_id` — явный
-          или primary по умолчанию); счета на других кассиров организации создаются штатно.
+          работать.
       content:
         application/json:
           schema:
@@ -5092,7 +5150,12 @@ components:
         Стабильный snake_case-код причины ошибки. Появляется в бизнес-ошибках API
         (`error`/`error_code`) и в объектах `invoice.*`/`refund.*` вебхуков (additive,
         только если non-null). Каталог значений — единый источник правды.
+
+        ⚠️ Исторические значения, снятые из перечня, но встречающиеся в старых записях:
+        `cashbox_disabled` — не возвращается с 09.2026, кассовые операции включены
+        безусловно.
       enum:
+        - idempotency_conflict
         - network_unavailable
         - session_transient
         - client_not_found
@@ -5158,6 +5221,7 @@ components:
         - qr_refund_execution_in_progress
         - qr_refund_execution_uncertain
         - qr_refund_execution_result_unavailable
+        - qr_refund_execution_attempts_exhausted
         - qr_refund_execution_context_unavailable
         - qr_refund_execution_disabled
         - qr_refund_temporarily_unavailable
@@ -5174,7 +5238,6 @@ components:
         - organization_not_verified
         - operation_not_returnable
         - refund_amount_exceeds_available
-        - cashbox_disabled
         - cashbox_kkm_unknown
         - cashbox_no_open_shift
         - cashbox_shift_already_closed
@@ -5488,11 +5551,11 @@ components:
             Описание счёта. Уходит в Kaspi как комментарий к платежу.
 
             ⚠️ Kaspi показывает покупателю только **первые 60 символов** — всё, что длиннее,
-            он отбрасывает молча, не сообщая об этом ни вам, ни нам. Поэтому с **2026-09-05**
-            описание длиннее 60 символов будет отклоняться с `error_code: description_too_long`
-            (HTTP 422). До этой даты длинные описания принимаются как прежде.
+            он отбрасывает молча, не сообщая об этом ни вам, ни нам. Вынесите в начало то, по
+            чему плательщик узнает платёж (номер заказа, имя), а подробности уберите.
 
-            ⛔ Организации, зарегистрированные с 26.08.2026, живут на лимите 60 сразу.
+            ⛔ Лимит описания — **60 символов**: описание длиннее отклоняется с
+            `error_code: description_too_long` (HTTP 422).
         internal_comment:
           type: string
           maxLength: 255
@@ -5530,8 +5593,21 @@ components:
           description: Глобальная скидка на весь чек (%).
     CreateQrInvoiceRequest:
       type: object
-      description: Тело зависит от организации — amount (без каталога) либо cart_items (с каталогом).
+      description: |
+        Тело зависит от организации — amount (без каталога) либо cart_items (с каталогом).
+        static=true создаёт одноразовую ссылку, без invoice и запроса в Kaspi.
+        Покупателю отправляют payment_url; счёт появляется только по кнопке оплаты.
+        В этом режиме simulate запрещён, single_use допускается только true, description
+        проходит ограничения Static QR (включая телефонный запасной путь): максимум
+        60 символов. Организации с каталогом передают cart_items, без каталога — amount;
+        amount без корзины — от 0.01 до 99999999.99 ₸; округлённый итог должен быть положительным.
+        external_order_id_idempotency закрепляется за ссылкой в отдельном пространстве
+        организации; повтор даёт 409 idempotency_conflict с static_qr_id и payment_url.
+        Этот ключ не переносится в invoice и не освобождается при истечении его QR.
       properties:
+        static: {type: boolean, default: false, description: Создать одноразовую ссылку вместо немедленного QR-счёта.}
+        single_use: {type: boolean, enum: [true], description: В режиме static=true поддерживается только одна сделка.}
+        expires_at: {type: string, format: date-time, nullable: true, description: Необязательный срок ссылки в будущем; без него действует до оплаты или отключения.}
         amount:
           type: number
           minimum: 0.01
@@ -5582,8 +5658,7 @@ components:
           type: string
           maxLength: 500
           description: >-
-            С 2026-09-05 — не длиннее 60 символов (организациям, зарегистрированным
-            с 26.08.2026, — уже сейчас): Kaspi показывает покупателю только первые 60.
+            Не длиннее 60 символов: Kaspi показывает покупателю только первые 60.
             Превышение приходит построчным отказом в `invoices[]` с
             `error_code: description_too_long`, ответ остаётся `201`.
         internal_comment: {type: string, maxLength: 255, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна."}
@@ -5636,6 +5711,7 @@ components:
         error_message: {type: string, description: "Только при status=error."}
     QrInvoiceCreated:
       type: object
+      required: [id, qr_token_url, qr_expires_at]
       properties:
         id: {type: integer, example: 1}
         amount: {type: string, example: "5000.00"}
@@ -5648,6 +5724,18 @@ components:
         qr_token_url: {type: string, description: "Ссылка Kaspi для QR.", example: "https://qr.kaspi.kz/..."}
         qr_image_url: {type: string, nullable: true, description: "PNG QR на нашем хранилище. Живёт до `qr_expires_at + 60 сек`, дальше `404` — перевыпустите QR, а не перезагружайте картинку."}
         qr_expires_at: {type: string, format: date-time, description: "Крайний момент, когда QR ещё можно ОТСКАНИРОВАТЬ. Длительность окна задаёт Kaspi — считайте её из этого поля, не константой. Начатая до него оплата завершается и позже. Терминальный статус диктует Kaspi — ждите вебхук.", example: "2026-01-10T12:03:00+00:00"}
+    PaymentLinkCreated:
+      type: object
+      required: [static, static_qr_id, payment_url, status, amount, external_order_id, expires_at, is_sandbox]
+      properties:
+        static: {type: boolean, enum: [true]}
+        static_qr_id: {type: integer, description: "ID ссылки для GET /static-qr/{id}; не ID счёта."}
+        payment_url: {type: string, format: uri, description: Страница оплаты ApiPay. Открытие не создаёт счёт; создание происходит по кнопке.}
+        status: {type: string, enum: [active, paid, disabled]}
+        amount: {type: string, nullable: true, description: Сумма по текущим ценам; проверяется заново при оплате.}
+        external_order_id: {type: string, nullable: true}
+        expires_at: {type: string, format: date-time, nullable: true}
+        is_sandbox: {type: boolean}
     CreateStaticQrRequest:
       type: object
       description: |
@@ -5679,8 +5767,7 @@ components:
 
             ⚠️ Лист должен принимать оплату **по номеру телефона** (запасной путь есть на
             странице каждого листа), поэтому описание обязано укладываться ещё и в лимит
-            описания счёта: с 2026-09-05 — 60 символов, у организаций, зарегистрированных
-            с 26.08.2026, — уже сейчас. Слишком длинное описание отбивается при выпуске
+            описания счёта — 60 символов. Слишком длинное описание отбивается при выпуске
             листа с `error_code: description_too_long`, а не ломает телефонный путь молча.
             ⛔ Изменить описание у выпущенного листа нельзя — только `DELETE` и новый лист.
         external_order_id: {type: string, maxLength: 255, nullable: true, description: "Ссылка на сделку в вашей системе (придёт в вебхуке)."}
@@ -5690,6 +5777,10 @@ components:
     StaticQrCreated:
       type: object
       properties:
+        payment_amount: {type: string, nullable: true, description: Текущая сумма заказа для показа плательщику.}
+        payment_url: {type: string, format: uri, description: Страница с явной кнопкой оплаты; GET не создаёт счёт.}
+        expires_at: {type: string, format: date-time, nullable: true}
+        expired: {type: boolean}
         id: {type: integer, example: 10}
         token: {type: string, description: "Неугадываемый токен — кодируется в QR (в URL печатного листа).", example: "9f1c…"}
         short_code: {type: string, description: "8 символов для ручного ввода на qr.apipay.kz.", example: "K7M9P2Q4"}
@@ -6067,7 +6158,17 @@ components:
       type: object
       description: Снимок подписки мерчанта на ApiPay. Даты Asia/Almaty +05:00.
       properties:
-        status: {type: string, enum: [none, trial, active, expired], example: active}
+        status:
+          type: string
+          enum: [none, trial, active, frozen, expired]
+          description: |
+            `frozen` — организация приостановлена владельцем, и часы тарифа на это время
+            остановлены: срок не расходуется, а при возвращении мерчанту возвращается
+            неиспользованный остаток — столько дней, сколько оставалось на момент остановки.
+            Значение перекрывает `expired` — не показывайте «тариф истёк» и не предлагайте
+            оплату. Сохранённый срок читайте в `freeze.preserved_days`: `expires_at` и
+            `days_remaining` при паузе описывают прежнюю дату и могут быть в прошлом.
+          example: active
         tier: {type: string, nullable: true, example: business}
         tier_label:
           type: string
@@ -6097,6 +6198,31 @@ components:
         expires_at: {type: string, format: date-time, nullable: true}
         days_remaining: {type: integer, example: 20}
         auto_renew: {type: boolean, example: false}
+        freeze:
+          type: object
+          description: |
+            Состояние паузы тарифа. Блок присутствует всегда; у обычной организации
+            `is_frozen: false`.
+          properties:
+            is_frozen: {type: boolean, example: false}
+            frozen_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: Момент остановки часов либо null.
+            paused_days: {type: integer, description: Сколько дней часы уже стоят., example: 0}
+            preserved_days:
+              type: integer
+              description: Сколько дней срока сохранено на момент остановки часов.
+              example: 0
+            max_freeze_days:
+              type: integer
+              description: Предел, дольше которого часы не стоят — дальше срок идёт снова.
+              example: 90
+            freezes_left:
+              type: integer
+              description: Сколько остановок ещё доступно в текущем оплаченном периоде.
+              example: 2
         last_payment:
           type: object
           nullable: true
@@ -6381,6 +6507,7 @@ components:
       description: Объект invoice в вебхуке invoice.status_changed. Условные поля — только если non-null.
       properties:
         id: {type: integer, example: 123}
+        static_qr_code_id: {type: integer, description: ID связанной ссылки Static QR; поле присутствует только у счетов по ссылке.}
         external_order_id: {type: string, nullable: true}
         amount: {type: string, example: "1000.00"}
         status: {$ref: '#/components/schemas/InvoiceStatus'}
@@ -6416,6 +6543,7 @@ components:
           type: object
           properties:
             id: {type: integer, example: 108565}
+            static_qr_code_id: {type: integer, description: ID ссылки; только для связанного счёта.}
             external_order_id: {type: string, nullable: true}
             amount: {type: string, example: "1500.00"}
             status: {type: string, example: pending}
@@ -6457,6 +6585,7 @@ components:
           type: object
           properties:
             id: {type: integer, example: 123}
+            static_qr_code_id: {type: integer, description: ID ссылки; только для связанного счёта.}
             external_order_id: {type: string, nullable: true}
             amount: {type: string, example: "1000.00"}
             total_refunded: {type: string, example: "500.00"}
@@ -6872,11 +7001,12 @@ x-webhooks:
         `kaspi_session_invalid` — сессия кассира недействительна, переподключите кассира;
         `kaspi_session_not_configured` — кассир чека деактивирован или удалён к моменту
         выбивания (чек НЕ выбивается от другой кассы);
-        `fiscal_receipts_disabled` — запись через целевого кассира приостановлена;
         `receipt_ofd_token_revoked` — отозвана ФИСКАЛЬНАЯ привязка кассы, мерчанту нужно
         перепривязать ОФД в приложении Kaspi; приём оплат при этом работает, встают только
         чек и каталог;
-        `receipt_kaspi_error`; `receipt_dispatch_error`). Фискальный документ НЕ создан —
+        `receipt_kaspi_error`; `receipt_dispatch_error`;
+        `receipt_unavailable` — выбивание чеков временно приостановлено на нашей стороне,
+        повторите позже). Фискальный документ НЕ создан —
         повтор допустим: после `failed` прежний `client_operation_id` освобождается.
         Повторные попытки доставки — как у `receipt.issued`.
         В песочнице воспроизводится параметром `simulate` в `POST /receipts`.
@@ -7047,8 +7177,10 @@ x-webhooks:
       summary: Не удалось закрыть смену
       description: |
         Закрытие смены не выполнено. Причина — в `operation.error_code` (`cashbox_no_open_shift`,
-        `cashbox_busy`, `cashbox_operation_failed`, `cashbox_disabled`, `kaspi_session_expired`,
-        `kaspi_session_not_configured`). Закрытие идемпотентно-безопасно — повторяйте **новым**
+        `cashbox_busy`, `cashbox_operation_failed`, `cashbox_unavailable` (касса Kaspi временно
+        недоступна, в том числе на время технических работ), `kaspi_session_expired`,
+        `kaspi_session_not_configured`; исторический `cashbox_disabled` не приходит с 09.2026).
+        Закрытие идемпотентно-безопасно — повторяйте **новым**
         `client_operation_id` (прежний ключ у `failed` не освобождается). Доставка и подпись — как
         у остальных вебхук-событий.
       requestBody:

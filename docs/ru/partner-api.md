@@ -104,6 +104,7 @@ X-Partner-Key: pk_your_partner_key_here
 Шаг 1 онбординга — начать авторизацию кассира Kaspi.
 
 **Ответ:** `{ "success": true, "process_id": "..." }` — `process_id` живёт 10 минут.
+Возможные ошибки: `kyc_required` (403) — анкета организации ещё не одобрена: подключить кассира можно только после одобрения, SMS кассиру не отправляется. Повтор до одобрения не поможет; текущий статус — в `GET /api/partner/organizations/{id}/kyc`, решение приходит вебхуком `kyc.status_changed`.
 
 ### POST /api/partner/organizations/{id}/kaspi-auth/send-phone
 
@@ -114,7 +115,7 @@ X-Partner-Key: pk_your_partner_key_here
 | `cashier_phone` | string | Да | Номер кассира в формате `7XXXXXXXXXX` |
 
 **Ответ:** `{ "success": true }`.
-Возможные ошибки: `invalid_phone` (422), `not_cashier` (422), `no_process` (409), `sms_failed` (502).
+Возможные ошибки: `invalid_phone` (422), `not_cashier` (422), `no_process` (409), `sms_failed` (502), `kyc_required` (403) — анкета организации ещё не одобрена: подключить кассира можно только после одобрения, SMS кассиру не отправляется. Повтор до одобрения не поможет; текущий статус — в `GET /api/partner/organizations/{id}/kyc`, решение приходит вебхуком `kyc.status_changed`.
 
 ### POST /api/partner/organizations/{id}/kaspi-auth/verify-otp
 
@@ -126,6 +127,7 @@ X-Partner-Key: pk_your_partner_key_here
 
 **Ответ** при успехе: `{ "success": true, "mode": "self", "organization": { ... } }`.
 При неверном коде: `{ "success": false, "error": "invalid_otp" }`.
+`kyc_required` (403) — терминально: одобрение анкеты перестало действовать между шагами. Kaspi код уже принял, но подключение не создаётся; сессия закрыта — после одобрения начните с нового `init`.
 
 **Личность организации Kaspi.** Пара «БИН + идентификатор организации в Kaspi» закрепляется при первой привязке и дальше не меняется. Подключение кассира само по себе владельца **не переносит**:
 

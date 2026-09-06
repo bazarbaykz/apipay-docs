@@ -103,6 +103,7 @@ Detach an organization: deactivates its API keys and soft-deletes it.
 Onboarding step 1 — start Kaspi cashier authorization.
 
 **Response:** `{ "success": true, "process_id": "..." }` — the `process_id` is valid for 10 minutes.
+Possible errors: `kyc_required` (403) — the organization profile is not approved yet: a cashier can be connected only after approval, and no SMS is sent to the cashier. Retrying before approval will not help; the current status is in `GET /api/partner/organizations/{id}/kyc`, and the decision arrives via the `kyc.status_changed` webhook.
 
 ### POST /api/partner/organizations/{id}/kaspi-auth/send-phone
 
@@ -113,7 +114,7 @@ Onboarding step 2 — Kaspi sends an SMS code to the cashier's phone.
 | `cashier_phone` | string | Yes | Cashier phone number in `7XXXXXXXXXX` format |
 
 **Response:** `{ "success": true }`.
-Possible errors: `invalid_phone` (422), `not_cashier` (422), `no_process` (409), `sms_failed` (502).
+Possible errors: `invalid_phone` (422), `not_cashier` (422), `no_process` (409), `sms_failed` (502), `kyc_required` (403) — the organization profile is not approved yet: a cashier can be connected only after approval, and no SMS is sent to the cashier. Retrying before approval will not help; the current status is in `GET /api/partner/organizations/{id}/kyc`, and the decision arrives via the `kyc.status_changed` webhook.
 
 ### POST /api/partner/organizations/{id}/kaspi-auth/verify-otp
 
@@ -125,6 +126,7 @@ Onboarding step 3 — confirm the SMS code.
 
 **Response** on success: `{ "success": true, "mode": "self", "organization": { ... } }`.
 On a wrong code: `{ "success": false, "error": "invalid_otp" }`.
+`kyc_required` (403) — terminal: the profile approval stopped being valid between the steps. Kaspi has already accepted the code, but the connection is not created; the session is closed — after approval, start over with a new `init`.
 
 **Kaspi organization identity.** The pair "BIN + Kaspi organization identifier" is pinned on the first connection and does not change afterwards. Connecting a cashier does not by itself transfer ownership:
 
