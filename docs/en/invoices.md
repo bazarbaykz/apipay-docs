@@ -96,6 +96,8 @@ Differences from `POST /invoices`:
 - Cancelling a QR invoice is not supported — if no payment arrives, the invoice flips to `expired` after a few minutes (on the terminal from Kaspi). A refund for a paid QR invoice goes through a separate branch, `POST /qr-refunds`: the customer scans a refund QR (see `openapi.yaml`).
 - Per-org rate limit: **60 QR requests per minute per organization** (separate from the general API limit).
 
+> ⚠️ **A QR invoice is for paying right away only.** Use `POST /invoices/qr` when the customer is next to you and pays now: the QR lives for a few minutes. If the customer will pay later, use a static QR (`POST /static-qr`) or a payment link (`POST /invoices/qr` with `static: true`). See «Which QR to choose» below.
+
 > ℹ️ **QR invoices coexist.** Creating a new QR on the same till does **not** cancel the previous ones — the old QR stays in `pending` and is monitored until its own terminal. React to `paid`/`cancelled`/`expired` per `invoice.id` separately (if several QRs are paid, you'll get several `paid` webhooks). Phone invoices live for 24h in Kaspi.
 
 The request body depends on the organization's `has_catalog` setting:
@@ -173,6 +175,20 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
 3. Alternative poll: hit `GET /invoices/{id}` every 2-3 sec.
 4. After a few minutes without payment the status becomes `expired` — but only once Kaspi returns the terminal (via webhook), not on a local timer. The PNG is removed from storage within ~1 minute — `qr_image_url` will start returning 404 (by design).
 5. Cancelling a QR invoice is not supported — just wait for it to expire (a few minutes). A refund for a paid QR invoice is performed through the separate `POST /qr-refunds` branch — the customer scans a refund QR.
+
+### Which QR to choose
+
+| Situation | What to issue |
+|---|---|
+| The customer is next to you and pays right now | QR invoice: `POST /invoices/qr` |
+| The customer will pay later: wants to think, gets a link in a messenger, pays from paper | Static QR (`POST /static-qr`) or a payment link (`POST /invoices/qr` with `static: true`) |
+
+- **A QR invoice lives for a few minutes.** Kaspi sets the exact window, and it arrives in `qr_expires_at`. If the customer does not make it in time, the invoice becomes `expired` and a new QR is needed to pay.
+- **In live mode every issued QR invoice takes a slot in the daily plan limit** — in any status, including one that expired unpaid and every re-created one. On systematic excess, creation is rejected with `429 tariff_limit_reached`.
+- **With a static QR or a payment link, the invoice is created only when the customer taps «Оплатить в Kaspi» (Pay in Kaspi).** While the customer is thinking, no slot in the limit is taken.
+- **After «Оплатить в Kaspi» (Pay in Kaspi) is tapped, the issued Kaspi QR takes a slot in the limit too.** For a single-use code (the default; a payment link is always single-use), tapping again while that QR is still valid and not scanned returns the same QR. For a reusable static QR (`single_use: false`), every tap issues a new invoice, and each one takes a slot in the limit. If the QR has expired, a new invoice is issued — and it takes another slot.
+
+> 💡 **Rule for AI agents and integrators.** `POST /invoices/qr` without `static` — only if the customer pays right away. For paying «later» — a static QR (`POST /static-qr`) or a payment link (`POST /invoices/qr` with `static: true`). Do not re-create a QR invoice on a timer while waiting for the customer.
 
 ### Sandbox mode
 
