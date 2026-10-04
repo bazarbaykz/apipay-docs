@@ -16,7 +16,7 @@
 1. **Запись через кассира не приостановлена.** Выбивание чеков доступно безусловно; `403 fiscal_receipts_disabled` приходит только когда приостановлена запись через кассира, на которого адресован чек — используйте другого кассира (`kaspi_connection_id`) или возобновите запись. Чтение истории (`GET /receipts`, `GET /receipts/{id}`) не гейтится ничем.
 2. **Подключён кассир Kaspi.** Нужен активный кассир (Настройки → Авторизация Kaspi). Иначе — `409 kaspi_session_not_configured`. Если у организации несколько активных касс и основная не выбрана — передайте `kaspi_connection_id` (иначе `422 connection_ambiguous`).
 3. **Смена открыта.** Смену открывает мерчант в приложении Kaspi Pos. Если смена закрыта, чек упадёт со статусом `failed` и `error_code = shift_closed`.
-4. **Позиции фискальные.** В чек попадают только товары из синхронизированного каталога (по `catalog_item_id`), зарегистрированные фискально (с НТИН и штрихкодом). Позиция без НТИН уронит чек с `item_not_fiscal`. Резолв НТИН — через `POST /catalog/scan` + `PATCH /catalog/{id}` (см. [Каталог](catalog.md)).
+4. **Позиции фискальные.** В чек попадают позиции синхронизированного каталога (по `catalog_item_id`). Позиция без НТИН и без штрихкода (например, услуга) выбивается без маркировки Нацкаталога; со штрихкодом, но без НТИН — `item_not_fiscal`; со ставкой НДС — `receipt_vat_not_supported`. Резолв НТИН — через `POST /catalog/scan` + `PATCH /catalog/{id}` (см. [Каталог](catalog.md)).
 
 ## Превью чека
 
@@ -121,7 +121,7 @@ curl https://api.apipay.kz/api/v1/receipts/4210 \
   "fpd": "000000000000",
   "operation_id": "KKM00000000",
   "operation_time": "2026-07-12T16:25:40+00:00",
-  "shift_number": 106,
+  "shift_number": null,
   "link": "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM00000000",
   "error_code": null,
   "error_message": null,
@@ -129,7 +129,7 @@ curl https://api.apipay.kz/api/v1/receipts/4210 \
 }
 ```
 
-Пока чек не выбит — `status: "pending"`, а реквизиты (`fpd`, `operation_id`, `link`, `shift_number`) равны `null`. После успеха — `status: "issued"` и заполненные реквизиты. При неудаче — `status: "failed"`, реквизиты `null`, причина в `error_code` / `error_message`. Чужой `id` (чек другой организации) → `404 receipt_not_found`.
+Пока чек не выбит — `status: "pending"`, а реквизиты (`fpd`, `operation_id`, `link`, `shift_number`) равны `null`. После успеха — `status: "issued"` и заполненные реквизиты; `shift_number` у новых чеков остаётся `null`. При неудаче — `status: "failed"`, реквизиты `null`, причина в `error_code` / `error_message`. Чужой `id` (чек другой организации) → `404 receipt_not_found`.
 
 ### Вебхук
 
@@ -163,7 +163,8 @@ curl https://api.apipay.kz/api/v1/receipts/4210 \
 | `receipt_preview_unavailable` | 503 | Kaspi недоступен для превью | Повторите запрос позже |
 | `receipt_not_found` | 404 | Чек не найден или принадлежит другой организации | Проверьте `id` |
 | `shift_closed` | — (в `failed`) | Смена в Kaspi Pos закрыта | Откройте смену в приложении Kaspi Pos и выбейте чек заново |
-| `item_not_fiscal` | — (в `failed`) | Позиция без НТИН — не фискальная | Дорезолвите НТИН (`POST /catalog/scan` + `PATCH /catalog/{id}`) и повторите |
+| `item_not_fiscal` | — (в `failed`) | Позиция со штрихкодом, но без НТИН, либо не синхронизирована с Kaspi | Нет НТИН — дорезолвите его (`POST /catalog/scan` + `PATCH /catalog/{id}`) и повторите. Проверьте и `in_kaspi_catalog` позиции: при `false` в бою чек по ней не выбивается |
+| `receipt_vat_not_supported` | — (в `failed`) | Позиция со ставкой НДС — такие чеки пока не выбиваются | Чек с такой позицией через API не выбить — повтор не поможет |
 | `rfo_missing` | — (в `failed`) | Не определена торговая точка (РФО) | Обратитесь в поддержку |
 | `receipt_kaspi_error` | — (в `failed`) | Kaspi отклонил выбивание | Причина — в `error_message`; при необходимости обратитесь в поддержку |
 | `receipt_dispatch_error` | — (в `failed`) | Технический сбой отправки | Повторите с тем же `client_operation_id` |

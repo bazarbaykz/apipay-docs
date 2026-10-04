@@ -16,7 +16,7 @@ Before issuing a receipt, make sure that:
 1. **Writing through the cashier is not paused.** Issuing receipts is available unconditionally; `403 fiscal_receipts_disabled` only arrives when writing through the cashier the receipt is addressed to has been paused — use another cashier (`kaspi_connection_id`) or resume writing. Reading the history (`GET /receipts`, `GET /receipts/{id}`) is not gated by anything.
 2. **A Kaspi cashier is connected.** You need an active cashier (Settings → Kaspi Authorization). Otherwise — `409 kaspi_session_not_configured`. If the organization has several active cashiers and no primary one is selected, pass `kaspi_connection_id` (otherwise `422 connection_ambiguous`).
 3. **The shift is open.** The merchant opens the shift in the Kaspi Pos app. If the shift is closed, the receipt fails with status `failed` and `error_code = shift_closed`.
-4. **Line items are fiscal.** Only items from the synchronized catalog (by `catalog_item_id`) that are fiscally registered (with NTIN and barcode) go into the receipt. An item without an NTIN fails the receipt with `item_not_fiscal`. Resolve the NTIN via `POST /catalog/scan` + `PATCH /catalog/{id}` (see [Catalog](catalog.md)).
+4. **Line items are fiscal.** Items from the synchronized catalog (by `catalog_item_id`) go into the receipt. An item with neither an NTIN nor a barcode (for example, a service) is issued without National Catalog marking; an item with a barcode but no NTIN — `item_not_fiscal`; an item with a VAT rate — `receipt_vat_not_supported`. Resolve the NTIN via `POST /catalog/scan` + `PATCH /catalog/{id}` (see [Catalog](catalog.md)).
 
 ## Preview a Receipt
 
@@ -121,7 +121,7 @@ curl https://api.apipay.kz/api/v1/receipts/4210 \
   "fpd": "000000000000",
   "operation_id": "KKM00000000",
   "operation_time": "2026-07-12T16:25:40+00:00",
-  "shift_number": 106,
+  "shift_number": null,
   "link": "https://receipt.kaspi.kz/preview/cashier?extTranId=KKM00000000",
   "error_code": null,
   "error_message": null,
@@ -129,7 +129,7 @@ curl https://api.apipay.kz/api/v1/receipts/4210 \
 }
 ```
 
-While the receipt is not yet issued, `status: "pending"` and the details (`fpd`, `operation_id`, `link`, `shift_number`) are `null`. On success — `status: "issued"` with the details filled in. On failure — `status: "failed"`, details `null`, reason in `error_code` / `error_message`. A foreign `id` (a receipt of another organization) → `404 receipt_not_found`.
+While the receipt is not yet issued, `status: "pending"` and the details (`fpd`, `operation_id`, `link`, `shift_number`) are `null`. On success — `status: "issued"` with the details filled in; `shift_number` stays `null` for new receipts. On failure — `status: "failed"`, details `null`, reason in `error_code` / `error_message`. A foreign `id` (a receipt of another organization) → `404 receipt_not_found`.
 
 ### Webhook
 
@@ -163,7 +163,8 @@ The same outcome arrives as a `receipt.issued` (success) or `receipt.failed` (fa
 | `receipt_preview_unavailable` | 503 | Kaspi is unavailable for preview | Retry later |
 | `receipt_not_found` | 404 | Receipt not found or belongs to another organization | Check the `id` |
 | `shift_closed` | — (in `failed`) | The shift in Kaspi Pos is closed | Open the shift in the Kaspi Pos app and issue the receipt again |
-| `item_not_fiscal` | — (in `failed`) | A line item has no NTIN — it is not fiscal | Resolve the NTIN (`POST /catalog/scan` + `PATCH /catalog/{id}`) and retry |
+| `item_not_fiscal` | — (in `failed`) | A line item has a barcode but no NTIN, or is not synchronized with Kaspi | No NTIN — resolve it (`POST /catalog/scan` + `PATCH /catalog/{id}`) and retry. Also check the item's `in_kaspi_catalog`: with `false` no receipt is issued for it in production |
+| `receipt_vat_not_supported` | — (in `failed`) | A line item has a VAT rate — such receipts are not issued yet | A receipt with such an item cannot be issued via the API — retrying will not help |
 | `rfo_missing` | — (in `failed`) | The point of sale (RFO) is not determined | Contact support |
 | `receipt_kaspi_error` | — (in `failed`) | Kaspi rejected the issuing | The reason is in `error_message`; contact support if needed |
 | `receipt_dispatch_error` | — (in `failed`) | A technical dispatch failure | Retry with the same `client_operation_id` |
