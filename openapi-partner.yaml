@@ -23,10 +23,11 @@ info:
     ## Границы этой спецификации
 
     Здесь описана **только** S2S-поверхность ключа `X-Partner-Key` —
-    17 эндпоинтов. Партнёрский **кабинет**
+    23 эндпоинта. Партнёрский **кабинет**
     (`POST /api-key`, `webhook-logs`, `claim-requests`, `sandbox/toggle`,
     `production-request`, `managed-organizations` и т.д.) —
     отдельная поверхность, и в этот машинный канон она НЕ входит.
+    Кабинет не описывается и в публичном `llms.txt`.
 
 
     ## Поток онбординга
@@ -71,6 +72,11 @@ info:
     `403 channel_required` — доступ к этой организации **был и отозван мерчантом**. Ключ при
     этом остаётся рабочим на других организациях; восстанавливает доступ мерчант. Отдельный
     код от `grant_not_granted` намеренно — это разные ситуации.
+
+    Организация, которую вы СОЗДАЛИ сами (`POST /organizations`), получает живой доступ с
+    полным набором прав интеграции сразу, без экрана согласия мерчанта. `grant_not_granted`
+    на ней приходит только на операции, закрытые интеграциям навсегда, а `channel_required` —
+    только если мерчант отозвал доступ.
 
     `404 organization_not_found` — организация вне вашего скоупа: чужая, реферальная,
     несуществующая, отвязанная вами самими либо сменившая владельца. Ответ намеренно один на
@@ -261,6 +267,10 @@ paths:
         Создаёт организацию мерчанта. **Идемпотентно по `external_id`** —
         повторный запрос с тем же `external_id` возвращает существующую
         организацию (HTTP 200), новая не создаётся.
+        Доступ к созданной организации выдаётся сразу, с полным набором прав
+        интеграции и без экрана согласия: `403 grant_not_granted` по ней приходит
+        только на операции, закрытые интеграциям навсегда, `403 channel_required` —
+        только если мерчант отозвал доступ (см. «Права интеграции»).
       operationId: createPartnerOrganization
       requestBody:
         required: false
@@ -287,6 +297,25 @@ paths:
                     автогенерит `PARTNER_<id>_<ts>` (финальное имя может
                     прийти позже на verify-otp).
                   example: ТОО Example
+                business_relation:
+                  type: string
+                  enum: [own, customer]
+                  description: >-
+                    Чей это бизнес относительно вас: `customer` — клиент,
+                    которого вы онбордите, `own` — ваша собственная
+                    организация. **Поле необязательное:** если ключа в теле
+                    нет, применяется `customer` — назначение этого API и есть
+                    онбординг ваших клиентов-мерчантов. Старые интеграции
+                    продолжают работать без изменений.
+
+
+                    ⛔ Передать `null` или пустую строку нельзя — это 422:
+                    «значение неизвестно» и «поле не передано» означают разное.
+
+
+                    ⚠️ Значение неизменяемо. Повтор с тем же `external_id` и
+                    другим значением — 409 `organization_relation_conflict`.
+                  example: customer
       responses:
         "201":
           description: Организация создана
@@ -306,10 +335,15 @@ paths:
           $ref: "#/components/responses/ForbiddenNotOperating"
         "409":
           description: >-
-            `external_id` принадлежит организации, которую вы ранее удалили
-            (`DELETE /organizations/{organization}`). Удалённая организация не
-            воскрешается: её API-ключи деактивированы. Для нового клиента
-            используйте новый `external_id`.
+            Либо `external_id` принадлежит организации, которую вы ранее
+            удалили (`DELETE /organizations/{organization}`) — удалённая
+            организация не воскрешается, её API-ключи деактивированы, и для
+            нового клиента нужен новый `external_id`;
+
+
+            либо повтор пришёл с другим `business_relation`
+            (`organization_relation_conflict`): значение неизменяемо,
+            изменить его может только поддержка ApiPay.
           content:
             application/json:
               schema:
@@ -360,12 +394,30 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Organizations]
-      summary: Отвязать организацию
-      description: Деактивирует все API-ключи организации и делает soft-delete.
+      summary: Удалить пустую песочницу
+      description: >-
+        Удаляет ПУСТУЮ песочницу: стирает песочные счета, подписки и каталог,
+        деактивирует все API-ключи организации, отзывает ваш канал доступа к ней
+        и делает soft-delete.
+
+
+        ⛔ Боевая организация и песочница, которая уже что-то накопила, не
+        удаляются: ответ `409 organization_in_use`, причина — в поле `reason`.
+
+
+        ⚠️ Восстановления нет: `external_id` удалённой организации занят
+        навсегда, повторное создание по нему отвечает `409 organization_deleted`.
+
+
+        Чтобы завершить работу с клиентом по боевой организации, отключите
+        кассира (`POST /organizations/{organization}/kaspi-auth/logout`) и
+        напишите в поддержку ApiPay. До отключения дайте мерчанту завершить
+        возвраты: после него возвраты по счетам этого кассира через API не
+        проходят.
       operationId: deletePartnerOrganization
       responses:
         "200":
-          description: Организация отвязана
+          description: Песочница удалена
           content:
             application/json:
               schema:
@@ -376,6 +428,36 @@ paths:
           $ref: "#/components/responses/ForbiddenNotOperating"
         "404":
           $ref: "#/components/responses/OrganizationNotFound"
+        "409":
+          description: Организацию нельзя удалить — она уже используется
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      reason:
+                        type: string
+                        description: >-
+                          Что именно мешает удалить. Лежит РЯДОМ со служебными
+                          ключами конверта, а не внутри них.
+                        enum:
+                          - production_organization
+                          - cashier
+                          - payment
+                          - qr_refund_execution_attempt
+              examples:
+                production_organization:
+                  summary: Организация не в песочном режиме
+                  value:
+                    success: false
+                    error: organization_in_use
+                    error_code: organization_in_use
+                    message: >-
+                      Организацию удалить нельзя: она уже используется.
+                      Удаляются только пустые песочницы.
+                    reason: production_organization
         "429":
           $ref: "#/components/responses/RateLimited"
   /organizations/{organization}/kaspi-auth/init:
@@ -1225,6 +1307,10 @@ paths:
         оплата продлевает подписку от конца триала/текущего периода.
 
 
+        Сумма счёта — цена плана со скидкой клиента, если она закреплена за
+        организацией: та же сумма, что у `tariff/invoice` и в `next_payment.amount`.
+
+
         Боевая организация — только для **production**-партнёра (иначе
         `403 production_access_required`). Тестовая (sandbox) организация →
         мгновенная мок-активация: HTTP **201**, `payment.status:"completed"`,
@@ -1401,7 +1487,7 @@ paths:
         `POST .../tariff/pay` либо `.../tariff/invoice` по глобальному прайсу.
 
 
-        ⚠️ Поле `tariff_billing_mode` в `GET /me` и `GET /health` — это ваш ДЕФОЛТ
+        ⚠️ Поле `tariff_billing_mode` в `GET /health` — это ваш ДЕФОЛТ
         (режим, с которым заводится новый доступ к мерчанту), а не режим конкретной
         организации. Сегодня ApiPay переключает дефолт и все действующие доступы одним
         действием, поэтому расхождения между ними у вас нет.
@@ -1632,7 +1718,8 @@ paths:
                     обязан быть `1`, `tier_id` — целевой тариф. «С какого тарифа»
                     определяет сервер по активному платному тарифу организации;
                     передать это значение нельзя. Оплата по телефону
-                    (`tariff/pay`) апгрейда не знает — там всегда полная цена плана.
+                    (`tariff/pay`) апгрейда не знает — там всегда цена всего плана
+                    (со скидкой клиента, если она есть), а не разница.
                   example: false
       responses:
         "201":
@@ -2843,7 +2930,21 @@ components:
           description: Конец периода (активный/триал) либо null (истёкший)
         amount:
           type: integer
+          description: >-
+            Сумма к оплате — с закреплённой за мерчантом скидкой привлёкшего его партнёра,
+            если она есть. По этой сумме идут оба способа оплаты тарифа вами:
+            `tariff/pay` и `tariff/invoice`.
+          example: 64125
+        gross_amount:
+          type: integer
+          description: >-
+            Полная цена без скидки — справочно, для сверки с прайсом. Счёт по ней не
+            выставляется.
           example: 71250
+        partner_discount_percent:
+          type: integer
+          description: Применённая скидка партнёра, привлёкшего организацию, целые проценты; 0 — скидки нет.
+          example: 10
         tier:
           type: string
           example: business
@@ -3165,9 +3266,7 @@ components:
     ProductionRequired:
       description: >-
         Боевая организация у sandbox-партнёра:
-        `production_access_required` (403). Тот же код и то же тело отдаёт
-        партнёрский кабинет — до 25.08.2026 он отвечал на этом правиле
-        отдельным кодом `production_required`. Также возможен `forbidden`, если
+        `production_access_required` (403). Также возможен `forbidden`, если
         доступ партнёра не одобрен (у него `message` нет).
       content:
         application/json:
