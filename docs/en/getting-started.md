@@ -19,7 +19,7 @@ Before using the ApiPay.kz API, you need to:
 | Base URL | `https://api.apipay.kz/api/v1` |
 | Authentication | Header `X-API-Key: your_api_key` |
 | Content-Type | `application/json` |
-| Rate Limit | 200 requests/minute per API key. Endpoint-specific limits: `POST /clients/check` — 60/min and 10 000/day, `POST /invoices/qr` — 60/min per organization, `GET /invoices/{id}` — 1000/min, `POST /invoices/bulk` — 20/min, `POST /catalog/scan` — 30/min and 2000/day |
+| Rate Limit | 200 requests/minute per API key. Endpoint-specific limits: `POST /clients/check` — 60/min and 10 000/day, `POST /invoices/qr` — 200/min per organization, `GET /invoices/{id}` — 1000/min, `POST /invoices/bulk` — 20/min, `POST /catalog/scan` — 30/min and 2000/day |
 
 ## Your First Invoice
 

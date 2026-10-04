@@ -108,7 +108,7 @@ webhook: the invoice moves to `error` with `invoice.error_code`, a refund to
 | `connection_ambiguous` | 422 | sync | The organization has several active cashier connections and no primary one. Pass `kaspi_connection_id`. |
 | `sandbox_invoice_limit` | 400 | sync | Sandbox invoice limit reached per organization. Clear the sandbox in the dashboard. |
 | `sandbox_subscription_limit` | 400 | sync | Sandbox subscription limit reached per organization. Clear the sandbox. |
-| `qr_rate_limit` | 429 | sync | Too many QR requests for the organization (limit 60/min). Wait one minute. |
+| `qr_rate_limit` | 429 | sync | Too many QR requests for the organization (limit 200/min). There is no `Retry-After` header — retry in about a minute. |
 | `qr_render_failed` | 500 | sync + async (`invoice.status_changed`, `status=error`) | Failed to render the QR code image. Retry later. |
 | `kaspi_error` | 502 | sync + async for QR invoices (`invoice.status_changed`, `status=error`) | Kaspi API returned an error. The reason text is in `message`/`error_message`. Retry later. |
 | `client_not_found` | — | async (`invoice.status_changed`, `status=error`) | The phone number is not registered in Kaspi. Don't retry the same number — ask for another. |
@@ -238,7 +238,7 @@ async function apiRequest(url, options) {
 - **Overall limit:** 200 requests per minute per API key
 - **`POST /clients/check`:** 60 requests per minute and 10 000 per day per API key (separate counter)
 - **`POST /catalog/scan`:** 30 requests per minute and 2000 per day per API key
-- **QR invoices:** a separate limit of 60 requests per minute per organization (`POST /invoices/qr`)
+- **QR invoices:** a separate limit of 200 requests per minute per organization (`POST /invoices/qr`): one counter for all of the organization's keys, the window is a calendar minute, and exceeding it returns `429 qr_rate_limit` without `Retry-After`. The general limit of 200 requests per minute per key applies here too
 - **`POST /catalog/bulk-delete`:** 10 requests per minute per API key
 - **Cash register (`/cashbox/*`):** 30 requests per minute per API key
 - **`GET /invoices/{id}/receipt`:** its own per-minute limit, stricter than the general one

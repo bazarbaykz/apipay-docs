@@ -19,7 +19,7 @@
 | Base URL | `https://api.apipay.kz/api/v1` |
 | Аутентификация | Заголовок `X-API-Key: your_api_key` |
 | Content-Type | `application/json` |
-| Rate Limit | 200 запросов/минуту на API-ключ. Отдельные эндпоинты: `POST /clients/check` — 60/мин и 10 000/сутки, `POST /invoices/qr` — 60/мин на организацию, `GET /invoices/{id}` — 1000/мин, `POST /invoices/bulk` — 20/мин, `POST /catalog/scan` — 30/мин и 2000/сутки |
+| Rate Limit | 200 запросов/минуту на API-ключ. Отдельные эндпоинты: `POST /clients/check` — 60/мин и 10 000/сутки, `POST /invoices/qr` — 200/мин на организацию, `GET /invoices/{id}` — 1000/мин, `POST /invoices/bulk` — 20/мин, `POST /catalog/scan` — 30/мин и 2000/сутки |
 
 ## Первый счёт
 

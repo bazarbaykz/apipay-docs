@@ -94,7 +94,7 @@ Differences from `POST /invoices`:
 - Synchronous response — the QR (`qr_token_url` + ready PNG) is returned immediately.
 - A QR invoice's lifecycle is measured in **minutes** (vs 24h for regular phone invoices). Kaspi dictates the exact expiry moment; the terminal status (`paid`/`cancelled`/`expired`) arrives via webhook. The `qr_expires_at` field is informational, not for local termination.
 - Cancelling a QR invoice is not supported — if no payment arrives, the invoice flips to `expired` after a few minutes (on the terminal from Kaspi). A refund for a paid QR invoice goes through a separate branch, `POST /qr-refunds`: the customer scans a refund QR (see `openapi.yaml`).
-- Per-org rate limit: **60 QR requests per minute per organization** (separate from the general API limit).
+- Per-org rate limit: **200 QR requests per minute per organization** — one counter for all of its keys, separate from the general API limit (200 requests per minute per key).
 
 > ⚠️ **A QR invoice is for paying right away only.** Use `POST /invoices/qr` when the customer is next to you and pays now: the QR lives for a few minutes. If the customer will pay later, use a static QR (`POST /static-qr`) or a payment link (`POST /invoices/qr` with `static: true`). See «Which QR to choose» below.
 
@@ -244,7 +244,7 @@ Response (excerpt):
 | 422 | `catalog_requires_cart_items` | `has_catalog=true` but `cart_items` not provided |
 | 422 | `catalog_not_supported` | `has_catalog=false` but `cart_items` provided |
 | 422 | — | The cart contains an item in the `deleting` status; the reason is in `errors["cart_items.N.catalog_item_id"]`, this branch has no separate `error_code`. Bring the item back or drop it from the cart, see [Catalog → Item Statuses](catalog.md#item-statuses) |
-| 429 | `qr_rate_limit` | Per-org limit of 60 QR/min |
+| 429 | `qr_rate_limit` | Per-org limit of 200 QR/min, no `Retry-After` — retry in about a minute |
 | 500 | `qr_render_failed` | Failed to render PNG |
 | 502 | `kaspi_error` | Kaspi API returned an error |
 | 503 | `kaspi_session_invalid` | Kaspi session expired |
