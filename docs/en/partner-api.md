@@ -57,6 +57,7 @@ request returns the existing organization.
 |-----------|------|----------|-------------|
 | `has_catalog` | boolean | No | Create the organization with a product catalog |
 | `external_id` | string | No | Your own client identifier from your CRM |
+| `business_relation` | string | No | `customer` (default) — a client you are onboarding; `own` — your own organization. The value is immutable: a repeat with the same `external_id` and a different value returns `409 organization_relation_conflict` |
 
 **Response** `201 Created` (or `200 OK` on an idempotent repeat):
 
@@ -94,7 +95,9 @@ Get a single organization card.
 
 ### DELETE /api/partner/organizations/{id}
 
-Detach an organization: deactivates its API keys and soft-deletes it.
+Delete an empty sandbox: erases its sandbox invoices, subscriptions and catalog, deactivates its API keys and revokes your access to the organization. A production organization, or a sandbox that has already had a cashier, payments or a refund attempt, cannot be deleted — the response is `409 organization_in_use` with the cause in `reason`. The `external_id` of a deleted organization stays taken permanently.
+
+To stop working with a client on a production organization, disconnect the cashier (`POST /api/partner/organizations/{id}/kaspi-auth/logout`) and contact ApiPay support. Before disconnecting, let the merchant complete any refunds: after that, refunds for invoices paid through this cashier do not go through the API — they are made manually in the Kaspi Pay app.
 
 **Response:** `{ "success": true }`
 
