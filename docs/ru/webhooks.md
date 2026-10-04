@@ -16,7 +16,7 @@ Webhooks доставляют уведомления в реальном вре�
 
 ## События
 
-ApiPay отправляет 20 типов событий:
+ApiPay отправляет 23 типа событий:
 
 | Событие | Описание |
 |---------|----------|
@@ -26,6 +26,8 @@ ApiPay отправляет 20 типов событий:
 | `qr_refund.identified` | Покупатель отсканировал возвратный QR (сессия → `customer_identified`) |
 | `qr_refund.completed` | QR-возврат выполнен (`refunded_amount`, `receipt_url`) |
 | `qr_refund.expired` | Возвратный QR истёк до идентификации |
+| `qr_refund.failed` | QR-возврат не состоялся, причина — в `error_code` |
+| `qr_refund.execution_uncertain` | Исход QR-возврата не доказан: деньги могли уйти. Повторный возврат не запускайте — разбор вручную через поддержку |
 | `catalog.item_processed` | Операция над позицией каталога закрыта. Приходит **по каждой позиции, всегда** — агрегата пакетной операции больше нет |
 | `receipt.issued` | Фискальный чек успешно выбит (Kaspi OFD) |
 | `receipt.failed` | Выбить фискальный чек не удалось |
@@ -36,6 +38,7 @@ ApiPay отправляет 20 типов событий:
 | `subscription.expired` | Подписка истекла |
 | `subscription.paused` | Подписка приостановлена |
 | `subscription.resumed` | Подписка возобновлена |
+| `subscription.period_skipped` | Период подписки пропущен без оплаты |
 | `subscription.cancelled` | Подписка отменена |
 | `cashbox.shift_closed` | Кассовая смена закрыта |
 | `cashbox.shift_close_failed` | Закрыть кассовую смену не удалось (`error_code`) |
@@ -459,7 +462,7 @@ ApiPay отправляет 20 типов событий:
 }
 ```
 
-> Пока `attempt_number` меньше `max_retry_attempts` (по умолчанию 3), система **сама** перевыставит счёт периода с интервалом `retry_interval_hours` (по умолчанию 24 ч). Ничего пересоздавать не нужно — просто уведомите клиента (`attempt_number`, `reason`). Счёт подписки со статусом `error` (например `client_not_found`) провалом платежа **не считается** — это событие не придёт, отслеживайте invoice-вебхук `error`.
+> Счёт система перевыставляет **сама** — ничего пересоздавать не нужно, просто уведомите клиента (`attempt_number`, `reason`). При `bill_until_paid: false` повтор идёт, пока `attempt_number` меньше `max_retry_attempts` (по умолчанию 3), с интервалом `retry_interval_hours` (по умолчанию 24 ч). При `bill_until_paid: true` истёкший счёт перевыставляется до момента следующего планового списания, а после отмены или ошибки счёта (кроме ошибки на стороне сервиса) следующий придёт в следующем периоде. Счёт подписки в статусе `error` тоже даёт это событие, код — в `error_code`. Исключение: у подписки с `bill_until_paid: true` и `error_code = client_not_found` вместо него приходит `subscription.cancelled` с `reason: payer_error`.
 
 ### subscription.grace_period_started
 
@@ -484,7 +487,7 @@ ApiPay отправляет 20 типов событий:
 }
 ```
 
-Подписка ещё активна `grace_period_days` дней (по умолчанию 3). Любая успешная оплата снимает льготный период.
+Подписка ещё активна `grace_period_days` дней (по умолчанию 3). Любая успешная оплата снимает льготный период. У подписки с `bill_until_paid: true` это событие не приходит.
 
 ### subscription.expired
 
@@ -508,7 +511,7 @@ ApiPay отправляет 20 типов событий:
 }
 ```
 
-Биллинг остановлен навсегда, реактивации нет. Для возобновления создайте новую подписку.
+Биллинг по подписке остановлен. Подписку, истёкшую по окончании льготного периода, можно возобновить: `POST /subscriptions/{id}/resume`. Подписку, получившую все оплаты `total_cycles`, возобновить нельзя — создайте новую.
 
 ### subscription.paused
 
@@ -564,6 +567,40 @@ ApiPay отправляет 20 типов событий:
 
 `next_billing_at` пересчитан от момента возобновления — пропущенные периоды не доначисляются.
 
+### subscription.period_skipped
+
+Отправляется, когда продавец пропустил период подписки без оплаты — через `POST /subscriptions/{id}/skip-period` или в кабинете ApiPay. Причину пропуска событие не несёт.
+
+```json
+{
+  "event": "subscription.period_skipped",
+  "subscription": {
+    "id": 10,
+    "external_subscriber_id": "CLIENT-001",
+    "phone_number": "87071234567",
+    "subscriber_name": "Иван Иванов",
+    "amount": "5000.00",
+    "billing_period": "monthly",
+    "status": "active",
+    "next_billing_at": "2026-04-01T08:00:00+00:00",
+    "failed_attempts": 0,
+    "in_grace_period": false,
+    "is_sandbox": false
+  },
+  "billing_period_start": "2026-03-01",
+  "billing_period_end": "2026-03-31",
+  "cancelled_invoice_id": 202,
+  "source": "My API Key",
+  "timestamp": "2026-03-02T09:00:00+00:00"
+}
+```
+
+Доп. поля в корне payload: `billing_period_start` и `billing_period_end` — границы пропущенного периода, `cancelled_invoice_id` — счёт периода, отмену которого запросил пропуск (`null`, если счёт ещё не выставлялся). Подписка остаётся активной, следующий период выставляется по расписанию; в истории платежей у периода статус `skipped`.
+
+Итог отмены счёта приходит отдельным `invoice.status_changed`. Если Kaspi отмену не примет, счёт вернётся в `pending` без вебхука и останется доступен покупателю. Если покупатель оплатит этот счёт, период засчитывается оплаченным: придёт `subscription.payment_succeeded` с `invoice_id`, равным `cancelled_invoice_id`. События могут прийти в любом порядке — итог периода `paid`. Если покупатель уже рассчитался с вами другим способом, лишнюю оплату верните сами через `POST /invoices/{id}/refund`.
+
+Дедуп по `(event, subscription.id, billing_period_start)`: у пропущенного периода счёта может не быть.
+
 ### subscription.cancelled
 
 Отправляется при отмене подписки.
@@ -591,7 +628,9 @@ ApiPay отправляет 20 типов событий:
 
 Подписка отменена безвозвратно: `next_billing_at` сохраняет последнее значение, счета больше не выставляются. Для возобновления создайте новую подписку.
 
-Отмена приходит и без вашего запроса: если плательщик отклонил счёт в Kaspi, подписка отменяется сразу, и в корне payload приходят `reason: payer_refused` и `invoice_id`. Нехватка средств у плательщика отказом не считается — там идут обычные повторы.
+Отмена приходит и без вашего запроса: если плательщик отклонил счёт в Kaspi, подписка отменяется сразу, и в корне payload приходят `reason: payer_refused` и `invoice_id`. Нехватка средств у плательщика отказом не считается: без `bill_until_paid: true` идут обычные повторы, с ним период закрывается без повтора.
+
+У подписки с `bill_until_paid: true` отмена приходит и тогда, когда счёт упал с `error_code = client_not_found` (номер не зарегистрирован в Kaspi): в корне payload — `reason: payer_error`, `invoice_id` и `error_code`.
 
 ### webhook.test
 
@@ -624,12 +663,13 @@ ApiPay отправляет 20 типов событий:
 | `receipt.failed` | — | Чек не выбит (`receipt.error_code`). Фискальный документ не создан — повторите с тем же `client_operation_id` (при `shift_closed` сначала откройте смену в Kaspi Pos, при `receipt_ofd_token_revoked` — перепривяжите ОФД). |
 | `subscription.created` | — | Подписка создана. Счета по подписке выставляет система автоматически в `next_billing_at` (или сразу при `bill_immediately`). По каждому счёту приходят обычные invoice-вебхуки. |
 | `subscription.payment_succeeded` | — | Очередной счёт подписки оплачен. `failed_attempts` сброшен, льготный период (если был) снят. |
-| `subscription.payment_failed` | — | Счёт подписки истёк или отменён (`reason`). Пока попыток меньше `max_retry_attempts` система сама перевыставит счёт — ничего пересоздавать не нужно. |
-| `subscription.grace_period_started` | — | Все попытки исчерпаны; подписка ещё активна `grace_period_days` дней. Любая успешная оплата снимает льготный период. |
-| `subscription.expired` | — | Биллинг остановлен навсегда: истёк льготный период либо исчерпаны оплаты `total_cycles` — во втором случае в корне payload приходят `reason: total_cycles_reached`, `cycles_paid` и `total_cycles`. Для возобновления создайте новую подписку. |
+| `subscription.payment_failed` | — | Счёт подписки истёк, отменён или ушёл в `error` (`reason`, `error_code`). Система сама перевыставит счёт по правилам режима `bill_until_paid` — ничего пересоздавать не нужно. |
+| `subscription.grace_period_started` | — | Все попытки исчерпаны; подписка ещё активна `grace_period_days` дней. Любая успешная оплата снимает льготный период. Не приходит при `bill_until_paid: true`. |
+| `subscription.expired` | — | Биллинг остановлен: истёк льготный период либо исчерпаны оплаты `total_cycles` — во втором случае в корне payload приходят `reason: total_cycles_reached`, `cycles_paid` и `total_cycles`. Истёкшую по льготному периоду подписку можно возобновить (`POST /subscriptions/{id}/resume`); после `total_cycles` — только новая подписка. |
 | `subscription.paused` | — | Подписка приостановлена. Счета не выставляются. |
 | `subscription.resumed` | — | Подписка возобновлена; `next_billing_at` пересчитан от момента возобновления. |
-| `subscription.cancelled` | — | Подписка отменена безвозвратно: вашим запросом либо явным отказом плательщика в Kaspi — во втором случае в корне payload приходят `reason: payer_refused` и `invoice_id`. |
+| `subscription.period_skipped` | — | Продавец пропустил период без оплаты. Подписка остаётся активной; в корне payload — `billing_period_start`, `billing_period_end`, `cancelled_invoice_id`. Если счёт периода был выставлен, ApiPay запросил его отмену: итог придёт `invoice.status_changed`, а если Kaspi отмену не примет — вебхука не будет, счёт останется `pending`. |
+| `subscription.cancelled` | — | Подписка отменена безвозвратно: вашим запросом либо явным отказом плательщика в Kaspi — во втором случае в корне payload приходят `reason: payer_refused` и `invoice_id`. У подписки с `bill_until_paid: true` — ещё и по `client_not_found`: `reason: payer_error`, `invoice_id`, `error_code`. |
 | `webhook.test` | — | Ручной тест из ЛК. Фиктивный счёт со `status=test` — спокойно игнорируйте. |
 
 ## Переходы статусов
@@ -757,7 +797,7 @@ function verifyWebhook($payload, $signature, $secret) {
 - `(invoice.id, invoice.status)` — для invoice-событий
 - `(refund.id, refund.status)` — для возвратов
 - `(event, receipt.id)` — для событий чеков (`receipt.issued`/`receipt.failed`)
-- `(event, subscription.id, invoice_id)` — для событий подписки
+- `(event, subscription.id, invoice_id)` — для событий подписки, а для `subscription.period_skipped` — `(event, subscription.id, billing_period_start)`: `invoice_id` в нём нет
 
 ## Лучшие практики безопасности
 

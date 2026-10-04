@@ -16,7 +16,7 @@ Configure webhooks in [ApiPay.kz Dashboard](https://apipay.kz) → Settings → 
 
 ## Events
 
-ApiPay sends 20 event types:
+ApiPay sends 23 event types:
 
 | Event | Description |
 |-------|-------------|
@@ -26,6 +26,8 @@ ApiPay sends 20 event types:
 | `qr_refund.identified` | The customer scanned the refund QR (session → `customer_identified`) |
 | `qr_refund.completed` | The QR refund was completed (`refunded_amount`, `receipt_url`) |
 | `qr_refund.expired` | The refund QR expired before the customer was identified |
+| `qr_refund.failed` | The QR refund did not happen; the reason is in `error_code` |
+| `qr_refund.execution_uncertain` | The QR refund outcome is not proven: the money may have gone out. Do not start another refund — it is resolved manually via support |
 | `catalog.item_processed` | An operation on a catalog item was closed. Sent **for every item, always** — there is no bulk aggregate any more |
 | `receipt.issued` | A fiscal receipt was successfully issued (Kaspi OFD) |
 | `receipt.failed` | Issuing a fiscal receipt failed |
@@ -36,6 +38,7 @@ ApiPay sends 20 event types:
 | `subscription.expired` | The subscription expired |
 | `subscription.paused` | The subscription was paused |
 | `subscription.resumed` | The subscription was resumed |
+| `subscription.period_skipped` | A subscription period was skipped without payment |
 | `subscription.cancelled` | The subscription was cancelled |
 | `cashbox.shift_closed` | A cash register shift was closed |
 | `cashbox.shift_close_failed` | Closing a cash register shift failed (`error_code`) |
@@ -459,7 +462,7 @@ Sent when a subscription payment fails.
 }
 ```
 
-> While `attempt_number` is below `max_retry_attempts` (3 by default), the system **re-issues** the period invoice itself, at the `retry_interval_hours` interval (24h by default). You don't need to recreate anything — just notify the customer (`attempt_number`, `reason`). A subscription invoice that ends in `error` (e.g. `client_not_found`) does **not** count as a payment failure — this event won't fire; watch the invoice `error` webhook instead.
+> The system **re-issues** the invoice itself — you don't need to recreate anything, just notify the customer (`attempt_number`, `reason`). With `bill_until_paid: false` a retry happens while `attempt_number` is below `max_retry_attempts` (3 by default), at the `retry_interval_hours` interval (24h by default). With `bill_until_paid: true` an expired invoice is re-issued until the next scheduled billing moment, and after a cancelled or failed invoice (except a service-side error) the next one comes in the next period. A subscription invoice that ends in `error` also triggers this event, with the code in `error_code`. The exception: for a subscription with `bill_until_paid: true` and `error_code = client_not_found`, `subscription.cancelled` with `reason: payer_error` arrives instead.
 
 ### subscription.grace_period_started
 
@@ -484,7 +487,7 @@ Sent when a subscription enters the grace period after the retries are exhausted
 }
 ```
 
-The subscription stays active for `grace_period_days` (3 by default). Any successful payment lifts the grace period.
+The subscription stays active for `grace_period_days` (3 by default). Any successful payment lifts the grace period. This event is not sent for a subscription with `bill_until_paid: true`.
 
 ### subscription.expired
 
@@ -508,7 +511,7 @@ Sent when a subscription expires after all retries fail.
 }
 ```
 
-Billing is stopped for good, with no reactivation. To resume, create a new subscription.
+Billing for the subscription is stopped. A subscription that expired after the grace period can be resumed with `POST /subscriptions/{id}/resume`. A subscription that has received all `total_cycles` payments cannot be resumed — create a new one.
 
 ### subscription.paused
 
@@ -564,6 +567,40 @@ Sent when a subscription is resumed.
 
 `next_billing_at` is recalculated from the moment of resumption — missed periods are not back-charged.
 
+### subscription.period_skipped
+
+Sent when the merchant skips a subscription period without payment — via `POST /subscriptions/{id}/skip-period` or in the ApiPay dashboard. The event does not carry the reason for the skip.
+
+```json
+{
+  "event": "subscription.period_skipped",
+  "subscription": {
+    "id": 10,
+    "external_subscriber_id": "CLIENT-001",
+    "phone_number": "87071234567",
+    "subscriber_name": "Ivan Ivanov",
+    "amount": "5000.00",
+    "billing_period": "monthly",
+    "status": "active",
+    "next_billing_at": "2026-04-01T08:00:00+00:00",
+    "failed_attempts": 0,
+    "in_grace_period": false,
+    "is_sandbox": false
+  },
+  "billing_period_start": "2026-03-01",
+  "billing_period_end": "2026-03-31",
+  "cancelled_invoice_id": 202,
+  "source": "My API Key",
+  "timestamp": "2026-03-02T09:00:00+00:00"
+}
+```
+
+Extra fields in the payload root: `billing_period_start` and `billing_period_end` — boundaries of the skipped period, and `cancelled_invoice_id` — the period's invoice whose cancellation the skip requested (`null` if no invoice had been issued yet). The subscription stays active and the next period is invoiced on schedule; in the payment history the period has status `skipped`.
+
+The outcome of the invoice cancellation arrives in a separate `invoice.status_changed`. If Kaspi does not accept the cancellation, the invoice returns to `pending` without a webhook and stays available to the buyer. If the buyer pays that invoice, the period counts as paid: `subscription.payment_succeeded` arrives with `invoice_id` equal to `cancelled_invoice_id`. The events may arrive in any order — the period ends up `paid`. If the buyer has already settled with you another way, refund the extra payment yourself via `POST /invoices/{id}/refund`.
+
+Deduplicate on `(event, subscription.id, billing_period_start)`: a skipped period may have no invoice.
+
 ### subscription.cancelled
 
 Sent when a subscription is cancelled.
@@ -591,7 +628,9 @@ Sent when a subscription is cancelled.
 
 The subscription is cancelled irreversibly: `next_billing_at` keeps its last value, and no invoices are issued anymore. To resume, create a new subscription.
 
-A cancellation also arrives without a request from you: if the payer declined the invoice in Kaspi, the subscription is cancelled at once and the payload root carries `reason: payer_refused` and `invoice_id`. Insufficient funds on the payer's side do not count as a refusal — those lead to ordinary retries.
+A cancellation also arrives without a request from you: if the payer declined the invoice in Kaspi, the subscription is cancelled at once and the payload root carries `reason: payer_refused` and `invoice_id`. Insufficient funds on the payer's side do not count as a refusal: without `bill_until_paid: true` ordinary retries follow, with it the period closes without a retry.
+
+For a subscription with `bill_until_paid: true` a cancellation also arrives when an invoice failed with `error_code = client_not_found` (the number is not registered in Kaspi): the payload root carries `reason: payer_error`, `invoice_id` and `error_code`.
 
 ### webhook.test
 
@@ -624,12 +663,13 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 | `receipt.failed` | — | The receipt was not issued (`receipt.error_code`). No fiscal document was created — retry with the same `client_operation_id` (for `shift_closed`, first open the shift in Kaspi Pos; for `receipt_ofd_token_revoked`, re-link the OFD). |
 | `subscription.created` | — | The subscription was created. The system issues subscription invoices automatically at `next_billing_at` (or immediately with `bill_immediately`). Each invoice triggers the regular invoice webhooks. |
 | `subscription.payment_succeeded` | — | The next subscription invoice was paid. `failed_attempts` is reset; the grace period (if any) is lifted. |
-| `subscription.payment_failed` | — | The subscription invoice expired or was cancelled (`reason`). While attempts are below `max_retry_attempts` the system re-issues the invoice itself — nothing to recreate. |
-| `subscription.grace_period_started` | — | All retries are exhausted; the subscription stays active for `grace_period_days`. Any successful payment lifts the grace period. |
-| `subscription.expired` | — | Billing is stopped for good: either the grace period ended or the `total_cycles` charges were used up — in the latter case the payload root carries `reason: total_cycles_reached`, `cycles_paid` and `total_cycles`. To resume, create a new subscription. |
+| `subscription.payment_failed` | — | The subscription invoice expired, was cancelled or ended in `error` (`reason`, `error_code`). The system re-issues the invoice itself under the rules of the `bill_until_paid` mode — nothing to recreate. |
+| `subscription.grace_period_started` | — | All retries are exhausted; the subscription stays active for `grace_period_days`. Any successful payment lifts the grace period. Not sent with `bill_until_paid: true`. |
+| `subscription.expired` | — | Billing is stopped: either the grace period ended or the `total_cycles` charges were used up — in the latter case the payload root carries `reason: total_cycles_reached`, `cycles_paid` and `total_cycles`. A subscription that expired after the grace period can be resumed (`POST /subscriptions/{id}/resume`); after `total_cycles`, only a new subscription. |
 | `subscription.paused` | — | The subscription was paused. No invoices are issued. |
 | `subscription.resumed` | — | The subscription was resumed; `next_billing_at` is recalculated from the moment of resumption. |
-| `subscription.cancelled` | — | The subscription was cancelled irreversibly: by your request or by an explicit refusal from the payer in Kaspi — in the latter case the payload root carries `reason: payer_refused` and `invoice_id`. |
+| `subscription.period_skipped` | — | The merchant skipped a period without payment. The subscription stays active; the payload root carries `billing_period_start`, `billing_period_end`, `cancelled_invoice_id`. If the period's invoice had been issued, ApiPay requested its cancellation: the outcome arrives in `invoice.status_changed`, and if Kaspi does not accept the cancellation, no webhook is sent and the invoice stays `pending`. |
+| `subscription.cancelled` | — | The subscription was cancelled irreversibly: by your request or by an explicit refusal from the payer in Kaspi — in the latter case the payload root carries `reason: payer_refused` and `invoice_id`. For a subscription with `bill_until_paid: true` also on `client_not_found`: `reason: payer_error`, `invoice_id`, `error_code`. |
 | `webhook.test` | — | A manual test from the dashboard. A dummy invoice with `status=test` — just ignore it. |
 
 ## Status transitions
@@ -757,7 +797,7 @@ Client-side deduplication is **mandatory**: a retry after a partial delivery to 
 - `(invoice.id, invoice.status)` — for invoice events
 - `(refund.id, refund.status)` — for refunds
 - `(event, receipt.id)` — for receipt events (`receipt.issued`/`receipt.failed`)
-- `(event, subscription.id, invoice_id)` — for subscription events
+- `(event, subscription.id, invoice_id)` — for subscription events, and for `subscription.period_skipped` — `(event, subscription.id, billing_period_start)`: it has no `invoice_id`
 
 ## Security Best Practices
 

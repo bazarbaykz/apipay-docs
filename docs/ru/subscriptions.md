@@ -2,7 +2,7 @@
 
 Подписки автоматически выставляют счета Kaspi по расписанию — для абонементов, SaaS и регулярных услуг.
 
-Автосписания нет: в каждую дату списания система создаёт обычный счёт Kaspi, а клиент подтверждает оплату в приложении Kaspi. Если счёт не оплачен, система выставляет его повторно — см. [Grace Period](#grace-period).
+Автосписания нет: в каждую дату списания система создаёт обычный счёт Kaspi, а клиент подтверждает оплату в приложении Kaspi. Если счёт не оплачен, система выставляет его повторно — сколько раз, зависит от режима `bill_until_paid`, см. [Grace Period](#grace-period).
 
 ## Создание подписки
 
@@ -38,12 +38,13 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `subscriber_name` | string | Нет | Имя подписчика (макс. 255) |
 | `external_subscriber_id` | string | Нет | Ваш ID подписчика (макс. 255) |
 | `started_at` | string | Нет | Дата начала (YYYY-MM-DD). По умолчанию — сегодня |
-| `max_retry_attempts` | integer | Нет | Макс. попыток повтора (1-10) |
+| `max_retry_attempts` | integer | Нет | Сколько счетов выставить за период при неоплате (1-10). Вместе с `bill_until_paid: true` вернёт `422` |
 | `retry_interval_hours` | integer | Нет | Часов между попытками (1-168) |
 | `grace_period_days` | integer | Нет | Льготный период в днях (1-30) |
 | `metadata` | object | Нет | Произвольные данные |
 | `cart_items` | array | Условно | Корзина `[{ catalog_item_id, count }]`, 1–100 позиций. Для организаций **с каталогом** обязательна — сумму считает сервер, `amount` игнорируется. Организациям **без каталога** передавать нельзя: вернётся `422` |
 | `bill_immediately` | boolean | Нет | Если `true` — первый счёт выставляется сразу. По умолчанию `false` (первый счёт по расписанию) |
+| `bill_until_paid` | boolean | Нет | Режим «выставлять, пока не оплатят»: подписка по неоплате не истекает. По умолчанию `false` — прежнее поведение с `max_retry_attempts`. См. [Grace Period](#grace-period) |
 
 > ⚠️ **Позиция, снимаемая с продажи, ведёт себя по-разному при создании и при списании.** Создать или обновить подписку с позицией в статусе `deleting` нельзя — придёт `422`, причина в `errors["cart_items.N.catalog_item_id"]`. А вот очередное списание по уже работающей подписке не проваливается, а переносится на следующую попытку списания: счётчик неудач не растёт и подписка не уходит в льготный период из-за временного состояния. Верните позицию обычным `POST /catalog` — см. [Каталог → Статусы товара](catalog.md#статусы-товара). Отложенное списание ничем не сигнализируется: счёт за период не создаётся, вебхука нет, `next_billing_at` не двигается — если деньги нужны раньше, верните позицию сами.
 
@@ -162,6 +163,8 @@ curl https://api.apipay.kz/api/v1/subscriptions/1 \
 | `failed_payments` | integer | Неуспешных платежей |
 | `total_collected` | string | Общая собранная сумма |
 
+Пропущенные периоды (`status: skipped` в истории платежей) в счётчики `stats` не входят — это не попытки оплаты.
+
 ### Поле last_payment
 
 | Поле | Тип | Описание |
@@ -181,7 +184,7 @@ curl -X PUT https://api.apipay.kz/api/v1/subscriptions/1 \
   -d '{"amount": 7500, "description": "Премиальная подписка"}'
 ```
 
-Обновляемые поля: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `metadata`, `cart_items`. Дата первого списания `first_billing_at` задаётся только при создании.
+Обновляемые поля: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `bill_until_paid`, `metadata`, `cart_items`. Дата первого списания `first_billing_at` задаётся только при создании.
 
 > ⚠️ **Описание подписки живёт по тому же правилу, что и описание счёта.** Изменённое описание
 > длиннее 60 символов вернёт `422`.
@@ -205,6 +208,93 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/pause \
 curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/resume \
   -H "X-API-Key: YOUR_API_KEY"
 ```
+
+Возобновляет подписку в статусе `paused` или `expired` с прежней периодичностью: `billing_period` и расписание сохраняются, `next_billing_at` пересчитывается от момента возобновления, пропущенные периоды не доначисляются. У истёкшей подписки обнуляется счётчик неудачных попыток. Подписку, получившую все оплаты `total_cycles`, возобновить нельзя — создайте новую.
+
+## Пропуск периода
+
+Закрывает период подписки без оплаты — например, когда покупатель заплатил вам другим способом. Подписка остаётся активной: неудачные попытки и льготный период сбрасываются, следующий период выставляется по расписанию. Пропустить период можно только у подписки в статусе `active`, в том числе во время повторов и в льготном периоде. То же действие есть в кабинете ApiPay.
+
+Пропуск делается в два шага: сначала превью, затем действие.
+
+### Превью
+
+**Эндпоинт:** `POST /subscriptions/{id}/skip-period/preview`
+
+Ничего не меняет и показывает, какой период будет пропущен, будет ли запрошена отмена его счёта и когда придёт следующий счёт.
+
+```bash
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/skip-period/preview \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+```json
+{
+  "skip": {
+    "kind": "live_invoice",
+    "billing_period_start": "2026-03-01",
+    "billing_period_end": "2026-03-31",
+    "invoice": { "id": 202, "amount": "5000.00", "status": "pending" },
+    "next_billing_at": "2026-04-01T08:00:00+00:00",
+    "next_billing_label": "через 30 дней",
+    "next_billing_in_days": 30,
+    "resets_retries": false
+  }
+}
+```
+
+| Поле | Описание |
+|------|----------|
+| `kind` | `live_invoice` — счёт периода уже выставлен, пропуск запросит его отмену в Kaspi; `open_retry` — период не оплачен и ещё открыт (идут повторы или льготный период); `next_period` — ближайший период, счёт за который ещё не выставлялся |
+| `billing_period_start`, `billing_period_end` | Границы пропускаемого периода (YYYY-MM-DD) |
+| `invoice` | Счёт периода, отмену которого запросит пропуск: `id`, `amount`, `status`. `null`, если отменять нечего |
+| `next_billing_at` | Когда придёт счёт следующего периода; `next_billing_label` и `next_billing_in_days` — то же для показа человеку. Бывает в прошлом: тогда счёт текущего периода выставится без ожидания следующей даты |
+| `resets_retries` | `true` — пропуск снимет неудачные попытки или льготный период |
+
+### Действие
+
+**Эндпоинт:** `POST /subscriptions/{id}/skip-period`
+
+Передайте `billing_period_start` из превью — так пропустится ровно тот период, который вы показали человеку. Поле обязательное: без него — `422`.
+
+```bash
+curl -X POST https://api.apipay.kz/api/v1/subscriptions/1/skip-period \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"billing_period_start": "2026-03-01"}'
+```
+
+Ответ — `200` с полями `message`, `subscription` и `skip`. У `skip` та же форма, что в превью, плюс `replayed`.
+
+Повтор запроса с тем же `billing_period_start` безопасен: второй период не пропустится, а ответ придёт с `skip.replayed: true`. Поэтому после обрыва связи запрос можно просто повторить. При `replayed: true` поля `kind` и `invoice` описывают текущее состояние этого периода, а не то, что показывало превью.
+
+### Отказы
+
+Код отказа приходит в полях `error` и `error_code`. У превью из этих отказов бывают только `subscription_not_active`, `subscription_cycles_exhausted` и `tariff_inactive`.
+
+| Код | HTTP | Что делать |
+|-----|------|------------|
+| `skip_period_changed` | 409 | Период сменился, пока человек подтверждал пропуск (например, вышел новый счёт). В теле — свежий `skip`: покажите его человеку и повторите с новым `billing_period_start`. Вслепую не повторяйте |
+| `subscription_busy` | 409 | По подписке прямо сейчас выставляется счёт, ничего не изменено. Повторите примерно через минуту с тем же `billing_period_start` |
+| `subscription_not_active` | 409 | Подписка не в статусе `active` (на паузе, отменена или истекла) — пропускать нечего |
+| `subscription_cycles_exhausted` | 409 | По подписке получены все оплаты `total_cycles` — пропускать нечего |
+| `tariff_inactive` | 403 | Тариф ApiPay не оплачен. Продлите тариф в кабинете |
+
+### Что происходит со счётом периода
+
+Если счёт за период уже выставлен (`kind: live_invoice`), ApiPay отправляет его отмену в Kaspi — так же, как `POST /invoices/{id}/cancel`. Итог приходит вебхуком `invoice.status_changed` (`cancelled` или `error`). Kaspi может отмену не принять: тогда счёт вернётся в `pending` без отдельного вебхука и останется доступен покупателю. `subscription.payment_failed` по этому счёту не придёт.
+
+Если покупатель всё же оплатит этот счёт — до отмены или после отказа Kaspi в ней, — период засчитывается оплаченным. Строка в истории платежей станет `paid`, придёт `subscription.payment_succeeded` с `invoice_id`, равным `cancelled_invoice_id` из `subscription.period_skipped`. События могут прийти в любом порядке — итог периода `paid`.
+
+Если покупатель уже рассчитался с вами другим способом, лишнюю оплату верните сами через `POST /invoices/{id}/refund`.
+
+### История платежей и вебхук
+
+В истории платежей (`GET /subscriptions/{id}/invoices`) у пропущенного периода статус `skipped`. Это не долг. Если счёт за период ещё не выставлялся, у строки нет счёта: `invoice_id` и `amount` равны `null`, поля `invoice` нет. В `stats` подписки пропуски не считаются.
+
+Пропуск не считается оплатой: подписка с `total_cycles` проработает на период дольше.
+
+О пропуске приходит вебхук `subscription.period_skipped` — и когда период пропущен через API, и когда в кабинете. В корне payload — `billing_period_start`, `billing_period_end` и `cancelled_invoice_id`. См. [Webhooks](webhooks.md).
 
 ## Отмена
 
@@ -233,18 +323,18 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
 | Поле | Тип | Описание |
 |------|-----|----------|
 | `id` | integer | ID записи подписочного счёта |
-| `invoice_id` | integer | ID связанного счёта |
+| `invoice_id` | integer\|null | ID связанного счёта; `null` у пропущенного периода, за который счёт не выставлялся |
 | `billing_period_start` | string | Начало периода (YYYY-MM-DD) |
 | `billing_period_end` | string | Конец периода (YYYY-MM-DD) |
 | `billing_period_label` | string | Человекочитаемый период |
-| `amount` | string | Сумма |
+| `amount` | string\|null | Сумма; `null` у пропущенного периода, за который счёт не выставлялся |
 | `attempt_number` | integer | Номер попытки |
-| `status` | string | Статус |
+| `status` | string | Статус: `pending`, `paid`, `failed`, `cancelled` или `skipped` — период закрыт без оплаты по решению продавца, это не долг (см. [Пропуск периода](#пропуск-периода)) |
 | `status_label` | string | Человекочитаемый статус |
 | `status_color` | string | Цвет для UI |
 | `paid_at` | string\|null | Дата оплаты (ISO 8601) |
 | `failure_reason` | string\|null | Причина ошибки |
-| `invoice` | object | `{ id, kaspi_invoice_id, status }` |
+| `invoice` | object | `{ id, kaspi_invoice_id, status }`. Нет у пропущенного периода, за который счёт не выставлялся |
 | `created_at` | string | Дата создания (ISO 8601) |
 
 ## Статусы
@@ -254,9 +344,11 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
 | `active` | Списания по расписанию |
 | `paused` | Временно приостановлена, можно возобновить |
 | `cancelled` | Отменена окончательно |
-| `expired` | Истекла: закончился grace period либо исчерпан `total_cycles` |
+| `expired` | Истекла: закончился grace period (только без `bill_until_paid: true`) либо исчерпан `total_cycles`. Истёкшую по grace period подписку можно возобновить (`resume`) |
 
 ## Grace Period
+
+Что будет при неоплате, зависит от поля `bill_until_paid`. Без него (или с `false`) действует лестница ниже: повторы, льготный период, `expired`. Режим `true` описан в разделе [Выставлять, пока не оплатят](#выставлять-пока-не-оплатят).
 
 При неудачном платеже запускается льготный период:
 
@@ -272,11 +364,29 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
 
 Значения по умолчанию, если не передавать их при создании: `max_retry_attempts` — 3, `retry_interval_hours` — 24, `grace_period_days` — 3.
 
+### Выставлять, пока не оплатят
+
+С `bill_until_paid: true` подписка по неоплате не истекает:
+
+1. **Истёкший счёт** перевыставляется сразу, пока не наступил момент следующего планового списания. Дальше идёт новый период с новым счётом
+2. **Счёт, отменённый не плательщиком** (например, не хватило денег), и **счёт в статусе `error`** закрывают текущий период без повтора. Ошибка на стороне сервиса период не закрывает — выставление повторится само. `subscription.payment_failed` приходит как обычно. Оплату за закрытый период система больше не запрашивает.
+3. **Номер не зарегистрирован в Kaspi** (`client_not_found`) — подписка отменяется: приходит `subscription.cancelled` с `reason: payer_error`, `invoice_id` и `error_code`, а `subscription.payment_failed` по этому счёту не приходит
+4. **Явный отказ плательщика** отменяет подписку, как и без режима
+
+`retry_interval_hours` и `grace_period_days` в этом режиме не действуют, `subscription.grace_period_started` не приходит.
+
+> ⚠️ **`max_retry_attempts` с этим режимом несовместим.** Вместе с `bill_until_paid: true` он вернёт
+> `422` по полю `max_retry_attempts`. На `PUT` отказ придёт, если итоговый режим — `true` (из тела
+> или уже сохранённый), даже когда число равно текущему; `max_retry_attempts: null` означает «не менять».
+> Если интеграция отправляет в `PUT` весь объект подписки из ответа — не передавайте это поле.
+
+Смена режима через `PUT` в любую сторону обнуляет `failed_attempts`. Включение режима у подписки в льготном периоде возвращает её к выставлению счетов. Мастер кабинета apipay.kz создаёт автоплатёж на день, неделю, две недели, квартал или год с включённым режимом — у таких подписок в ответе приходит `bill_until_paid: true`; выключить режим можно потом во вкладке «Настройки» подписки. Немесячные автоплатежи, загруженные в кабинет из таблицы, создаются без режима (`bill_until_paid: false`). У ежемесячного автоплатежа кабинета этого режима нет: в ответе — `bill_until_paid: false`.
+
 > **Пропущенные периоды не выставляются пачкой.** Если по подписке долго не удавалось списать —
 > например, у организации не было подключённого кассира, — при возобновлении выставляется **один**
 > счёт за текущий период, а расписание переходит на ближайшую будущую дату.
 
-Webhook-события: `subscription.payment_failed`, `subscription.grace_period_started`, `subscription.payment_succeeded`, `subscription.expired`. См. [Webhooks](webhooks.md).
+Webhook-события: `subscription.payment_failed`, `subscription.grace_period_started`, `subscription.payment_succeeded`, `subscription.expired`, `subscription.cancelled`. См. [Webhooks](webhooks.md).
 
 ## Примеры кода
 
