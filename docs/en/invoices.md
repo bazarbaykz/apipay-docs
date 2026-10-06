@@ -47,10 +47,11 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `amount` | number | Yes* | Amount in KZT, **whole tenge only**: 1 - 99,999,999. A fractional value → `422 amount_must_be_whole_tenge`; both `amount` and the `cart_items` total after discounts are checked. If you need tiyn, use `POST /invoices/qr`. *Not required with cart_items. |
+| `amount` | number | Yes* | Amount in KZT, **whole tenge only**: 1 - 99,999,999. A fractional value → `422 amount_must_be_whole_tenge`; both `amount` and the `cart_items` total after discounts are checked. If you need tiyn, use `POST /invoices/qr` (but with a discount QR does not accept items priced in tiyn — `422 qr_discount_unsupported`). *Not required with cart_items. |
 | `phone_number` | string | Yes | Customer phone (format: 8XXXXXXXXXX) |
 | `description` | string | No | Payment description (max 60 chars — Kaspi shows the buyer only the first 60) |
 | `external_order_id` | string | No | Your order ID (max 255 chars) |
+| `buyer_bin` | string | No | The buyer's IIN/BIN — a string of exactly 12 digits, e.g. `"buyer_bin": "012345678901"`. Do not send it as a number — the leading zero is lost; otherwise `422` with `errors.buyer_bin`. Kaspi does not check the number — verify all 12 digits before sending. If the organization has a Kaspi register connected, the number goes into the Kaspi receipt. Returned in the create response, in `GET /invoices` and `GET /invoices/{id}`; it is not in webhooks. In `POST /invoices/bulk` the number is set per row (refusal — `errors.invoices.N.buyer_bin`) |
 | `cart_items` | array | No | Array of cart items (replaces amount) |
 | `discount_percentage` | number | No | Global discount percentage (1-99). Applied to the entire invoice. |
 
@@ -138,10 +139,37 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
 | `description` | string | No | Description (max 100). Used as the line item name on the Kaspi QR receipt |
 | `external_order_id` | string | No | Your order ID (max 255) |
 | `cart_items` | array | Yes* | Only when has_catalog=true. 1 to 100 items |
-| `discount_percentage` | number | No | Whole-cart discount, 1-99% |
+| `discount_percentage` | integer | No | Discount percentage — **a whole number only**, 1–99; a fractional one → `422` with `errors.discount_percentage`. The discount of each line is rounded **up** to a whole tenge, see [QR discount](#qr-discount) |
+| `buyer_bin` | string | No | The buyer's IIN/BIN — under the same rules as in `POST /invoices`: a string of exactly 12 digits, otherwise `422` with `errors.buyer_bin`. Not accepted with `static: true` (`422`). If the organization has a Kaspi register connected, the number goes into the Kaspi receipt |
 | `simulate` | string | No | Sandbox only: `paid` \| `cancelled` \| `expired`. See [Sandbox mode](#sandbox-mode) |
 
 \* depends on `has_catalog`: either `amount` or `cart_items`.
+
+### QR discount
+
+A discount on a QR invoice follows the Kaspi rule, not a plain «percentage of the total»:
+
+- the percentage is a whole number only, from 1 to 99;
+- the discount of each cart line = `price × quantity × percentage / 100`, rounded **up** to a whole tenge;
+- the amount due is the sum of lines minus the sum of discounts.
+
+So on a cheap item the actual discount is larger than stated — the Kaspi app calculates it the same way:
+
+| Cart | Discount | Discount per line, ₸ | Amount due, ₸ |
+|---|---|---|---|
+| 5 ₸ × 1 | 10 % | 1 | 4 |
+| 5 ₸ + 10 ₸ | 20 % | 1 + 2 | 12 |
+| 5 ₸ + 10 ₸ | 7 % | 1 + 1 | 13 |
+| 5 ₸ × 3 | 7 % | 2 | 13 |
+
+Take the invoice amount from the response (`amount`, `discount_sum`), not from your own calculation. If you calculate it in advance, follow exactly this rule. A phone-number invoice (`POST /invoices`) calculates the discount differently, so do not keep one formula for both kinds of invoice.
+
+A `422 qr_discount_unsupported` refusal means the discount cannot be applied to this cart; the invoice is not created, the same in the sandbox. Causes:
+
+- an item price is set in tiyn — in `cart_items[].price` or in the catalog;
+- the discount zeroes an item: 1 ₸ with a 10 % discount is a 1 ₸ discount.
+
+The quantity in a cart line is at most 100,000 (`422` with `errors.cart_items.N.count`). The same discount rule applies to `static: true` and to the printed sheet `POST /static-qr`. For an item without `price`, the sheet and the payment link take the catalog price at payment time, not at issue: if it becomes fractional, a discounted sheet stops accepting payment. Set the price via `price` in the cart line, in whole tenge. A sheet with a cart and a discount is paid by QR only: its page has no payment by phone number. On a sheet without a cart (with `amount`) the discount does not apply.
 
 ### Response 201
 
@@ -243,6 +271,7 @@ Response (excerpt):
 | 422 | `Validation failed` | Invalid params (see body schema) |
 | 422 | `catalog_requires_cart_items` | `has_catalog=true` but `cart_items` not provided |
 | 422 | `catalog_not_supported` | `has_catalog=false` but `cart_items` provided |
+| 422 | `qr_discount_unsupported` | The discount cannot be applied to the cart: an item priced in tiyn or a discount that zeroes an item. The code arrives in both `error` and `error_code`, the reason text is in `errors.discount_percentage`. The invoice is not created. See [QR discount](#qr-discount) |
 | 422 | — | The cart contains an item in the `deleting` status; the reason is in `errors["cart_items.N.catalog_item_id"]`, this branch has no separate `error_code`. Bring the item back or drop it from the cart, see [Catalog → Item Statuses](catalog.md#item-statuses) |
 | 429 | `qr_rate_limit` | Per-org limit of 200 QR/min, no `Retry-After` — retry in about a minute |
 | 500 | `qr_render_failed` | Failed to render PNG |

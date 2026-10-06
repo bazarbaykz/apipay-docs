@@ -37,6 +37,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `description` | string | No | Payment description (max 60 chars — Kaspi shows the buyer only the first 60). Without it the charge invoice goes out with the text «Оплата подписки №{id}», or «Оплата подписки №{id} (песочница)» in the sandbox |
 | `subscriber_name` | string | No | Subscriber name (max 255 chars) |
 | `external_subscriber_id` | string | No | Your external subscriber ID (max 255 chars) |
+| `buyer_bin` | string | No | The buyer's IIN/BIN — a string of exactly 12 digits (`"buyer_bin": "012345678901"`), do not send it as a number. Otherwise `422` with `errors.buyer_bin`. The number goes into every invoice of the subscription; if the organization has a Kaspi register connected, it goes into the Kaspi receipt. Kaspi does not check the number — verify all 12 digits before sending. It is not in webhooks |
 | `started_at` | string | No | Start date (YYYY-MM-DD, default: today) |
 | `max_retry_attempts` | integer | No | How many invoices to issue per period on non-payment (1-10). Together with `bill_until_paid: true` returns `422` |
 | `retry_interval_hours` | integer | No | Hours between retries (1-168) |
@@ -184,7 +185,9 @@ curl -X PUT https://api.apipay.kz/api/v1/subscriptions/1 \
   -d '{"amount": 7500, "description": "Premium monthly"}'
 ```
 
-Updatable fields: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `bill_until_paid`, `metadata`, `cart_items`. The first charge date `first_billing_at` can only be set at creation.
+Updatable fields: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `bill_until_paid`, `metadata`, `cart_items`, `buyer_bin`. The first charge date `first_billing_at` can only be set at creation.
+
+`buyer_bin` in `PUT`: without the key the number is unchanged, `null` clears it. The change applies to future invoices of the subscription only.
 
 > ⚠️ **A subscription description follows the same rule as an invoice description.** A changed description
 > longer than 60 characters returns a `422`.

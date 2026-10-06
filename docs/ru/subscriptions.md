@@ -37,6 +37,7 @@ curl -X POST https://api.apipay.kz/api/v1/subscriptions \
 | `description` | string | Нет | Описание (макс. 60 символов — Kaspi показывает покупателю только первые 60). Без него счёт списания уходит с текстом «Оплата подписки №{id}», в песочнице — «Оплата подписки №{id} (песочница)» |
 | `subscriber_name` | string | Нет | Имя подписчика (макс. 255) |
 | `external_subscriber_id` | string | Нет | Ваш ID подписчика (макс. 255) |
+| `buyer_bin` | string | Нет | ИИН/БИН покупателя — строка ровно из 12 цифр (`"buyer_bin": "012345678901"`), числом не передавайте. Иначе `422` с `errors.buyer_bin`. Номер уходит в каждый счёт подписки; если у организации подключена Kaspi Касса, он попадёт в чек Kaspi. Kaspi номер не проверяет — проверьте все 12 цифр до отправки. В вебхуках его нет |
 | `started_at` | string | Нет | Дата начала (YYYY-MM-DD). По умолчанию — сегодня |
 | `max_retry_attempts` | integer | Нет | Сколько счетов выставить за период при неоплате (1-10). Вместе с `bill_until_paid: true` вернёт `422` |
 | `retry_interval_hours` | integer | Нет | Часов между попытками (1-168) |
@@ -184,7 +185,9 @@ curl -X PUT https://api.apipay.kz/api/v1/subscriptions/1 \
   -d '{"amount": 7500, "description": "Премиальная подписка"}'
 ```
 
-Обновляемые поля: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `bill_until_paid`, `metadata`, `cart_items`. Дата первого списания `first_billing_at` задаётся только при создании.
+Обновляемые поля: `amount`, `billing_day`, `billing_day_from_end`, `billing_time`, `total_cycles`, `description`, `subscriber_name`, `max_retry_attempts`, `retry_interval_hours`, `grace_period_days`, `bill_until_paid`, `metadata`, `cart_items`, `buyer_bin`. Дата первого списания `first_billing_at` задаётся только при создании.
+
+`buyer_bin` в `PUT`: без ключа номер не меняется, `null` стирает его. Правка действует только на будущие счета подписки.
 
 > ⚠️ **Описание подписки живёт по тому же правилу, что и описание счёта.** Изменённое описание
 > длиннее 60 символов вернёт `422`.
