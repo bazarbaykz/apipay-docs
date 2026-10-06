@@ -409,11 +409,9 @@ paths:
         навсегда, повторное создание по нему отвечает `409 organization_deleted`.
 
 
-        Чтобы завершить работу с клиентом по боевой организации, отключите
-        кассира (`POST /organizations/{organization}/kaspi-auth/logout`) и
-        напишите в поддержку ApiPay. До отключения дайте мерчанту завершить
-        возвраты: после него возвраты по счетам этого кассира через API не
-        проходят.
+        Чтобы завершить работу с клиентом по организации, которая уже
+        работала, используйте `POST /organizations/{organization}/offboard`:
+        она закрывает организацию, не удаляя её историю.
       operationId: deletePartnerOrganization
       responses:
         "200":
@@ -442,6 +440,11 @@ paths:
                         description: >-
                           Что именно мешает удалить. Лежит РЯДОМ со служебными
                           ключами конверта, а не внутри них.
+                          `production_organization` — организация не в тестовом режиме;
+                          `cashier` — касса организации когда-либо подключалась, даже
+                          если кассир сейчас отключён; `payment` — по организации получены
+                          оплаты: тарифа ApiPay или счетов покупателей;
+                          `qr_refund_execution_attempt` — была попытка возврата.
                         enum:
                           - production_organization
                           - cashier
@@ -458,6 +461,84 @@ paths:
                       Организацию удалить нельзя: она уже используется.
                       Удаляются только пустые песочницы.
                     reason: production_organization
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /organizations/{organization}/offboard:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    post:
+      tags: [Organizations]
+      summary: Завершить работу с клиентом
+      description: >-
+        Завершает вашу работу с клиентом по организации. Форму выбирает
+        состояние организации:
+
+
+        - пустая тестовая организация удаляется — исход `deleted`, как у
+          `DELETE /organizations/{organization}`;
+
+        - организация, которая уже работала, ЗАКРЫВАЕТСЯ — исход `closed`:
+          отключаются все её кассиры, деактивируются все API-ключи, организация
+          приостанавливается, ваш доступ к ней прекращается. Удаления нет:
+          счета покупателей и возвраты остаются в истории, а кассир свободен —
+          клиент может подключить его в своей организации ApiPay.
+
+
+        ⚠️ **Необратимо для вас.** Вернуть доступ к закрытой организации нельзя:
+        повторный вызов и любые операции с ней отвечают `404
+        organization_not_found`, из списка организаций она пропадает. Повторное
+        создание по тому же `external_id` возвращает её карточку со
+        `status: suspended`, новой организации не заводит.
+
+
+        ⚠️ **Денежное последствие — как у отключения кассира.** Возвраты по
+        счетам, оплаченным через её кассиров, после закрытия через API не
+        проходят. Дайте клиенту завершить возвраты и отмените висящие счета
+        до вызова.
+
+
+        Боевая организация закрывается только в production-режиме.
+      operationId: offboardPartnerOrganization
+      responses:
+        "200":
+          description: Работа с клиентом завершена
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, outcome]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  outcome:
+                    type: string
+                    enum: [deleted, closed]
+                    description: >-
+                      `deleted` — пустая тестовая организация удалена; `closed` —
+                      организация закрыта и приостановлена, история сохранена.
+              example:
+                success: true
+                outcome: closed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ProductionRequired"
+        "404":
+          $ref: "#/components/responses/OrganizationNotFound"
+        "409":
+          description: >-
+            `tariff_payment_pending` — по организации прямо сейчас проводится
+            оплата или назначение тарифа; повторите запрос через минуту.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: tariff_payment_pending
+                error_code: tariff_payment_pending
+                message: У этой организации есть неоплаченный счёт тарифа.
         "429":
           $ref: "#/components/responses/RateLimited"
   /organizations/{organization}/kaspi-auth/init:

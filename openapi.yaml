@@ -1098,7 +1098,11 @@ paths:
 
         Доступно по счетам в статусе `paid` и `partially_refunded` (частичный возврат —
         это по-прежнему оплаченный счёт). Тот же `409` приходит, если у оплаченного счёта
-        ещё нет числового идентификатора Kaspi. В песочнице ответ приходит сразу, и ссылки
+        ещё нет числового идентификатора Kaspi.
+
+        Фискальный чек Kaspi формирует только при подключённой Kaspi Кассе. Без Кассы ответ —
+        `409 receipt_requires_kaspi_kassa`, отказ постоянный: повтор не поможет, пока Касса не
+        подключена. В песочнице ответ приходит сразу, и ссылки
         ведут на тестовую страницу чека ApiPay: сумма, дата и позиции — из счёта, реквизиты
         продавца и фискальные данные — заглушки «Тест тест», `download_link` — её PDF. В бою
         ссылки всегда ведут на `receipt.kaspi.kz` — на хост песочных ссылок не завязывайтесь.
@@ -1146,7 +1150,7 @@ paths:
                     type: string
                     example: Invoice not found
         '409':
-          description: Счёт не оплачен либо сессия кассира недоступна
+          description: Счёт не оплачен (receipt_not_available_for_status), сессия кассира недоступна либо у продавца нет Kaspi Кассы (receipt_requires_kaspi_kassa)
           content:
             application/json:
               schema:
@@ -4979,7 +4983,7 @@ paths:
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: tariff_inactive}
-        '409': {description: "kaspi_session_not_configured / rfo_missing"}
+        '409': {description: "kaspi_session_not_configured / kaspi_session_expired (кассир есть, а сессии нет — переавторизуйте кассира) / rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
         '503': {description: "cashbox_unavailable — касса Kaspi временно недоступна"}
@@ -5032,7 +5036,7 @@ paths:
         '400': {description: organization_required}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: tariff_inactive}
-        '409': {description: "kaspi_session_not_configured / cashbox_kkm_unknown"}
+        '409': {description: "kaspi_session_not_configured / kaspi_session_expired (кассир есть, а сессии нет — переавторизуйте кассира) / cashbox_kkm_unknown"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
         '503': {description: cashbox_unavailable}
@@ -5646,6 +5650,7 @@ components:
         - receipt_not_available_for_status
         - receipt_unavailable
         - receipt_rate_limited
+        - receipt_requires_kaspi_kassa
         - grant_not_granted
         - grant_snapshot_unreadable
         - channel_required
