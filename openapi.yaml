@@ -300,6 +300,16 @@ paths:
             type: string
             enum: [created_at, paid_at]
             default: created_at
+        - name: static_qr_id
+          in: query
+          description: |
+            Все счета-попытки одной ссылки на оплату или печатного листа — `static_qr_id` из
+            ответа `POST /invoices/qr` (`static: true`) или `POST /static-qr`. Так сверяется заказ:
+            видны и истёкшие QR, и оплата старой попытки, и переплата второй. ⚠️ Фильтр доступ не
+            расширяет: попытки ссылки, которую ваш ключ не видит, дают пустой список, а не `404`.
+          schema:
+            type: integer
+            minimum: 1
         - name: sort_by
           in: query
           description: Поле сортировки (невалидное значение → created_at).
@@ -570,6 +580,16 @@ paths:
           на сайте. Счёт появится, только когда покупатель нажмёт «Оплатить» на странице.
           Подробности — в описании `CreateQrInvoiceRequest` и `PaymentLinkCreated`.
 
+        **Ссылка как снимок заказа** (`static: true`, все поля необязательны):
+        `success_url`/`cancel_url` — адреса «Вернуться в магазин» (на экране «Оплачено») и
+        «Вернуться без оплаты»; это ссылки на странице, а не редирект, и сервер по ним не ходит.
+        ⚠️ Переход покупателя по `success_url` оплату не подтверждает — истина в статусе счёта и
+        вебхуке. `order_items` — информационный «Состав заказа» на странице: в Kaspi не уходит,
+        фискальным чеком не является, сумму к оплате не задаёт (её задают `amount`/`cart_items`).
+        `is_sandbox` — ваше утверждение о режиме: если организация в другом режиме, ссылка не
+        создаётся (`409 sandbox_mode_mismatch`). Все попытки оплаты одной ссылки находятся
+        фильтром `GET /invoices?static_qr_id=`, итог — в `GET /static-qr/{id}` (`state_version`).
+
         **Синхронный**: ответ `201` сразу; у QR-счёта — со `status: "pending"` и QR-полями
         (pending-вебхука для QR нет).
 
@@ -629,8 +649,17 @@ paths:
         '409':
           description: |
             `duplicate_idempotency_key` (дубль ключа прямого QR); `idempotency_conflict`
-            (static=true: дубль ключа ссылки; ответ содержит static_qr_id и payment_url); `kaspi_session_expired` (сессия кассира
-            мертва — QR не создан, нужна переавторизация).
+            (static=true: тот же ключ ссылки и ТА ЖЕ просьба — ответ содержит static_qr_id и
+            payment_url уже созданной ссылки, используйте её); `idempotency_key_conflict`
+            (static=true: тот же ключ, но другие данные — сумма, корзина, состав, адреса возврата,
+            кассир или режим; ссылки в ответе НЕТ, возьмите новый ключ); `sandbox_mode_mismatch`
+            (`is_sandbox` расходится с режимом организации — ничего не создано); `kaspi_session_expired`
+            (сессия кассира мертва — QR не создан, нужна переавторизация).
+
+            «Та же просьба» сверяется по всем полям тела, денежные значения — по сумме, а не по
+            записи (`2500` и `"2500.00"` — одно и то же). Ссылка, созданная до появления этой
+            проверки, своих данных для сравнения не хранит и на повтор ключа всегда отвечает
+            `idempotency_conflict`.
           content:
             application/json:
               schema:
@@ -645,6 +674,12 @@ paths:
                           error_code: {type: string, enum: [idempotency_conflict]}
                           error: {type: string, enum: [idempotency_conflict]}
                           message: {type: string}
+                  - type: object
+                    required: [error_code]
+                    properties:
+                      error: {type: string, enum: [idempotency_key_conflict, sandbox_mode_mismatch]}
+                      error_code: {type: string, enum: [idempotency_key_conflict, sandbox_mode_mismatch]}
+                      message: {type: string}
         '403':
           description: |
             `static_qr_disabled` — выпуск ссылок на оплату на сервисе сейчас выключен (только
@@ -705,7 +740,7 @@ paths:
         Явный офсет уважается как указан; в query-строке `+` кодируется как `%2B`.
 
         Ручка принимает те же фильтры, что и список: `status[]`, `search`, `date_field`,
-        `origin` — чтобы сводка совпадала с таблицей под ней. Границы периода при этом
+        `origin`, `static_qr_id` — чтобы сводка совпадала с таблицей под ней. Границы периода при этом
         задаются ТОЛЬКО парой `start_date`/`end_date` (или `period`): `date_from`/`date_to`
         от списка здесь не применяются.
 
@@ -782,6 +817,12 @@ paths:
             type: string
             enum: [all, apipay, kaspi]
             default: all
+        - name: static_qr_id
+          in: query
+          description: Только попытки одной ссылки на оплату или печатного листа — тот же фильтр, что у `GET /invoices`.
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
           description: Статистика
@@ -982,6 +1023,32 @@ paths:
         вебхук `invoice.refunded` (`completed`/`failed`, причина в `refund.error_code`).
         Для счетов с корзиной можно указать `return_items` — на позицию **ровно одно** из
         полей `count` (целые штуки) ИЛИ `amount` (произвольная сумма); оба или ни одного → `422`.
+
+        **Идемпотентность.** Ключ — заголовок `Idempotency-Key` или поле тела `idempotency_key`
+        (до 191 символа, регистр значим); пространство ключей — счёт. Повтор той же просьбы
+        (то же тело, тот же API-ключ) отвечает `200` с `idempotent_replay: true` и ТЕМ ЖЕ
+        возвратом в его текущем статусе — `pending`, `completed`, `failed` или неизвестный исход;
+        второго возврата, нового запроса в Kaspi и повторного вебхука нет. Повтор находится
+        раньше проверок занятости и остатка, поэтому ретрай после собственного успеха не получит
+        «нечего возвращать». Тот же ключ с другим телом — `409 idempotency_key_conflict`. Без ключа
+        поведение прежнее. ⭐ Ретрай после таймаута — только с тем же ключом.
+
+        **Удержание до подтверждения покупателя** (`hold_for_buyer_confirmation: true`). Если
+        Kaspi откажет кодом `refund_rejected_by_kaspi` или `refund_requires_buyer_confirmation`,
+        счёт остаётся занятым этим возвратом: любой другой возврат и ссылка покупателю по счёту
+        получают `409 qr_refund_link_invoice_busy`. Проходит только ссылка
+        `POST /qr-refunds/links` с `source_refund_id` этого возврата — ради неё счёт и держится;
+        завершённая ссылка удержание исчерпывает, истёкшая или несостоявшаяся — возвращает.
+        Снять удержание может сотрудник в кабинете ApiPay. Без флага отказ счёт не держит.
+
+        **Неизвестный исход.** Возврат, исход которого не доказан, в `GET /invoices/{id}/refunds`
+        получает `operation_state: uncertain` и держит счёт занятым. Повторять его нельзя: исход
+        разбирает сотрудник в кабинете ApiPay по истории операций Kaspi. Если деньги не ушли,
+        возврат становится `failed` с `error_code: refund_resolved_not_executed` (и приходит
+        `invoice.refunded`), а счёт освобождается. Если деньги ушли, разбор ждёт, пока
+        синхронизация с Kaspi заведёт эту операцию отдельной строкой, и тогда исходный возврат
+        получает `failed` с `error_code: refund_resolved_executed` и `resolved_refund_id` — ту
+        строку (деньги учтены один раз, `operation_state: completed`).
       operationId: createRefund
       parameters:
         - name: id
@@ -989,13 +1056,43 @@ paths:
           required: true
           schema:
             type: integer
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Ключ идемпотентности возврата (то же, что поле тела `idempotency_key`; если переданы оба, действует заголовок).
+          schema:
+            type: string
+            maxLength: 191
       requestBody:
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateRefundRequest'
       responses:
-        '409': {description: "qr_refund_link_invoice_busy — обычный или QR-возврат по этому счёту ещё выполняется либо имеет неизвестный исход. Новый возврат не создан."}
+        '409': {description: "qr_refund_link_invoice_busy — обычный или QR-возврат по этому счёту ещё выполняется, имеет неизвестный исход либо держит удержание до подтверждения покупателя. Новый возврат не создан. idempotency_key_conflict — ключ уже использован для другой просьбы по этому счёту; возьмите новый ключ."}
+        '200':
+          description: Повтор ключа идемпотентности — тот же возврат в текущем статусе, ничего нового не создано
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Refund already created for this idempotency key
+                  refund:
+                    $ref: '#/components/schemas/RefundShort'
+                  invoice:
+                    type: object
+                    properties:
+                      id: {type: integer, example: 42}
+                      amount: {type: string, example: "15000.00"}
+                      total_refunded: {type: string, example: "5000.00"}
+                      available_for_refund: {type: number, example: 10000}
+                      pending_refund_amount: {type: number, description: "Сумма этого возврата, пока он не завершён; иначе 0.", example: 0}
+                  idempotent_replay:
+                    type: boolean
+                    enum: [true]
         '201':
           description: Возврат создан и поставлен в очередь
           content:
@@ -1016,7 +1113,10 @@ paths:
                       total_refunded: {type: string, example: "5000.00"}
                       available_for_refund:
                         type: number
-                        description: Сумма, доступная для возврата (число, не строка).
+                        description: |
+                          Сумма, доступная для возврата (число, не строка). Та же величина, что у
+                          `GET /invoices/{id}/refunds`: учитывает и проведённый QR-возврат, ещё не
+                          подтянутый синхронизацией, и незавершённые возвраты.
                         example: 10000
                       pending_refund_amount:
                         type: number
@@ -1035,7 +1135,7 @@ paths:
         '404':
           description: Счёт не найден
         '422':
-          description: refund_window_expired / контент-скрин / ошибки return_items
+          description: refund_window_expired / контент-скрин / ошибки return_items / `idempotency_key` (или заголовок) длиннее 191 символа
           content:
             application/json:
               schema:
@@ -1044,7 +1144,16 @@ paths:
     get:
       tags: [Invoices]
       summary: Возвраты по счёту
-      description: Список возвратов конкретного счёта с агрегатами по счёту. Даты — UTC +00:00.
+      description: |
+        Список возвратов конкретного счёта с агрегатами по счёту. Даты — UTC +00:00.
+
+        Это ответ на вопрос «что с деньгами заказа»: у каждого возврата `operation_state` —
+        состояние ОПЕРАЦИИ (вместе со ссылкой покупателю, которую она породила), в блоке
+        `invoice` — `refund_in_progress` и `available_for_refund`, рядом — `qr_refund_sessions`,
+        ссылки «Возврат ApiPay» по этому счёту. ⚠️ `available_for_refund` считается тем же
+        правилом, что проверяет сам возврат: учитывает и проведённую ссылку, ещё не подтянутую
+        синхронизацией, и незавершённые возвраты, поэтому может быть меньше
+        `amount − total_refunded`.
       operationId: listInvoiceRefunds
       parameters:
         - name: id
@@ -1068,12 +1177,25 @@ paths:
                       total_refunded: {type: string, example: "5000.00"}
                       available_for_refund: {type: number, example: 10000}
                       is_fully_refunded: {type: boolean, example: false}
+                      refund_in_progress:
+                        type: boolean
+                        description: |
+                          Счёт занят: есть незавершённый или неразобранный возврат, живая ссылка
+                          покупателю либо удержание до подтверждения покупателя. Пока `true`, новый
+                          возврат и новая ссылка по счёту получат `409 qr_refund_link_invoice_busy`.
+                        example: false
                   refunds:
                     type: array
                     items:
                       $ref: '#/components/schemas/Refund'
+                  qr_refund_sessions:
+                    type: array
+                    description: Ссылки «Возврат ApiPay», выпущенные под этот счёт, по возрастанию `id`.
+                    items:
+                      $ref: '#/components/schemas/InvoiceQrRefundSession'
                   total:
                     type: integer
+                    description: Число возвратов в `refunds` (ссылки не считаются).
                     example: 1
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -1312,11 +1434,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Счёт не найден
+          description: |
+            Счёт не найден: несуществующий, нечисловой, чужой или невидимый вашему ключу `id`
+            отвечают ОДНИМ телом `{"error":"not_found","message":"Invoice not found"}`.
+            ⚠️ Раньше несуществующий `id` отвечал другим телом — `{"error":"Endpoint not found"}`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: not_found
+                message: Invoice not found
   "/static-qr":
     post:
       tags: [Static QR]
@@ -1357,18 +1485,23 @@ paths:
         песочница нужна ровно для того, чтобы увидеть это до печати.
 
         ⚠️ **Оплата с листа по номеру телефона требует целой суммы.** QR-ветка тиыны
-        принимает, телефонная — нет: лист с дробной `amount` или дробным итогом `cart_items`
-        покупателю по номеру телефона выставить не удастся (`422 amount_must_be_whole_tenge`),
-        а переиздать напечатанный лист нельзя. Для листов, где нужна оплата по номеру,
-        задавайте целую сумму.
+        принимает, телефонная — нет, а округлять сумму ради телефона мы не будем: у листа и
+        ссылки с дробной `amount` или дробным итогом `cart_items` страница оплату по номеру
+        телефона не предлагает — только QR. Переиздать напечатанный лист нельзя, поэтому для
+        листов, где нужна оплата по номеру, задавайте целую сумму.
+
+        Необязательное `is_sandbox` — то же утверждение режима, что у ссылки на оплату: если
+        организация в другом режиме, лист не создаётся (`409 sandbox_mode_mismatch`).
 
         ⛔ **Скидка на листе** — по тому же правилу, что у `POST /invoices/qr`: процент только
         целый, скидка строки округляется вверх до целого тенге; позиция с ценой в тиынах и
         позиция, которую скидка обнуляет, — `422 qr_discount_unsupported` при выпуске. Скидка
         применяется только к `cart_items`: на листе с `amount` она ни на что не влияет.
         **Лист с корзиной и скидкой оплачивается только по QR**: оплаты по номеру телефона на
-        его странице нет (у телефонного счёта Kaspi скидка считается иначе, и сумма разошлась
-        бы с листом).
+        его странице нет (у счёта по номеру телефона скидка считается по другому правилу, и
+        сумма разошлась бы с листом). Цену позиции без `price` лист берёт из каталога в момент
+        оплаты, а не при выпуске: если она станет дробной, лист со скидкой перестанет принимать
+        оплату. Задавайте цену полем `price` в строке корзины — в целых тенге.
       operationId: createStaticQr
       requestBody:
         required: true
@@ -1400,6 +1533,12 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: '`tariff_inactive` — подписка на ApiPay не активна.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: '`sandbox_mode_mismatch` — `is_sandbox` расходится с режимом организации; лист не создан.'
           content:
             application/json:
               schema:
@@ -1466,7 +1605,14 @@ paths:
     get:
       tags: [Static QR]
       summary: Список печатных QR организации
-      description: Печатные листы вашей организации (новые сверху). Плоская пагинация `page`/`per_page` (≤100).
+      description: |
+        Печатные листы и ссылки на оплату вашей организации (новые сверху). Плоская пагинация
+        `page`/`per_page` (≤100).
+
+        ⚠️ **Видимость — та же, что у счетов.** Ключ интеграции с правом `invoices.read_own` видит
+        только листы и ссылки, созданные его ключами; ключ интеграции без права чтения счетов не
+        видит ни одного. Ключ
+        мерчанта и интеграция с `invoices.read_all` — без изменений.
       operationId: listStaticQr
       parameters:
         - name: per_page
@@ -1496,7 +1642,15 @@ paths:
     get:
       tags: [Static QR]
       summary: Получить печатный QR под сделку
-      description: Карточка листа. Чужой id → `404` (non-enumeration).
+      description: |
+        Карточка листа или ссылки на оплату. Чужой id и лист, который ваш ключ не видит (см.
+        `GET /static-qr`), → `404` (non-enumeration).
+
+        `state_version` — версия денежного состояния: меняется, когда появляется новая
+        попытка оплаты, меняются статус, сумма или итог возвратов попытки, возврат по ней или
+        статус самого листа. Сравнивайте её с сохранённой на равенство; изменилась —
+        перечитайте попытки (`GET /invoices?static_qr_id=`) и их возвраты. ⚠️ Это непрозрачный
+        отпечаток, а не счётчик: порядка и монотонности нет. Поле есть только в карточке.
       operationId: getStaticQr
       parameters:
         - name: id
@@ -1509,7 +1663,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StaticQrCreated'
+                allOf:
+                  - $ref: '#/components/schemas/StaticQrCreated'
+                  - type: object
+                    required: [state_version]
+                    properties:
+                      state_version:
+                        type: string
+                        description: Непрозрачная версия денежного состояния листа; сравнивать только на равенство.
+                        example: "3f9c2a7b1e0d4c58a6b2e91f07d3c4aa"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1523,7 +1685,8 @@ paths:
       summary: Отключить печатный QR под сделку
       description: |
         Помечает лист `disabled` — последующие сканы показывают «неактивно», новые счета не
-        создаются. Уже созданные счета не трогаются. Чужой id → `404`.
+        создаются. Уже созданные счета не трогаются. Чужой id и лист, который ваш ключ не видит
+        (см. `GET /static-qr`), → `404`.
       operationId: disableStaticQr
       parameters:
         - name: id
@@ -1958,7 +2121,7 @@ paths:
                 source_refund_id:
                   type: integer
                   minimum: 1
-                  description: "Отказанный возврат этого счёта с error_code=refund_rejected_by_kaspi или refund_requires_buyer_confirmation. Сервер восстанавливает сумму, товары и причину из него, игнорируя переданную reason. amount/return_items одновременно запрещены. Изменившийся план требует нового подтверждения мерчанта."
+                  description: "Отказанный возврат этого счёта с error_code=refund_rejected_by_kaspi или refund_requires_buyer_confirmation. Сервер восстанавливает сумму, товары и причину из него, игнорируя переданную reason. amount/return_items одновременно запрещены. Изменившийся план требует нового подтверждения мерчанта. ⚠️ Один отказанный возврат — одни деньги: если по нему уже есть ссылка завершённая, с неизвестным исходом или ещё живая, новая ссылка отклоняется (422, errors.source_refund_id). Источник снова годен, только когда все его ссылки истекли или не состоялись. Удержание до подтверждения покупателя (hold_for_buyer_confirmation у возврата) такую ссылку пропускает."
       responses:
         '201':
           description: Ссылка выпущена
@@ -1967,7 +2130,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/TariffInactive'}
         '409': {description: "qr_refund_link_invoice_busy — по этому счёту уже есть незавершённый обычный или QR-возврат, включая неизвестный исход; дождитесь результата. Отзыв допустим только для ещё не активированной ссылки"}
-        '422': {description: "connection_ambiguous / невалидный kaspi_connection_id, invoice_id, amount, return_items или source_refund_id / invoice_not_refundable / refund_amount_exceeds_available / partial_refund_requires_return_items"}
+        '422': {description: "connection_ambiguous / невалидный kaspi_connection_id, invoice_id, amount, return_items или source_refund_id (в том числе источник, по которому уже есть завершённая, неразобранная или живая ссылка) / invoice_not_refundable / refund_amount_exceeds_available / partial_refund_requires_return_items"}
         '429': {description: "qr_refund_link_limit_reached — слишком много неиспользованных ссылок (бизнес-лимит, повтор не поможет); request_rate_limited — поминутный лимит `/qr-refunds*`, форма ответа — как у `RateLimitWindow` (Retry-After, X-RateLimit-*)"}
         '503':
           description: |
@@ -5551,6 +5714,8 @@ components:
         - refund_rejected_by_kaspi
         - refund_requires_buyer_confirmation
         - refund_execution_uncertain
+        - refund_resolved_not_executed
+        - refund_resolved_executed
         - refund_insufficient_funds
         - invoice_already_paid
         - invoice_already_cancelled
@@ -5628,6 +5793,7 @@ components:
         - qr_refund_activation_in_progress
         - qr_refund_activation_failed
         - qr_refund_link_invoice_busy
+        - sandbox_mode_mismatch
         - invoice_not_refundable
         - qr_refund_operation_not_found
         - qr_refund_actor_no_longer_authorized
@@ -5866,6 +6032,7 @@ components:
           properties:
             id: {type: integer}
             status: {type: string, enum: [customer_identified, completed, expired, failed, execution_uncertain]}
+            invoice_id: {type: integer, nullable: true, description: "Счёт, под который выпущена ссылка (`invoices.id`); `null` — ссылка или сессия без счёта. Поле приходит всегда.", example: 123}
             client_name: {type: string, nullable: true, example: "Иван И."}
             expires_at: {type: string, format: date-time, nullable: true}
             refunded_amount: {type: string, nullable: true, description: Только при completed}
@@ -6002,7 +6169,7 @@ components:
             `GET /invoices/{id}`, в выгрузке кабинета и в вебхуках `invoice.status_changed`
             и `invoice.qr_scanned` (только если non-null). Ищется подстрокой через `search`.
             Редактируется после создания — `PATCH /invoices/{id}`, в любом статусе.
-        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр (числом не передавать: теряется ведущий ноль). Необязательный. Передаётся в Kaspi для фискального чека; Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). В вебхуках не отдаётся."}
+        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр (числом не передавать: теряется ведущий ноль). Необязательный. Если у организации подключена Kaspi Касса, номер попадёт в чек Kaspi; Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). В вебхуках не отдаётся."}
         external_order_id:
           type: string
           maxLength: 255
@@ -6041,8 +6208,13 @@ components:
         60 символов. Организации с каталогом передают cart_items, без каталога — amount;
         amount без корзины — от 0.01 до 99999999.99 ₸; округлённый итог должен быть положительным.
         external_order_id_idempotency закрепляется за ссылкой в отдельном пространстве
-        организации; повтор даёт 409 idempotency_conflict с static_qr_id и payment_url.
+        организации; повтор той же просьбы даёт 409 idempotency_conflict с static_qr_id и
+        payment_url, а тот же ключ с другими данными — 409 idempotency_key_conflict без ссылки
+        (срок expires_at сравнивается как момент времени). Ключ не может начинаться с `ic`,
+        цифр и двоеточия (`ic12:…`) — 422: это зарезервированное пространство.
         Этот ключ не переносится в invoice и не освобождается при истечении его QR.
+        Только при static=true: success_url, cancel_url, order_items (снимок заказа для страницы
+        покупателя) и is_sandbox (утверждение режима).
       properties:
         static: {type: boolean, default: false, description: Создать одноразовую ссылку вместо немедленного QR-счёта.}
         single_use: {type: boolean, enum: [true], description: В режиме static=true поддерживается только одна сделка.}
@@ -6064,13 +6236,14 @@ components:
             Внутренняя заметка мерчанта; в Kaspi не уходит и плательщику не видна.
             Ограничение `description` в 100 символов (лимит Kaspi на наименование позиции
             в чеке) на это поле **не распространяется** — потолок 255, как в `POST /invoices`.
-        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр (числом не передавать: теряется ведущий ноль). Необязательный. Передаётся в Kaspi для фискального чека; Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). Не принимается при `static: true` (422). В вебхуках не отдаётся."}
+        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр (числом не передавать: теряется ведущий ноль). Необязательный. Если у организации подключена Kaspi Касса, номер попадёт в чек Kaspi; Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). Не принимается при `static: true` (422). В вебхуках не отдаётся."}
         external_order_id:
           type: string
           maxLength: 255
         external_order_id_idempotency:
           type: string
           maxLength: 191
+          description: Не начинается с `ic`, цифр и двоеточия (`ic12:…`) — зарезервированное пространство ключей.
         kaspi_connection_id:
           type: integer
         simulate:
@@ -6088,6 +6261,48 @@ components:
           minimum: 1
           maximum: 99
           description: "Целый процент 1–99 (дробный → 422 errors.discount_percentage). Скидка строки = ceil(цена × количество × процент / 100) в целых тенге. Со скидкой позиция с ценой в тиынах или обнулённая скидкой позиция → 422 qr_discount_unsupported (в песочнице тоже)."
+        success_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          nullable: true
+          example: "https://shop.example.kz/orders/1024/thanks"
+          description: |
+            Только `static: true`. Кнопка «Вернуться в магазин» на экране «Оплачено» (хост показан
+            покупателю). Не редирект и не подтверждение оплаты; сервер по адресу не ходит.
+            Допустим только `https://` адрес сайта: без логина и пароля, пробелов и символов вне
+            ASCII (домен IDN — в punycode), не IP-адрес, не внутренний хост, не адрес ApiPay или
+            Kaspi. Иначе `422 errors.success_url`.
+        cancel_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          nullable: true
+          example: "https://shop.example.kz/orders/1024"
+          description: "Только `static: true`. Кнопка «Вернуться без оплаты» на экране оплаты; отменой заказа не является. Правила адреса — как у `success_url` (`422 errors.cancel_url`)."
+        order_items:
+          type: array
+          nullable: true
+          maxItems: 100
+          description: |
+            Только `static: true`. Информационный «Состав заказа» на странице покупателя, в
+            порядке передачи. В Kaspi не уходит, фискальным чеком не является и сумму к оплате не
+            задаёт. Управляющие и невидимые символы форматирования из `title` вычищаются; строка,
+            от названия которой ничего не осталось, — `422`. Без поля страница показывает строки
+            `cart_items`, если они есть.
+          items:
+            type: object
+            required: [title, quantity, price]
+            properties:
+              title: {type: string, maxLength: 255, example: "Стрижка мужская"}
+              quantity: {type: number, exclusiveMinimum: true, minimum: 0, maximum: 1000000, description: "Больше нуля; дробное — до трёх знаков.", example: 1}
+              price: {type: number, minimum: 0, maximum: 99999999.99, description: "Цена за единицу, до двух знаков.", example: 5000}
+        is_sandbox:
+          type: boolean
+          description: |
+            Только `static: true`. Утверждение, в каком режиме вы берёте деньги. Расходится с
+            режимом организации — `409 sandbox_mode_mismatch`, ссылка не создаётся (боевую ссылку
+            не выпустить под видом тестовой и наоборот). Не передано — не проверяется.
     BulkInvoiceItem:
       type: object
       description: Элемент пакетного создания (те же правила, что POST /invoices, но без kaspi_connection_id — он общий на пачку).
@@ -6105,7 +6320,7 @@ components:
             Поле необязательное — не передали, подставим сами по тем же правилам, что и в
             `POST /invoices`: названия позиций корзины через запятую либо «Оплата счёта».
         internal_comment: {type: string, maxLength: 255, nullable: true, description: "Внутренняя заметка мерчанта; в Kaspi не уходит, плательщику не видна."}
-        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр (числом не передавать: теряется ведущий ноль). Необязательный. Передаётся в Kaspi для фискального чека; Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). В вебхуках не отдаётся."}
+        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр (числом не передавать: теряется ведущий ноль). Необязательный. Если у организации подключена Kaspi Касса, номер попадёт в чек Kaspi; Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). В вебхуках не отдаётся."}
         external_order_id: {type: string, maxLength: 255}
         external_order_id_idempotency: {type: string, maxLength: 191}
         cart_items:
@@ -6145,6 +6360,7 @@ components:
         status: {type: string, example: processing}
         paid_at: {type: string, format: date-time, nullable: true, description: "null при создании."}
         phone: {type: string, example: "87001234567"}
+        buyer_bin: {type: string, description: "ИИН/БИН покупателя — только если был передан."}
         is_imported: {type: boolean, description: "`true` — продажа подтянута из истории Kaspi (проведена в приложении Kaspi Pay мимо ApiPay). Та же ось, что у фильтра `origin` в `GET /invoices`.", example: false}
         created_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
         kaspi_source_type: {type: string, description: "Только если non-null."}
@@ -6192,6 +6408,17 @@ components:
         external_order_id: {type: string, nullable: true}
         expires_at: {type: string, format: date-time, nullable: true}
         is_sandbox: {type: boolean}
+        success_url: {type: string, format: uri, description: "Только если задан при создании."}
+        cancel_url: {type: string, format: uri, description: "Только если задан при создании."}
+        order_items:
+          type: array
+          description: "Только если задан при создании. Цена — строкой с двумя знаками."
+          items:
+            type: object
+            properties:
+              title: {type: string}
+              quantity: {type: number}
+              price: {type: string, example: "5000.00"}
     CreateStaticQrRequest:
       type: object
       description: |
@@ -6254,6 +6481,17 @@ components:
         paid: {type: boolean, description: "Есть ли оплаченный связанный счёт. Частично возвращённый счёт (partially_refunded) тоже считается оплаченным: деньги по сделке получены, частичный возврат её не открывает заново.", example: false}
         paid_at: {type: string, format: date-time, nullable: true}
         created_at: {type: string, format: date-time, example: "2026-07-26T12:00:00+05:00"}
+        success_url: {type: string, format: uri, description: "Только у ссылки на оплату, где адрес задан при создании (см. `CreateQrInvoiceRequest.success_url`)."}
+        cancel_url: {type: string, format: uri, description: "Только у ссылки на оплату, где адрес задан при создании."}
+        order_items:
+          type: array
+          description: "Только у ссылки на оплату, где состав задан при создании. Цена — строкой с двумя знаками."
+          items:
+            type: object
+            properties:
+              title: {type: string}
+              quantity: {type: number}
+              price: {type: string, example: "5000.00"}
     InvoiceItem:
       type: object
       properties:
@@ -6307,6 +6545,7 @@ components:
         is_sandbox: {type: boolean, example: false}
         is_recurring: {type: boolean, description: "Счёт создан подпиской.", example: false}
         is_imported: {type: boolean, description: "`true` — продажа подтянута из истории Kaspi (проведена в приложении Kaspi Pay мимо ApiPay). Та же ось, что у фильтра `origin` в `GET /invoices`.", example: false}
+        static_qr_id: {type: integer, nullable: true, description: "Ссылка на оплату или печатный лист, попыткой которого является счёт (`static_qr_id` из `POST /invoices/qr` со `static: true` / `POST /static-qr`); `null` — обычный счёт. ⚠️ Не ID счёта: у одной ссылки может быть несколько попыток.", example: null}
         subtotal: {type: string, nullable: true}
         discount_sum: {type: string, nullable: true}
         discount_percentage: {type: string, nullable: true}
@@ -6335,6 +6574,7 @@ components:
         buyer_bin: {type: string, nullable: true, description: "ИИН/БИН покупателя, если был передан при создании."}
         is_sandbox: {type: boolean, example: false}
         is_imported: {type: boolean, description: "`true` — продажа подтянута из истории Kaspi (проведена в приложении Kaspi Pay мимо ApiPay). Та же ось, что у фильтра `origin` в `GET /invoices`.", example: false}
+        static_qr_id: {type: integer, nullable: true, description: "Ссылка на оплату или печатный лист, попыткой которого является счёт (`static_qr_id` из `POST /invoices/qr` со `static: true` / `POST /static-qr`); `null` — обычный счёт. ⚠️ Не ID счёта: у одной ссылки может быть несколько попыток.", example: null}
         total_refunded: {type: string, example: "0.00"}
         is_fully_refunded: {type: boolean, example: false}
         kaspi_invoice_id: {type: string, nullable: true, example: "13234689513"}
@@ -6421,6 +6661,19 @@ components:
               catalog_item_id: {type: integer}
               count: {type: integer, minimum: 1, description: "Целые штуки. Взаимоисключимо с amount. Сумма — цена минус скидка строки, делённая на штуки; последние штуки строки забирают весь её остаток (скидка строки в целых тенге на штуки не делится: 2 ₸ на 3 шт. — возвраты 4.33, 4.33, 4.34). Если деньги строки уже вернули по сумме — 422."}
               amount: {type: number, minimum: 0.01, maximum: 9999999.99, description: "Произвольная сумма по позиции. Взаимоисключимо с count."}
+        idempotency_key:
+          type: string
+          maxLength: 191
+          description: Ключ идемпотентности телом — то же, что заголовок `Idempotency-Key` (см. операцию).
+          example: order-1024-refund-1
+        hold_for_buyer_confirmation:
+          type: boolean
+          default: false
+          description: |
+            Удержание до подтверждения покупателя: при отказе Kaspi кодом
+            `refund_rejected_by_kaspi` / `refund_requires_buyer_confirmation` счёт остаётся занятым,
+            пока по этому возврату не выпущена и не завершена ссылка покупателю или пока сотрудник
+            не снимет удержание в кабинете (см. операцию). Входит в сравнение «та же просьба».
     RefundShort:
       type: object
       properties:
@@ -6430,6 +6683,8 @@ components:
         reason: {type: string, nullable: true}
         status: {type: string, enum: [pending, processing, completed, failed], example: pending}
         created_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
+        idempotency_key: {type: string, nullable: true, description: "Ключ идемпотентности, если был передан."}
+        buyer_hold: {type: string, nullable: true, enum: [held, released], description: "`held` — выбрано удержание до подтверждения покупателя; `released` — снято сотрудником; нет поля или `null` — удержание не выбирали."}
     RefundItem:
       type: object
       properties:
@@ -6459,6 +6714,52 @@ components:
           items:
             $ref: '#/components/schemas/RefundItem'
         created_at: {type: string, format: date-time}
+        idempotency_key: {type: string, nullable: true, description: "Ключ идемпотентности, с которым создан возврат."}
+        buyer_hold: {type: string, nullable: true, enum: [held, released], description: "Удержание до подтверждения покупателя: `held` — выбрано, `released` — снято сотрудником, `null` — не выбирали."}
+        buyer_hold_released_at: {type: string, format: date-time, nullable: true, description: "Когда удержание снято."}
+        resolved_refund_id: {type: integer, nullable: true, description: "Разбор «исполнен» нашёл ту же операцию Kaspi уже заведённой синхронизацией: id той строки (деньги учтены ею). Иначе `null`."}
+        operation_state:
+          type: string
+          enum: [processing, completed, failed, awaiting_buyer, buyer_link_active, uncertain, released]
+          description: |
+            Состояние ОПЕРАЦИИ возврата — вместе со ссылкой покупателю, которую она породила
+            (`source_refund_id` у ссылки):
+            `processing` — в очереди или выполняется; `completed` — деньги вернулись (прямым
+            возвратом или ссылкой по нему); `failed` — отказ, деньги не двигались;
+            `awaiting_buyer` — Kaspi требует покупателя (`refund_rejected_by_kaspi` /
+            `refund_requires_buyer_confirmation`), а ссылки по возврату ещё нет или все истекли;
+            `buyer_link_active` — ссылка по нему выпущена и жива; `uncertain` — исход не доказан,
+            деньги, возможно, ушли: повторять нельзя, разбирает сотрудник в кабинете; `released` —
+            удержание снято, а завершённой, неразобранной или живой ссылки по возврату нет.
+            Только в `GET /invoices/{id}/refunds`.
+        successor_refund_id:
+          type: integer
+          nullable: true
+          description: |
+            Запись возврата, которую синхронизация завела по ссылке покупателю, порождённой этим
+            возвратом. Связь ставится только по подтверждённой операции Kaspi, догадки по сумме нет.
+            Деньги учитывайте один раз — по преемнику. Только в `GET /invoices/{id}/refunds`.
+    InvoiceQrRefundSession:
+      type: object
+      description: |
+        Ссылка «Возврат ApiPay» в списке возвратов счёта. Адреса ссылки покупателю и квитанции
+        здесь нет: квитанция — в `GET /qr-refunds/{id}`.
+      properties:
+        id: {type: integer, example: 42}
+        status: {type: string, enum: [awaiting_customer, activating, awaiting_scan, customer_identified, executing, completed, execution_uncertain, expired, failed]}
+        invoice_id: {type: integer, example: 123}
+        refund_amount: {type: string, nullable: true, description: "Запрошенная сумма; `null` — весь остаток счёта.", example: "500.00"}
+        source_refund_id: {type: integer, nullable: true, description: "Отказанный возврат, по которому выпущена ссылка."}
+        link_expires_at: {type: string, format: date-time, nullable: true}
+        expires_at: {type: string, format: date-time, nullable: true}
+        identified_at: {type: string, format: date-time, nullable: true}
+        completed_at: {type: string, format: date-time, nullable: true}
+        refunded_amount: {type: string, nullable: true, example: "500.00"}
+        error_code:
+          nullable: true
+          allOf: [{$ref: '#/components/schemas/ErrorCode'}]
+        error_message: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
     RefundWithInvoice:
       type: object
       description: Возврат в общем списке /refunds (со ссылкой на счёт).
@@ -6475,6 +6776,10 @@ components:
         error_message: {type: string, nullable: true}
         error_code: {$ref: '#/components/schemas/ErrorCode'}
         created_at: {type: string, format: date-time}
+        idempotency_key: {type: string, nullable: true}
+        buyer_hold: {type: string, nullable: true, enum: [held, released]}
+        buyer_hold_released_at: {type: string, format: date-time, nullable: true}
+        resolved_refund_id: {type: integer, nullable: true}
         invoice:
           type: object
           properties:
@@ -6483,6 +6788,7 @@ components:
             amount: {type: string, example: "15000.00"}
             status: {type: string, example: paid}
             kaspi_invoice_id: {type: string, nullable: true}
+            static_qr_id: {type: integer, nullable: true, description: "ID ссылки на оплату (печатного листа), попыткой которой является счёт; `null` у обычного счёта. Не `invoice_id`.", example: 77}
         items:
           type: array
           items:
@@ -6885,7 +7191,7 @@ components:
         description: {type: string, maxLength: 255, description: "Уходит в Kaspi комментарием к счёту списания; Kaspi показывает покупателю только первые 60 символов. Макросы: `{today}` — дата выставления счёта (дд.мм.гггг, Алматы); `{month}`/`{year}` — месяц услуги и его год, только у автоплатежа по календарю (здесь — 422). Неизвестный макрос или другой регистр (`{Today}`) — 422. Длина проверяется по тексту после подстановки."}
         subscriber_name: {type: string, maxLength: 255}
         external_subscriber_id: {type: string, maxLength: 255}
-        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр. Уходит в КАЖДЫЙ счёт подписки (для фискального чека Kaspi). Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). В вебхуках не отдаётся."}
+        buyer_bin: {type: string, nullable: true, pattern: '^\d{12}$', example: "990101300123", description: "ИИН/БИН покупателя — строка ровно из 12 цифр. Уходит в КАЖДЫЙ счёт подписки; если у организации подключена Kaspi Касса, попадёт в чек Kaspi. Kaspi номер не проверяет, форма проверяется у нас (422 errors.buyer_bin). В вебхуках не отдаётся."}
         started_at: {type: string, format: date, description: "По умолчанию сегодня."}
         max_retry_attempts: {type: integer, minimum: 1, maximum: 10, description: "Сколько счетов выставить за период, если клиент не платит (по умолчанию 3). Затем льготный период и `expired`. Несовместимо с `bill_until_paid: true` — переданы вместе → 422 по этому полю."}
         bill_until_paid: {type: boolean, description: "Режим «выставлять, пока не оплатят». Не передано или `false` — прежнее поведение с потолком `max_retry_attempts`. `true` — подписка по неоплате не истекает: истёкший счёт перевыставляется сразу, пока не наступил момент следующего планового списания; счёт, отменённый не плательщиком, и ошибка счёта закрывают период без повтора; `error_code = client_not_found` отменяет подписку (`subscription.cancelled`, `reason: payer_error`)."}
@@ -7382,8 +7688,11 @@ x-webhooks:
       summary: Возврат обработан
       description: |
         Возврат завершён — `completed` (успех) или `failed` (неудача, причина в
-        `refund.error_code`). Гейта идемпотентности НЕТ — дедуп по `(refund.id,
-        refund.status)`. Полный возврат не меняет статус счёта (остаётся `paid`/
+        `refund.error_code`; `refund_resolved_not_executed` — сотрудник разобрал неизвестный
+        исход, деньги не ушли). Разбор «исполнен» поверх строки синхронизации (`failed` +
+        `refund_resolved_executed`) события не шлёт: о деньгах уже объявила синхронизация. Гейта идемпотентности НЕТ — дедуп по `(refund.id,
+        refund.status)`. `invoice.available_for_refund` — тот же остаток, что у
+        `GET /invoices/{id}/refunds`. Полный возврат не меняет статус счёта (остаётся `paid`/
         `partially_refunded` + `is_fully_refunded=true`); первый частичный возврат
         дополнительно шлёт `invoice.status_changed (partially_refunded)`.
       requestBody:
@@ -7401,7 +7710,9 @@ x-webhooks:
       description: |
         Клиент отсканировал возвратный QR (сессия → `customer_identified`). Дальше можно
         читать `GET /qr-refunds/{id}/operations`. Шлётся один раз на переход. Дедуп по
-        `(qr_refund.id, qr_refund.status)`.
+        `(qr_refund.id, qr_refund.status)`. У всех `qr_refund.*` в payload есть
+        `qr_refund.invoice_id` — счёт ссылки (`null` у ссылки без счёта): по нему событие
+        сопоставляется с заказом.
       requestBody:
         content:
           application/json:
