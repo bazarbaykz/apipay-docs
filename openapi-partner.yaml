@@ -864,7 +864,16 @@ paths:
       summary: Шаг 3 — подтвердить код из SMS
       description: >-
         Подтверждает код из SMS. При успехе организация финализируется
-        (`status: verified`). **Неверный код возвращается с HTTP 200** и телом
+        (`status: verified`). Боевая организация (`is_test: false`) при этом
+        переводится в боевой режим с чистого листа: песочные счета, подписки,
+        возвраты (включая сессии QR-возврата) и позиции каталога этой организации
+        удаляются, запросы по их id после этого отвечают `404`; боевые данные не
+        трогаются, повторная авторизация организации, уже переведённой в боевой режим,
+        ничего не удаляет.
+        Перевод может завершиться через несколько секунд после ответа — режим
+        берите из перечитанной организации. У тестовой организации (`is_test: true`)
+        `verify-otp` проходит мок-путь: в боевой режим её не переводит и данные не
+        удаляет. **Неверный код возвращается с HTTP 200** и телом
         `{ success:false, error:"invalid_otp", process_status:"otp_required" }` —
         это повторяемо, сессия не сбрасывается. Лимит `partner-kaspi-auth`
         (см. send-phone).
@@ -921,7 +930,7 @@ paths:
                             $ref: "#/components/schemas/ProcessStatus"
               examples:
                 success:
-                  summary: Успешная верификация
+                  summary: Успешная верификация боевой организации
                   value:
                     success: true
                     mode: self
@@ -3449,6 +3458,7 @@ x-webhooks:
                   example: Partner Key
                 is_sandbox:
                   type: boolean
+                  description: Режим вашего партнёрского аккаунта, а не объекта события.
                 timestamp:
                   type: string
                   format: date-time
@@ -3519,6 +3529,7 @@ x-webhooks:
                   example: Partner Key
                 is_sandbox:
                   type: boolean
+                  description: Режим вашего партнёрского аккаунта, а не объекта события.
                 timestamp:
                   type: string
                   format: date-time
@@ -3545,6 +3556,14 @@ x-webhooks:
                 event:
                   type: string
                   example: invoice.status_changed
+                is_sandbox:
+                  type: boolean
+                  description: >-
+                    Песочность объекта события, в подписанном теле. После перевода
+                    организации в боевой режим отбрасывайте события с `is_sandbox: true`:
+                    сначала проверьте подпись, затем ответьте 2xx и не исполняйте —
+                    событие, отправленное до перевода, может прийти уже после него.
+                  example: false
                 invoice:
                   type: object
                   properties:
@@ -3604,6 +3623,14 @@ x-webhooks:
                 event:
                   type: string
                   example: invoice.refunded
+                is_sandbox:
+                  type: boolean
+                  description: >-
+                    Песочность объекта события, в подписанном теле. После перевода
+                    организации в боевой режим отбрасывайте события с `is_sandbox: true`:
+                    сначала проверьте подпись, затем ответьте 2xx и не исполняйте —
+                    событие, отправленное до перевода, может прийти уже после него.
+                  example: false
                 refund:
                   type: object
                   properties:

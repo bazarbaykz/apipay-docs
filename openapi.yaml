@@ -141,7 +141,10 @@ info:
     ## Sandbox
 
     При `sandbox_mode=true` организация не ходит в Kaspi. Доступны симуляции жизненного
-    цикла (тег `Sandbox`). В вебхуках sandbox-события помечены `is_sandbox: true`.
+    цикла (тег `Sandbox`). В вебхуках корневой `is_sandbox` — песочность объекта события.
+    В рабочем режиме после проверки подписи отбрасывайте события с `is_sandbox: true`
+    (отвечайте 2xx и не исполняйте): событие, отправленное до перевода организации
+    в рабочий режим, может прийти уже после него.
   contact:
     name: ApiPay.kz Support
     url: https://wa.me/77003076512
@@ -179,6 +182,8 @@ tags:
     description: Касса Kaspi — смены, сводка по наличным, сверка наших счетов с кассой, PDF-отчёт, тумблеры (автозакрытие/автоизъятие) и async-закрытие смены. Работают у организаций, к аккаунту Kaspi Pay которых подключена касса Kaspi (ОФД) — та же связка, что включает каталог товаров; без неё GET /cashbox/shifts и POST /cashbox/shifts/close отвечают 409 cashbox_kkm_unknown, а GET /cashbox/summary и оба тумблера — 409 rfo_missing. У кассовых эндпоинтов отдельный минутный лимит — 30 запросов/мин на ключ. В песочнице касса отвечает детерминированными данными по вашим sandbox-счетам, к Kaspi не обращается, подключённого кассира и кассы Kaspi не требует — идентификаторы смен там синтетические, поэтому интеграцию, прошедшую в песочнице, проверяйте и на боевой организации.
   - name: Webhooks
     description: Исходящие вебхук-события (секция x-webhooks) + read-only логи их доставки (/webhook-logs). HMAC-подпись по сырому телу, таймстампы UTC +00:00.
+  - name: Request Logs
+    description: Read-only журнал изменяющих запросов (POST/PUT/PATCH/DELETE) ключей вашей организации за 7 дней — что именно присылала ваша интеграция и что ApiPay ответил. Тело запроса хранится маскированным, запросы GET не сохраняются, строки появляются с небольшой задержкой.
 paths:
   "/status":
     get:
@@ -1365,6 +1370,11 @@ paths:
         статус остаётся `pending`, уходит вебхук `invoice.qr_scanned` с
         `qr_substate: "scanned"`, повтор → `400 already_scanned`).
 
+        Требование «счёт в `pending`» действует и для `qr_scanned`, и проверяется в
+        момент выполнения: счёт, отменённый между запросом и его обработкой, получает
+        `400 invalid_status_transition`, отметку сканирования не получает и вебхука
+        не порождает.
+
         При `status=error` счёт получает `error_code: sandbox_simulated_error` и
         `error_message` (свой текст — через одноимённый параметр). Опционально можно
         задать `kaspi_source_type`/`kaspi_sale_type` (иначе выбираются случайно при `paid`).
@@ -2527,6 +2537,125 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           description: Лог не найден (или принадлежит другой организации)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: {type: string, example: Not found}
+  "/request-logs":
+    get:
+      tags: [Request Logs]
+      summary: Журнал изменяющих запросов
+      description: |
+        Read-only список изменяющих запросов (POST/PUT/PATCH/DELETE) ключей вашей организации
+        за последние 7 дней, новые первыми: метод, маршрут, HTTP-статус, `error_code` ответа,
+        счёт и длительность. Запросы GET не сохраняются. Запросы с непринятым ключом и отказы поминутного лимита (`request_rate_limited`) в журнал не попадают. Строки появляются с небольшой
+        задержкой. Пагинация — **плоская** `{current_page, data, total}`.
+        Тело запроса, IP и User-Agent — в карточке строки `GET /request-logs/{id}`.
+      operationId: listRequestLogs
+      parameters:
+        - name: date_from
+          in: query
+          description: Начало окна включительно — `Y-m-d` или `Y-m-d H[:ii[:ss]]` (зона Almaty). Голая дата — сутки по Алматы.
+          example: "2026-10-11"
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
+        - name: date_to
+          in: query
+          description: Конец окна включительно — `Y-m-d` (до конца суток по Алматы) или `Y-m-d H[:ii[:ss]]` (зона Almaty).
+          example: "2026-10-11"
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}([ T]\d{2}(:\d{2}(:\d{2}(\.\d{1,6})?)?)?(Z|[+-]\d{2}:?\d{2})?)?$'
+        - name: "api_key_ids[]"
+          in: query
+          description: Фильтр по ключам вашей организации (до 100). Номер ключа, который вам не виден, отвечает `422` — так же, как несуществующий.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: integer
+        - name: status
+          in: query
+          description: "`success` — ответы с кодом меньше 400, `failed` — 400 и выше, либо точный трёхзначный HTTP-код (например `409`)."
+          schema:
+            type: string
+            pattern: '^(success|failed|[1-5][0-9]{2})$'
+        - name: method
+          in: query
+          schema:
+            type: string
+            enum: [POST, PUT, PATCH, DELETE]
+        - name: route
+          in: query
+          description: Точный шаблон маршрута, как в поле `route` строки (например `api/v1/invoices/{id}/cancel`).
+          schema:
+            type: string
+            maxLength: 191
+        - name: invoice_id
+          in: query
+          description: Фильтр по ID счёта.
+          schema:
+            type: integer
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1
+      responses:
+        '200':
+          description: Список запросов (пустой, если у ключа нет организации)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current_page: {type: integer, example: 1}
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RequestLogEntry'
+                  total: {type: integer, example: 25}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  "/request-logs/{id}":
+    get:
+      tags: [Request Logs]
+      summary: Один запрос из журнала
+      description: |
+        Строка журнала плюс маскированное тело запроса, IP и User-Agent клиента. Строка чужой
+        организации или ключа, который вам не виден, → `404` (non-enumeration).
+      operationId: getRequestLog
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Строка журнала
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLogDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Строка не найдена (или не видна этому ключу)
           content:
             application/json:
               schema:
@@ -6027,6 +6156,7 @@ components:
       description: Payload событий qr_refund.identified/completed/expired/failed/execution_uncertain.
       properties:
         event: {type: string, enum: [qr_refund.identified, qr_refund.completed, qr_refund.expired, qr_refund.failed, qr_refund.execution_uncertain]}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         qr_refund:
           type: object
           properties:
@@ -6038,7 +6168,7 @@ components:
             refunded_amount: {type: string, nullable: true, description: Только при completed}
             receipt_url: {type: string, nullable: true, description: Только при completed}
             error_code: {$ref: '#/components/schemas/ErrorCode'}
-            error_message: {type: string, nullable: true, description: Закреплён за событием, не читается с живой сессии}
+            error_message: {type: string, nullable: true, description: "Закреплён за событием, не читается с живой сессии"}
             is_sandbox: {type: boolean}
         source: {type: string, nullable: true}
         timestamp: {type: string, format: date-time}
@@ -6810,7 +6940,7 @@ components:
         response_time_ms: {type: integer, nullable: true, example: 150}
         error_message: {type: string, nullable: true}
         created_at: {type: string, format: date-time}
-        retry_of: {type: integer, nullable: true, description: ID исходного лога, если это повторная отправка.}
+        retry_of: {type: integer, nullable: true, description: "ID исходного лога, если это повторная отправка."}
     CatalogWebhookLogEntry:
       type: object
       description: Запись лога доставки вебхука catalog.item_processed (GET /catalog/webhook-logs). Логи хранятся 3 дня.
@@ -6828,6 +6958,32 @@ components:
         response_time_ms: {type: integer, nullable: true, example: 150}
         error_message: {type: string, nullable: true}
         created_at: {type: string, format: date-time}
+    RequestLogEntry:
+      type: object
+      description: Строка журнала изменяющих запросов (GET /request-logs). Хранится 7 дней.
+      properties:
+        id: {type: integer, example: 1042}
+        api_key_id: {type: integer, example: 12}
+        api_key_name: {type: string, nullable: true, example: Сайт магазина}
+        method: {type: string, enum: [POST, PUT, PATCH, DELETE], example: POST}
+        route: {type: string, description: Шаблон маршрута., example: "api/v1/invoices/{id}/cancel"}
+        path: {type: string, description: Фактический путь запроса., example: "api/v1/invoices/307115/cancel"}
+        status: {type: integer, description: HTTP-код ответа., example: 400}
+        error_code: {type: string, nullable: true, description: "Машинный код отказа: `error_code` ответа, а если его нет — значение `error`, когда это машинный код (slug). У успешных ответов и у отказов без кода — `null`.", example: null}
+        invoice_id: {type: integer, nullable: true, description: "Счёт из пути запроса; у создания счёта — созданный счёт.", example: 307115}
+        duration_ms: {type: integer, nullable: true, description: Время обработки запроса на стороне ApiPay., example: 84}
+        created_at: {type: string, format: date-time, description: Момент получения запроса (UTC)., example: "2026-10-11T07:15:42+00:00"}
+    RequestLogDetail:
+      allOf:
+        - $ref: '#/components/schemas/RequestLogEntry'
+        - type: object
+          properties:
+            ip: {type: string, nullable: true, example: "203.0.113.9"}
+            user_agent: {type: string, nullable: true, example: "shop-backend/1.0"}
+            request_body:
+              nullable: true
+              description: "Тело запроса (маскированное) — JSON-значение в том виде, в каком пришло: обычно объект, список — если интеграция прислала список; `null` — тела не было. Исключение — крупное тело: оно хранится не целиком, а сводкой с `truncated: true` и размером; обычно в ней ещё ключи верхнего уровня и размеры вложенных списков и объектов, у массового создания счетов — число счетов и их сумма; значений отдельных полей в сводке нет. Тип в схеме не зафиксирован намеренно: разбирайте как произвольный JSON."
+              example: {amount: 5000, description: "Заказ №1042", external_order_id: "1042"}
     CatalogQueueItem:
       type: object
       description: Слим-строка pending-очереди приёма каталога (GET /catalog/queue).
@@ -6880,6 +7036,7 @@ components:
         catalog_item.external_ref (ключ маппинга 1С, UNIQUE в пределах оси организации).
       properties:
         event: {type: string, example: catalog.item_processed}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         catalog_item:
           type: object
           properties:
@@ -6906,6 +7063,7 @@ components:
         Дедуп по `(event, receipt.id)`. При failed — детали в `receipt.error_code`.
       properties:
         event: {type: string, enum: [receipt.issued, receipt.failed], example: receipt.issued}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         receipt:
           type: object
           properties:
@@ -7371,6 +7529,7 @@ components:
       type: object
       properties:
         event: {type: string, example: invoice.status_changed}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         invoice: {$ref: '#/components/schemas/WebhookInvoiceObject'}
         source: {type: string, nullable: true, description: "Имя API-ключа создателя."}
         timestamp: {type: string, format: date-time, example: "2026-06-11T10:30:00+00:00"}
@@ -7378,6 +7537,7 @@ components:
       type: object
       properties:
         event: {type: string, example: invoice.qr_scanned}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         invoice:
           type: object
           properties:
@@ -7399,6 +7559,7 @@ components:
       type: object
       properties:
         event: {type: string, example: invoice.refunded}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         refund:
           type: object
           properties:
@@ -7444,6 +7605,7 @@ components:
         grace_period_days/expires_at; period_skipped → billing_period_start/billing_period_end/cancelled_invoice_id.
       properties:
         event: {type: string, example: subscription.payment_failed}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         subscription:
           type: object
           properties:
@@ -7460,11 +7622,22 @@ components:
             is_sandbox: {type: boolean, example: false}
         source: {type: string, nullable: true}
         timestamp: {type: string, format: date-time}
+    WebhookRootIsSandbox:
+      type: boolean
+      description: >-
+        Песочность ОБЪЕКТА события, в подписанном теле. `true` — объект создан в
+        песочнице; у `webhook.test` — всегда `true`, объект синтетический. ⚠️ В
+        рабочем режиме после проверки подписи отбрасывайте события с
+        `is_sandbox: true` (отвечайте 2xx и не исполняйте): событие, отправленное до
+        перевода организации в рабочий режим, может прийти уже после него. У событий партнёрского API (`tariff.*`, `kyc.*`)
+        корневой `is_sandbox` означает режим партнёра, а не объекта.
+      example: false
     WebhookTest:
       type: object
       description: Тест-вебхук (фиктивный invoice-конверт со status=test).
       properties:
         event: {type: string, example: webhook.test}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         invoice:
           type: object
           properties:
@@ -7472,6 +7645,10 @@ components:
             status: {type: string, example: test}
             external_order_id: {type: string, example: TEST-ORDER-123}
             amount: {type: string, example: "1000.00"}
+            description: {type: string, example: Test webhook notification}
+            kaspi_invoice_id: {type: string, nullable: true, example: null}
+            client_name: {type: string, example: Test Client}
+            client_phone: {type: string, example: "87771234567"}
             is_sandbox: {type: boolean, example: true}
             kaspi_source_type: {type: string, example: GOLD}
             kaspi_sale_type: {type: string, example: Remote}
@@ -7622,6 +7799,7 @@ components:
         Дедуп по `(event, operation.id)`. При failed — причина в `operation.error_code`.
       properties:
         event: {type: string, enum: [cashbox.shift_closed, cashbox.shift_close_failed], example: cashbox.shift_closed}
+        is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         operation:
           type: object
           properties:
@@ -8051,6 +8229,9 @@ x-webhooks:
       description: |
         Ручной тест из ЛК (`POST /api/api-keys/{id}/test-webhook`, 5/мин). Фиктивный
         invoice-конверт со `status: "test"` — receiver должен спокойно его игнорировать.
+        Корневой `is_sandbox` у него всегда `true`: обработчик в рабочем режиме отбросит
+        его с ответом 2xx, и проверка пройдёт. Проверяйте подпись до отбрасывания
+        песочных событий — тогда успешная проверка подтверждает и верный секрет.
       requestBody:
         content:
           application/json:
