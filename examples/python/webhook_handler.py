@@ -5,9 +5,17 @@ ApiPay.kz - Webhook Handler Example
 This example demonstrates how to:
 1. Receive webhook notifications
 2. Verify the signature
-3. Handle payment events (invoices and subscriptions)
+3. Discard sandbox events unless APIPAY_SANDBOX_MODE=true (production mode is the default)
+4. Handle payment events (invoices and subscriptions)
 
-Usage:
+Without APIPAY_SANDBOX_MODE=true the handler assumes production mode and discards sandbox
+events (it still answers 200). Set it to exactly true while you test in the sandbox; remove
+it once the organization works in production mode.
+
+Usage while you test in the sandbox:
+    APIPAY_SANDBOX_MODE=true WEBHOOK_SECRET=your_secret python webhook_handler.py
+
+Usage in production mode:
     WEBHOOK_SECRET=your_secret python webhook_handler.py
 
 Requirements:
@@ -24,6 +32,10 @@ from flask import Flask, request, abort
 app = Flask(__name__)
 
 WEBHOOK_SECRET = os.environ.get('WEBHOOK_SECRET')
+# Set APIPAY_SANDBOX_MODE=true while you test in the ApiPay sandbox; leave it unset in
+# production mode. Your system knows its own mode: the root `is_sandbox` of an event
+# describes the event's object, not the organization's current mode.
+SANDBOX_MODE = os.environ.get('APIPAY_SANDBOX_MODE') == 'true'
 
 
 def verify_signature(payload: bytes, signature: str, secret: str) -> bool:
@@ -109,6 +121,14 @@ def webhook():
         print(f"\nReceived event: {event_type} (source: {event.get('source')})")
         print(f"Timestamp: {event.get('timestamp')}")
 
+        # In production mode, discard events about sandbox objects: reply 200 and do not
+        # act on them. An event sent before the organization switched to production may
+        # arrive after the switch. The signature is verified above, so the dashboard's
+        # `webhook.test` (always is_sandbox: true) still gets its 200 only with a valid secret.
+        if not SANDBOX_MODE and event.get('is_sandbox') is True:
+            print(f"Discarded sandbox event: {event_type} (set APIPAY_SANDBOX_MODE=true while testing in the sandbox)")
+            return 'OK', 200
+
         if event_type == 'invoice.status_changed':
             handle_invoice_status_changed(event['invoice'])
 
@@ -137,6 +157,10 @@ def main():
     port = int(os.environ.get('PORT', 5000))
     print(f'Webhook server listening on port {port}')
     print(f'Endpoint: POST http://localhost:{port}/webhook')
+    if SANDBOX_MODE:
+        print('Mode: sandbox — sandbox events are processed. Remove APIPAY_SANDBOX_MODE once the organization works in production mode')
+    else:
+        print('Mode: production — sandbox events are discarded. Set APIPAY_SANDBOX_MODE=true while testing in the sandbox')
     print('\nWaiting for webhook events...')
 
     app.run(host='0.0.0.0', port=port)

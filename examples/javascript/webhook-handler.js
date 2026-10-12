@@ -4,16 +4,24 @@
  * This example demonstrates how to:
  * 1. Receive webhook notifications
  * 2. Verify the signature
- * 3. Handle payment events (invoices and subscriptions)
+ * 3. Discard sandbox events unless APIPAY_SANDBOX_MODE=true (production mode is the default)
+ * 4. Handle payment events (invoices and subscriptions)
  *
- * Usage:
+ * Without APIPAY_SANDBOX_MODE=true the handler assumes production mode and discards sandbox
+ * events (it still answers 200). Set it to exactly true while you test in the sandbox; remove
+ * it once the organization works in production mode.
+ *
+ * Usage while you test in the sandbox:
+ *   APIPAY_SANDBOX_MODE=true WEBHOOK_SECRET=your_secret PORT=3000 node webhook-handler.js
+ *
+ * Usage in production mode:
  *   WEBHOOK_SECRET=your_secret PORT=3000 node webhook-handler.js
  *
  * Test with:
  *   curl -X POST http://localhost:3000/webhook \
  *     -H "Content-Type: application/json" \
  *     -H "X-Webhook-Signature: sha256=..." \
- *     -d '{"event":"invoice.status_changed","invoice":{"id":42,"status":"paid"},"source":"api"}'
+ *     -d '{"event":"invoice.status_changed","is_sandbox":false,"invoice":{"id":42,"status":"paid"},"source":"api"}'
  */
 
 const http = require('http')
@@ -21,6 +29,10 @@ const crypto = require('crypto')
 
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET
 const PORT = process.env.PORT || 3000
+// Set APIPAY_SANDBOX_MODE=true while you test in the ApiPay sandbox; leave it unset in
+// production mode. Your system knows its own mode: the root `is_sandbox` of an event
+// describes the event's object, not the organization's current mode.
+const SANDBOX_MODE = process.env.APIPAY_SANDBOX_MODE === 'true'
 
 /**
  * Verify webhook signature using HMAC-SHA256
@@ -144,6 +156,17 @@ function handleRequest(req, res) {
       console.log(`\nReceived event: ${event.event} (source: ${event.source})`)
       console.log(`Timestamp: ${event.timestamp}`)
 
+      // In production mode, discard events about sandbox objects: reply 200 and do not
+      // act on them. An event sent before the organization switched to production may
+      // arrive after the switch. The signature is verified above, so the dashboard's
+      // `webhook.test` (always is_sandbox: true) still gets its 200 only with a valid secret.
+      if (!SANDBOX_MODE && event.is_sandbox === true) {
+        console.log(`Discarded sandbox event: ${event.event} (set APIPAY_SANDBOX_MODE=true while testing in the sandbox)`)
+        res.writeHead(200)
+        res.end('OK')
+        return
+      }
+
       switch (event.event) {
         case 'invoice.status_changed':
           handleInvoiceStatusChanged(event.invoice)
@@ -193,5 +216,10 @@ const server = http.createServer(handleRequest)
 server.listen(PORT, () => {
   console.log(`Webhook server listening on port ${PORT}`)
   console.log(`Endpoint: POST http://localhost:${PORT}/webhook`)
+  if (SANDBOX_MODE) {
+    console.log('Mode: sandbox — sandbox events are processed. Remove APIPAY_SANDBOX_MODE once the organization works in production mode')
+  } else {
+    console.log('Mode: production — sandbox events are discarded. Set APIPAY_SANDBOX_MODE=true while testing in the sandbox')
+  }
   console.log('\nWaiting for webhook events...')
 })

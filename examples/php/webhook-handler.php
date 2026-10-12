@@ -5,7 +5,12 @@
  * This example demonstrates how to:
  * 1. Receive webhook notifications
  * 2. Verify the signature
- * 3. Handle payment events (invoices and subscriptions)
+ * 3. Discard sandbox events unless APIPAY_SANDBOX_MODE=true (production mode is the default)
+ * 4. Handle payment events (invoices and subscriptions)
+ *
+ * Without APIPAY_SANDBOX_MODE=true the handler assumes production mode and discards sandbox
+ * events (it still answers 200). Set it to exactly true while you test in the sandbox; remove
+ * it once the organization works in production mode.
  *
  * Deploy this script to your server and configure the webhook URL
  * in the ApiPay.kz dashboard.
@@ -13,6 +18,10 @@
 
 // Configuration
 $WEBHOOK_SECRET = getenv('WEBHOOK_SECRET');
+// Set APIPAY_SANDBOX_MODE=true while you test in the ApiPay sandbox; leave it unset in
+// production mode. Your system knows its own mode: the root `is_sandbox` of an event
+// describes the event's object, not the organization's current mode.
+$SANDBOX_MODE = getenv('APIPAY_SANDBOX_MODE') === 'true';
 
 if ($WEBHOOK_SECRET === false || $WEBHOOK_SECRET === '') {
     error_log('WEBHOOK_SECRET is not set — refusing to process webhooks');
@@ -122,6 +131,17 @@ if (!$event) {
 
 $eventType = $event['event'];
 error_log("Received event: {$eventType} (source: " . ($event['source'] ?? 'unknown') . ")");
+
+// In production mode, discard events about sandbox objects: reply 200 and do not
+// act on them. An event sent before the organization switched to production may
+// arrive after the switch. The signature is verified above, so the dashboard's
+// `webhook.test` (always is_sandbox: true) still gets its 200 only with a valid secret.
+if (!$SANDBOX_MODE && ($event['is_sandbox'] ?? null) === true) {
+    error_log("Discarded sandbox event: {$eventType} (set APIPAY_SANDBOX_MODE=true while testing in the sandbox)");
+    http_response_code(200);
+    echo 'OK';
+    exit;
+}
 
 switch ($eventType) {
     case 'invoice.status_changed':

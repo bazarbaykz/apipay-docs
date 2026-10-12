@@ -56,6 +56,19 @@ expose the port with a tunnel; note that not-yet-approved organizations must use
 a real domain, tunnels and bare IPs are rejected. See
 [Webhooks](../../docs/en/webhooks.md).
 
+While you test in the sandbox, also set `APIPAY_SANDBOX_MODE=true`:
+
+```bash
+APIPAY_SANDBOX_MODE=true WEBHOOK_SECRET=your_secret php -S 0.0.0.0:8000 webhook-handler.php
+```
+
+Without it the script assumes production mode: after verifying the signature it discards
+events whose root `is_sandbox` is `true` — it answers `200` and does nothing else. An event
+about a sandbox object sent before the switch to production may arrive after the switch.
+Remove the variable once the organization works in production mode. One mode per
+deployment: if one endpoint would serve both a sandbox and a production organization,
+point the sandbox one at a separate handler.
+
 ### partner-onboarding.php
 
 Runs in two phases, because the cashier confirms the connection with an SMS code:
