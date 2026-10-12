@@ -80,5 +80,5 @@ Complete working scripts live in [`examples/javascript/`](https://github.com/baz
 | `check-client.js` | Checking a customer by phone number |
 | `create-subscription.js` | A subscription (recurring charges) |
 | `manage-catalog.js` | Working with the product catalog |
-| `webhook-handler.js` | Receiving a webhook and verifying its signature |
+| `webhook-handler.js` | Receiving a webhook and verifying its signature, discarding sandbox events in production mode (`APIPAY_SANDBOX_MODE` — while testing) |
 | `partner-onboarding.js` | Onboarding an organization through the Partner API |

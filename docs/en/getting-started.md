@@ -53,6 +53,8 @@ Until the form is approved, no live invoices are issued at all: the very first `
 
 Also: for not-yet-approved organizations a production webhook must be on a real domain — IPs and tunnels (ngrok) are rejected (see [Webhooks](webhooks.md)).
 
+In production mode, verify the signature first, then discard events with `is_sandbox: true` at the root of the body: reply `2xx` and do not act on them. An event about a sandbox object sent before the organization switched to production may arrive after the switch. See [Webhooks](webhooks.md).
+
 ## What's Next?
 
 - [Invoices](invoices.md) — Create, list, cancel invoices, use cart items

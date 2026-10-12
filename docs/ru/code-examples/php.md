@@ -126,5 +126,5 @@ switch ($code) {
 | `check-client.php` | Проверка клиента по номеру телефона |
 | `create-subscription.php` | Подписка (регулярные списания) |
 | `manage-catalog.php` | Работа с каталогом товаров |
-| `webhook-handler.php` | Приём и проверка подписи вебхука |
+| `webhook-handler.php` | Приём и проверка подписи вебхука, отбрасывание песочных событий в рабочем режиме (`APIPAY_SANDBOX_MODE` — на время тестов) |
 | `partner-onboarding.php` | Подключение организации через Partner API |

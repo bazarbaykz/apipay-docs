@@ -178,6 +178,7 @@ curl -X PUT https://api.apipay.kz/api/v1/cashbox/settings/auto-close \
 ```json
 {
   "event": "cashbox.shift_closed",
+  "is_sandbox": false,
   "operation": {
     "id": 812,
     "operation_type": "close_shift",

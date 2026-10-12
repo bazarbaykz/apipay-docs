@@ -178,6 +178,7 @@ The settings are available via the organization API key; in the dashboard they a
 ```json
 {
   "event": "cashbox.shift_closed",
+  "is_sandbox": false,
   "operation": {
     "id": 812,
     "operation_type": "close_shift",

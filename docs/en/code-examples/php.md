@@ -126,5 +126,5 @@ Complete working scripts live in [`examples/php/`](https://github.com/bazarbaykz
 | `check-client.php` | Checking a customer by phone number |
 | `create-subscription.php` | A subscription (recurring charges) |
 | `manage-catalog.php` | Working with the product catalog |
-| `webhook-handler.php` | Receiving a webhook and verifying its signature |
+| `webhook-handler.php` | Receiving a webhook and verifying its signature, discarding sandbox events in production mode (`APIPAY_SANDBOX_MODE` — while testing) |
 | `partner-onboarding.php` | Onboarding an organization through the Partner API |

@@ -55,6 +55,7 @@ Sent when an invoice status changes.
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 42,
     "external_order_id": "order_123",
@@ -77,13 +78,14 @@ Sent when an invoice status changes.
 }
 ```
 
-> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied. The `is_sandbox` field indicates whether the resource was created in sandbox mode. Fields `kaspi_source_type` and `kaspi_sale_type` are gated by Kaspi returning a value (treat them as nullable).
+> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied. Every event carries an `is_sandbox` field at the root of the signed body: it shows whether the event's object was created in the sandbox; the nested `is_sandbox` (here, in `invoice`) matches it. The root `is_sandbox` describes the event's object, not the organization's current mode: your system knows its own mode. How to handle sandbox events in production mode is covered in "Response Requirements". Fields `kaspi_source_type` and `kaspi_sale_type` are gated by Kaspi returning a value (treat them as nullable).
 
 #### Invoice not processed (status: error)
 
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 43,
     "external_order_id": "order_124",
@@ -108,6 +110,7 @@ Sent when an invoice status changes.
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 46,
     "external_order_id": "order_125",
@@ -130,6 +133,7 @@ Sent when an invoice status changes.
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 44,
     "external_order_id": null,
@@ -168,6 +172,7 @@ QR invoices only. Sent when the customer has scanned the QR and reached the paym
 ```json
 {
   "event": "invoice.qr_scanned",
+  "is_sandbox": false,
   "invoice": {
     "id": 63474,
     "external_order_id": "order-123",
@@ -203,6 +208,7 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
 ```json
 {
   "event": "invoice.refunded",
+  "is_sandbox": false,
   "refund": {
     "id": 5,
     "amount": "2000.00",
@@ -237,6 +243,7 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
 ```json
 {
   "event": "invoice.refunded",
+  "is_sandbox": false,
   "refund": {
     "id": 6,
     "amount": "2000.00",
@@ -282,6 +289,7 @@ Sent when an operation on a catalog item is closed — a creation, an edit or a 
 ```json
 {
   "event": "catalog.item_processed",
+  "is_sandbox": false,
   "catalog_item": {
     "id": 12345,
     "external_ref": "1C-000123",
@@ -327,6 +335,7 @@ Sent when a fiscal receipt is successfully issued in Kaspi OFD (after `POST /rec
 ```json
 {
   "event": "receipt.issued",
+  "is_sandbox": false,
   "receipt": {
     "id": 4210,
     "client_operation_id": "pos-2026-07-12-0042",
@@ -351,6 +360,7 @@ Sent when issuing a fiscal receipt fails. The reason is in `receipt.error_code`:
 ```json
 {
   "event": "receipt.failed",
+  "is_sandbox": false,
   "receipt": {
     "id": 4210,
     "client_operation_id": "pos-2026-07-12-0042",
@@ -388,6 +398,7 @@ Sent when a subscription is created.
 ```json
 {
   "event": "subscription.created",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -415,6 +426,7 @@ Sent when a subscription payment succeeds.
 ```json
 {
   "event": "subscription.payment_succeeded",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -443,6 +455,7 @@ Sent when a subscription payment fails.
 ```json
 {
   "event": "subscription.payment_failed",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "phone_number": "87071234567",
@@ -471,6 +484,7 @@ Sent when a subscription enters the grace period after the retries are exhausted
 ```json
 {
   "event": "subscription.grace_period_started",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "phone_number": "87071234567",
@@ -496,6 +510,7 @@ Sent when a subscription expires after all retries fail.
 ```json
 {
   "event": "subscription.expired",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "phone_number": "87071234567",
@@ -520,6 +535,7 @@ Sent when a subscription is paused (`POST /subscriptions/{id}/pause`).
 ```json
 {
   "event": "subscription.paused",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -547,6 +563,7 @@ Sent when a subscription is resumed.
 ```json
 {
   "event": "subscription.resumed",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -574,6 +591,7 @@ Sent when the merchant skips a subscription period without payment — via `POST
 ```json
 {
   "event": "subscription.period_skipped",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -608,6 +626,7 @@ Sent when a subscription is cancelled.
 ```json
 {
   "event": "subscription.cancelled",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -639,10 +658,26 @@ Sent when you test a webhook from the dashboard (Settings → API Keys → Test 
 ```json
 {
   "event": "webhook.test",
-  "source": "test",
-  "timestamp": "2026-01-15T10:00:00Z"
+  "is_sandbox": true,
+  "invoice": {
+    "id": null,
+    "external_order_id": "TEST-ORDER-123",
+    "amount": "1000.00",
+    "status": "test",
+    "description": "Test webhook notification",
+    "kaspi_invoice_id": null,
+    "client_name": "Test Client",
+    "client_phone": "87771234567",
+    "is_sandbox": true,
+    "kaspi_source_type": "GOLD",
+    "kaspi_sale_type": "Remote"
+  },
+  "source": "My API Key",
+  "timestamp": "2026-01-15T10:00:00+00:00"
 }
 ```
+
+For `webhook.test` the root `is_sandbox` is always `true`: in production mode the handler discards it with a `2xx`, and the test passes. Verify the signature before discarding sandbox events — then a passing test also confirms the secret is correct.
 
 ## When a webhook arrives
 
@@ -789,6 +824,7 @@ Webhooks during the pause are **not** re-sent — reconcile state via the GET me
 
 1. Return a **2xx status** within **5 seconds** (delivery timeout: 5s for the response plus up to 3s to establish the connection)
 2. Be **idempotent** — handle duplicate deliveries
+3. In production mode, verify the signature first, then discard events with `is_sandbox: true` at the root of the body: reply `2xx` and do not act on them. An event about a sandbox object sent before the organization switched to production may arrive after the switch.
 
 ### Deduplication
 

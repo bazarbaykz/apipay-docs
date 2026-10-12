@@ -131,6 +131,8 @@ Onboarding step 3 — confirm the SMS code.
 On a wrong code: `{ "success": false, "error": "invalid_otp" }`.
 `kyc_required` (403) — terminal: the profile approval stopped being valid between the steps. Kaspi has already accepted the code, but the connection is not created; the session is closed — after approval, start over with a new `init`.
 
+**Switching to production.** A production organization (`is_test: false`) leaves sandbox mode with a clean slate on a successful `verify-otp`: its sandbox invoices, subscriptions, refunds (including QR refund sessions) and catalog items are deleted, and requests by their ids return `404` afterwards. Production data is not affected; re-authorizing an organization already in production deletes nothing. The switch may complete a few seconds after the response. For a test organization (`is_test: true`), a successful `verify-otp` does not switch it to production and does not delete its data. Export any sandbox history you need before `verify-otp`; read the mode from the organization card fetched again (`GET /api/partner/organizations/{id}`), not from the response. Merchant events of the organization sent before the switch may arrive after it — see how to handle them in [Webhooks](webhooks.md), "Response Requirements".
+
 **Kaspi organization identity.** The pair "BIN + Kaspi organization identifier" is pinned on the first connection and does not change afterwards. Connecting a cashier does not by itself transfer ownership:
 
 | Code | HTTP | What it means |

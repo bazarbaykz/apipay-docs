@@ -55,6 +55,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 42,
     "external_order_id": "order_123",
@@ -77,13 +78,14 @@ ApiPay отправляет 23 типа событий:
 }
 ```
 
-> **Примечание:** Поля `subtotal`, `discount_sum` и `discount_percentage` появляются только при наличии скидки в счёте. Поле `is_sandbox` показывает, был ли ресурс создан в sandbox-режиме. Поля `kaspi_source_type` и `kaspi_sale_type` гейтятся по наличию значения от Kaspi (обрабатывайте как nullable).
+> **Примечание:** Поля `subtotal`, `discount_sum` и `discount_percentage` появляются только при наличии скидки в счёте. Поле `is_sandbox` в корне подписанного тела есть у каждого события и показывает, создан ли объект события в песочнице; вложенный `is_sandbox` (здесь — у `invoice`) с ним совпадает. Корневой `is_sandbox` относится к объекту события, а не к текущему режиму организации: свой режим ваша система знает сама. Как обрабатывать песочные события в рабочем режиме — в разделе «Требования к ответу». Поля `kaspi_source_type` и `kaspi_sale_type` гейтятся по наличию значения от Kaspi (обрабатывайте как nullable).
 
 #### Счёт не обработан (status: error)
 
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 43,
     "external_order_id": "order_124",
@@ -108,6 +110,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 46,
     "external_order_id": "order_125",
@@ -130,6 +133,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "invoice.status_changed",
+  "is_sandbox": false,
   "invoice": {
     "id": 44,
     "external_order_id": null,
@@ -168,6 +172,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "invoice.qr_scanned",
+  "is_sandbox": false,
   "invoice": {
     "id": 63474,
     "external_order_id": "order-123",
@@ -203,6 +208,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "invoice.refunded",
+  "is_sandbox": false,
   "refund": {
     "id": 5,
     "amount": "2000.00",
@@ -237,6 +243,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "invoice.refunded",
+  "is_sandbox": false,
   "refund": {
     "id": 6,
     "amount": "2000.00",
@@ -282,6 +289,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "catalog.item_processed",
+  "is_sandbox": false,
   "catalog_item": {
     "id": 12345,
     "external_ref": "1C-000123",
@@ -327,6 +335,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "receipt.issued",
+  "is_sandbox": false,
   "receipt": {
     "id": 4210,
     "client_operation_id": "pos-2026-07-12-0042",
@@ -351,6 +360,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "receipt.failed",
+  "is_sandbox": false,
   "receipt": {
     "id": 4210,
     "client_operation_id": "pos-2026-07-12-0042",
@@ -388,6 +398,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.created",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -415,6 +426,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.payment_succeeded",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -443,6 +455,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.payment_failed",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "phone_number": "87071234567",
@@ -471,6 +484,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.grace_period_started",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "phone_number": "87071234567",
@@ -496,6 +510,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.expired",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "phone_number": "87071234567",
@@ -520,6 +535,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.paused",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -547,6 +563,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.resumed",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -574,6 +591,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.period_skipped",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -608,6 +626,7 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "subscription.cancelled",
+  "is_sandbox": false,
   "subscription": {
     "id": 10,
     "external_subscriber_id": "CLIENT-001",
@@ -639,10 +658,26 @@ ApiPay отправляет 23 типа событий:
 ```json
 {
   "event": "webhook.test",
-  "source": "test",
-  "timestamp": "2026-01-15T10:00:00Z"
+  "is_sandbox": true,
+  "invoice": {
+    "id": null,
+    "external_order_id": "TEST-ORDER-123",
+    "amount": "1000.00",
+    "status": "test",
+    "description": "Test webhook notification",
+    "kaspi_invoice_id": null,
+    "client_name": "Test Client",
+    "client_phone": "87771234567",
+    "is_sandbox": true,
+    "kaspi_source_type": "GOLD",
+    "kaspi_sale_type": "Remote"
+  },
+  "source": "My API Key",
+  "timestamp": "2026-01-15T10:00:00+00:00"
 }
 ```
+
+У `webhook.test` корневой `is_sandbox` всегда `true`: обработчик в рабочем режиме отбросит его с ответом `2xx`, и проверка пройдёт. Проверяйте подпись до отбрасывания песочных событий — тогда успешная проверка подтверждает и верный секрет.
 
 ## Когда приходит вебхук
 
@@ -789,6 +824,7 @@ function verifyWebhook($payload, $signature, $secret) {
 
 1. Возвращайте статус **2xx** в течение **5 секунд** (таймаут доставки: 5с на ответ плюс до 3с на установление соединения)
 2. Будьте **идемпотентны** — корректно обрабатывайте повторные доставки
+3. В рабочем режиме после проверки подписи отбрасывайте события с `is_sandbox: true` в корне тела: отвечайте `2xx` и не исполняйте. Событие по песочному объекту, отправленное до перевода организации в рабочий режим, может прийти уже после него.
 
 ### Дедупликация
 
