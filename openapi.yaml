@@ -586,14 +586,21 @@ paths:
           Подробности — в описании `CreateQrInvoiceRequest` и `PaymentLinkCreated`.
 
         **Ссылка как снимок заказа** (`static: true`, все поля необязательны):
-        `success_url`/`cancel_url` — адреса «Вернуться в магазин» (на экране «Оплачено») и
-        «Вернуться без оплаты»; это ссылки на странице, а не редирект, и сервер по ним не ходит.
-        ⚠️ Переход покупателя по `success_url` оплату не подтверждает — истина в статусе счёта и
-        вебхуке. `order_items` — информационный «Состав заказа» на странице: в Kaspi не уходит,
+        `success_url` — куда страница сама вернёт покупателя после подтверждённой оплаты (через
+        3 секунды видимого экрана «Оплачено», плюс кнопка «Вернуться к продавцу»; скриптом, не
+        HTTP-редиректом); `cancel_url` — ручная ссылка «Вернуться без оплаты». Сервер по ним не
+        ходит. ⚠️ Переход покупателя по `success_url` оплату не подтверждает — истина в статусе
+        счёта и вебхуке. `order_items` — информационный «Состав заказа» на странице: в Kaspi не уходит,
         фискальным чеком не является, сумму к оплате не задаёт (её задают `amount`/`cart_items`).
         `is_sandbox` — ваше утверждение о режиме: если организация в другом режиме, ссылка не
         создаётся (`409 sandbox_mode_mismatch`). Все попытки оплаты одной ссылки находятся
         фильтром `GET /invoices?static_qr_id=`, итог — в `GET /static-qr/{id}` (`state_version`).
+        ⛔ Боевая ссылка выпускается, только если у организации есть юридическое название
+        (покупатель видит его как получателя платежа; из Kaspi его приносит авторизация
+        основного кассира): без него — `422` с `error_code: recipient_name_unavailable` и без
+        `errors`, ссылка не создана. Это ошибка организации, а не тела запроса, повтор её не
+        исправит — обратитесь в поддержку ApiPay. Проверка стоит раньше ключа
+        идемпотентности: повтор ключа уже созданной ссылки у такой организации тоже `422`.
 
         **Синхронный**: ответ `201` сразу; у QR-счёта — со `status: "pending"` и QR-полями
         (pending-вебхука для QR нет).
@@ -1503,6 +1510,12 @@ paths:
         Необязательное `is_sandbox` — то же утверждение режима, что у ссылки на оплату: если
         организация в другом режиме, лист не создаётся (`409 sandbox_mode_mismatch`).
 
+        ⛔ Покупатель видит на странице юридическое название вашей организации как получателя
+        платежа. Пока его нет (организация ещё не получила его авторизацией
+        основного кассира), боевой лист не выпускается — `422 recipient_name_unavailable`; на
+        уже выпущенных листах покупатель не получит нового QR и оплаты по номеру, а оплаченное
+        и начатую оплату по-прежнему увидит. Песочницы это не касается.
+
         ⛔ **Скидка на листе** — по тому же правилу, что у `POST /invoices/qr`: процент только
         целый, скидка строки округляется вверх до целого тенге; позиция с ценой в тиынах и
         позиция, которую скидка обнуляет, — `422 qr_discount_unsupported` при выпуске. Скидка
@@ -1576,7 +1589,12 @@ paths:
             * `connection_ambiguous` — у организации больше одного активного кассира и нет
               primary; передайте `kaspi_connection_id` явно;
             * `description` забракован контент-скринингом (он становится именем позиции в
-              чеке Kaspi) — `errors.description` + `error_code`.
+              чеке Kaspi) — `errors.description` + `error_code`;
+            * `success_url` не проходит правило адреса возврата — `errors.success_url`
+              (без `error_code`);
+            * `recipient_name_unavailable` — у боевой организации нет юридического названия
+              из Kaspi: `message` и `error_code`, **без** `errors` (ошибка организации, а не
+              поля; повтор не поможет — обратитесь в поддержку ApiPay).
 
             ⚠️ **Несуществующий** `catalog_item_id` / `kaspi_connection_id` отдаёт **ровно то
             же тело**, что чужой: ответ намеренно не различает «нет такого id» и «id чужой»,
@@ -1612,6 +1630,11 @@ paths:
                   value:
                     error: connection_ambiguous
                     message: Organization has multiple active connections. Please specify kaspi_connection_id.
+                recipient_name_unavailable:
+                  summary: Нет юридического названия получателя (message + error_code, без errors)
+                  value:
+                    message: Юридическое название получателя недоступно. Выпуск ссылки невозможен. Обратитесь в поддержку ApiPay.
+                    error_code: recipient_name_unavailable
     get:
       tags: [Static QR]
       summary: Список печатных QR организации
@@ -3338,6 +3361,8 @@ paths:
         '422':
           description: |
             Ошибка формата `phoneNumber` (стандартная Laravel-форма валидации) либо
+            `invalid_phone` (Kaspi ответил, что номер не принадлежит ни одному оператору
+            РК, — опечатка в номере; повтор с тем же номером бесполезен),
             `not_cashier` (у номера есть пароль/роли сверх кассира), `not_registered`
             (номер не заведён кассиром в Kaspi).
           content:
@@ -3347,6 +3372,8 @@ paths:
                   - $ref: '#/components/schemas/ErrorResponse'
                   - $ref: '#/components/schemas/ValidationErrorBody'
               examples:
+                invalid_phone:
+                  value: {error: invalid_phone, message: "Invalid phone number"}
                 not_cashier:
                   value: {error: not_cashier, message: "Number is not a cashier-only account"}
         '502':
@@ -4680,13 +4707,19 @@ paths:
         Организация **с каталогом** может вести подписку и просто на сумму, без `cart_items`.
         Обратное неверно: у организации **без каталога** `cart_items` дают `422` с
         `error_code: catalog_not_supported`.
+        Итог `cart_items` должен быть от 100 до 1 000 000 ₸ в целых тенге, иначе `422` с
+        `error_code: cart_total_out_of_range` или `cart_total_not_whole_tenge` (текст — в
+        `errors.cart_items`).
         `bill_immediately=true` — первый счёт сразу; иначе по расписанию в `next_billing_at`.
 
         ⛔ **Сумма списания — только целые тенге.** Списание выставляется счётом на номер
-        телефона, поэтому дробная сумма (и голая `amount`, и итог `cart_items` после скидок)
-        уходит в статус `error` с `error_code: amount_must_be_whole_tenge` — вебхуком
-        `invoice.status_changed`, и так при КАЖДОМ списании. Проверьте суммы действующих
-        подписок и цены каталожных позиций, из которых считается итог.
+        телефона, поэтому дробная сумма уходит в статус `error` с
+        `error_code: amount_must_be_whole_tenge` — вебхуком `invoice.status_changed`, и так при
+        КАЖДОМ списании. Дробную `amount` создание подписки примет. Итог `cart_items`
+        проверяется при создании и изменении, но при каждом списании считается заново по
+        текущим ценам каталога: если цену позиции поменяли позже, дробный итог даст тот же
+        `error`. Проверьте суммы действующих подписок и цены каталожных позиций, из которых
+        считается итог.
 
         ⛔ **Позиция корзины с `operation=delete` отбивается `422`** — здесь и в
         `PUT /subscriptions/{id}`; текст в `errors["cart_items.N.catalog_item_id"]`.
@@ -4787,7 +4820,10 @@ paths:
       description: |
         Все поля опциональны. `cart_items` на не-каталог организации → `422` с
         `error_code: catalog_not_supported`. При передаче `cart_items` сумма пересчитывается
-        по актуальным ценам каталога, а `amount` из тела игнорируется.
+        по актуальным ценам каталога, а `amount` из тела игнорируется. Итог корзины должен
+        быть от 100 до 1 000 000 ₸ в целых тенге, иначе `422` с
+        `error_code: cart_total_out_of_range` или `cart_total_not_whole_tenge` (текст — в
+        `errors.cart_items`), и подписка не меняется.
 
         **Снять корзину** и вернуть подписку на фиксированную сумму — передать
         `"cart_items": null` **вместе с `amount`**. Сумма при этом обязательна: иначе подписка
@@ -5854,6 +5890,8 @@ components:
         - qr_discount_unsupported
         - catalog_requires_cart_items
         - catalog_not_supported
+        - cart_total_out_of_range
+        - cart_total_not_whole_tenge
         - organization_not_configured
         - cart_items_mismatch
         - qr_render_failed
@@ -5923,6 +5961,7 @@ components:
         - qr_refund_activation_failed
         - qr_refund_link_invoice_busy
         - sandbox_mode_mismatch
+        - recipient_name_unavailable
         - invoice_not_refundable
         - qr_refund_operation_not_found
         - qr_refund_actor_no_longer_authorized
@@ -6398,8 +6437,14 @@ components:
           nullable: true
           example: "https://shop.example.kz/orders/1024/thanks"
           description: |
-            Только `static: true`. Кнопка «Вернуться в магазин» на экране «Оплачено» (хост показан
-            покупателю). Не редирект и не подтверждение оплаты; сервер по адресу не ходит.
+            Только `static: true`. После подтверждённой оплаты экран «Оплачено» показывается
+            3 секунды (пока страница видима) и сам уводит покупателя на этот адрес; кнопка
+            «Вернуться к продавцу» с хостом адреса работает сразу и без JavaScript. Это переход
+            скриптом страницы, а не HTTP-редирект; Referer не передаётся, к адресу ничего не
+            добавляется (query и fragment — ваши, как заданы). Не подтверждение оплаты — истина
+            в статусе счёта и вебхуке; сервер по адресу не ходит. ⚠️ Из приложения Kaspi
+            покупатель возвращается в браузер сам: закрыть Kaspi или перевести другое
+            устройство мы не можем. Адрес, заданный раньше, тоже включает автопереход.
             Допустим только `https://` адрес сайта: без логина и пароля, пробелов и символов вне
             ASCII (домен IDN — в punycode), не IP-адрес, не внутренний хост, не адрес ApiPay или
             Kaspi. Иначе `422 errors.success_url`.
@@ -6588,6 +6633,26 @@ components:
         single_use: {type: boolean, default: true, description: "true — одна сделка (замок «Оплачено» после оплаты)."}
         kaspi_connection_id: {type: integer, nullable: true, description: "Кассир/точка (по умолчанию primary)."}
         expires_at: {type: string, format: date-time, nullable: true, description: "Срок годности сделки (в будущем)."}
+        success_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          nullable: true
+          description: |
+            Куда вернуть покупателя после оплаты — https-страница вашего сайта. Правило то же,
+            что у `CreateQrInvoiceRequest.success_url`: только `https`, без логина и пароля,
+            пробелов и символов вне ASCII (домен IDN — в punycode), не IP-адрес, не внутренний
+            хост, не адрес Kaspi и не страница оплаты ApiPay, не длиннее 2048 символов. Иначе
+            `422 errors.success_url`. Пустая строка и `null` — адреса нет. Query и fragment
+            сохраняются как есть. Адрес задаётся один раз при выпуске и не меняется.
+            После подтверждённой оплаты экран «Оплачено» показывается
+            3 секунды (пока страница видима) и сам уводит покупателя на этот адрес; кнопка
+            «Вернуться к продавцу» с хостом адреса работает сразу и без JavaScript. Это переход
+            скриптом страницы, а не HTTP-редирект; Referer не передаётся, к адресу ничего не
+            добавляется (query и fragment — ваши, как заданы). Не подтверждение оплаты — истина
+            в статусе счёта и вебхуке; сервер по адресу не ходит. ⚠️ Из приложения Kaspi
+            покупатель возвращается в браузер сам: закрыть Kaspi или перевести другое
+            устройство мы не можем. Адрес, заданный раньше, тоже включает автопереход.
     StaticQrCreated:
       type: object
       properties:
@@ -6611,7 +6676,7 @@ components:
         paid: {type: boolean, description: "Есть ли оплаченный связанный счёт. Частично возвращённый счёт (partially_refunded) тоже считается оплаченным: деньги по сделке получены, частичный возврат её не открывает заново.", example: false}
         paid_at: {type: string, format: date-time, nullable: true}
         created_at: {type: string, format: date-time, example: "2026-07-26T12:00:00+05:00"}
-        success_url: {type: string, format: uri, description: "Только у ссылки на оплату, где адрес задан при создании (см. `CreateQrInvoiceRequest.success_url`)."}
+        success_url: {type: string, format: uri, description: "Только у листа или ссылки на оплату, где адрес задан при создании (`CreateStaticQrRequest.success_url` / `CreateQrInvoiceRequest.success_url`)."}
         cancel_url: {type: string, format: uri, description: "Только у ссылки на оплату, где адрес задан при создании."}
         order_items:
           type: array

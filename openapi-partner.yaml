@@ -782,7 +782,7 @@ paths:
                       invoices_count: 12
         "422":
           description: >-
-            `invalid_phone` (неверный формат — также возможна стандартная
+            `invalid_phone` (неверный формат, либо Kaspi не знает такого номера — также возможна стандартная
             Laravel-форма валидации), `not_cashier` (номер не «чистый кассир»),
             `not_registered` (номер не зарегистрирован кассиром в Kaspi).
           content:
