@@ -124,7 +124,7 @@ Complete working scripts live in [`examples/php/`](https://github.com/bazarbaykz
 |------|---------------|
 | `create-invoice.php` | Creating an invoice |
 | `check-client.php` | Checking a customer by phone number |
-| `create-subscription.php` | A subscription (recurring charges) |
+| `create-subscription.php` | A subscription (invoices on a schedule) |
 | `manage-catalog.php` | Working with the product catalog |
-| `webhook-handler.php` | Receiving a webhook and verifying its signature, discarding sandbox events in production mode (`APIPAY_SANDBOX_MODE` — while testing) |
+| `webhook-handler.php` | Receiving a webhook and verifying its signature, discarding sandbox events in production mode (`APIPAY_SANDBOX_MODE` — while testing), deduplicating repeated deliveries (`pending` after `error` and `error` after such a `pending` are not lost) |
 | `partner-onboarding.php` | Onboarding an organization through the Partner API |

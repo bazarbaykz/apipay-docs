@@ -344,7 +344,7 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
 
 | Статус | Описание |
 |--------|----------|
-| `active` | Списания по расписанию |
+| `active` | Счета выставляются по расписанию |
 | `paused` | Временно приостановлена, можно возобновить |
 | `cancelled` | Отменена окончательно |
 | `expired` | Истекла: закончился grace period (только без `bill_until_paid: true`) либо исчерпан `total_cycles`. Истёкшую по grace period подписку можно возобновить (`resume`) |
@@ -390,6 +390,8 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
 > счёт за текущий период, а расписание переходит на ближайшую будущую дату.
 
 Webhook-события: `subscription.payment_failed`, `subscription.grace_period_started`, `subscription.payment_succeeded`, `subscription.expired`, `subscription.cancelled`. См. [Webhooks](webhooks.md).
+
+В песочнице каждый исход проверяется без ожидания расписания: `POST /subscriptions/{subscription}/simulate-billing` выставляет счёт подписки и доводит его до заказанного `outcome` (`paid`, `expired`, `cancelled`, `payer_refused`, `payer_error`, `error`), а `POST /subscriptions/{subscription}/simulate` с `grace_expired` завершает льготный период. Подробнее — [Песочница](sandbox.md).
 
 ## Примеры кода
 

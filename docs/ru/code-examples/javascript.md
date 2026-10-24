@@ -77,7 +77,7 @@ APIPAY_API_KEY=your_api_key node create-invoice.js
 |------|----------------|
 | `create-invoice.js` | Создание счёта |
 | `check-client.js` | Проверка клиента по номеру телефона |
-| `create-subscription.js` | Подписка (регулярные списания) |
+| `create-subscription.js` | Подписка (счета по расписанию) |
 | `manage-catalog.js` | Работа с каталогом товаров |
-| `webhook-handler.js` | Приём и проверка подписи вебхука, отбрасывание песочных событий в рабочем режиме (`APIPAY_SANDBOX_MODE` — на время тестов) |
+| `webhook-handler.js` | Приём и проверка подписи вебхука, отбрасывание песочных событий в рабочем режиме (`APIPAY_SANDBOX_MODE` — на время тестов), дедупликация повторных доставок (`pending` после `error` и `error` после такого `pending` не теряются) |
 | `partner-onboarding.js` | Подключение организации через Partner API |

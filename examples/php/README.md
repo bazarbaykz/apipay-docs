@@ -69,6 +69,16 @@ Remove the variable once the organization works in production mode. One mode per
 deployment: if one endpoint would serve both a sandbox and a production organization,
 point the sandbox one at a separate handler.
 
+The same event may arrive more than once, so the script deduplicates by an event key —
+for example `(invoice.id, invoice.status)` or `(refund.id, refund.status)` — and answers a
+repeated delivery with `200` without processing it again. A `pending` after `error`, and an
+`error` after such a `pending`, are new transitions, not duplicates: the script releases
+the `pending` key when `error` arrives and the `error` key when `pending` arrives. If
+processing fails — or the key cannot be recorded at all — the answer is `500`, and the
+delivery is retried. Keys are kept as marker files in the system temp directory, which is enough
+for a sandbox test on one server; in production keep them in a database table with a
+unique key.
+
 ### partner-onboarding.php
 
 Runs in two phases, because the cashier confirms the connection with an SMS code:

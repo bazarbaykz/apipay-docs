@@ -133,7 +133,7 @@ While the receipt is not yet issued, `status: "pending"` and the details (`fpd`,
 
 ### Webhook
 
-The same outcome arrives as a `receipt.issued` (success) or `receipt.failed` (failure) webhook — see [Webhooks](webhooks.md). Webhooks sit behind a separate gate; if they are not enabled for you, use polling.
+The same outcome arrives as a `receipt.issued` (success) or `receipt.failed` (failure) webhook — see [Webhooks](webhooks.md). Webhooks sit behind a separate gate; if they are not enabled for you, use polling. After your server fails (5xx, 429, network), the receipt notification is resent automatically, so one event can arrive twice: deduplicate by `(event, receipt.id)` so the receipt is not sent to the buyer a second time.
 
 ## Idempotency
 
@@ -183,7 +183,7 @@ The same outcome arrives as a `receipt.issued` (success) or `receipt.failed` (fa
 - **A retry will not help while the link is revoked.** The action is on the merchant's side: re-link the OFD in the Kaspi app. After that the receipt is issued again — no fiscal document was created, so the same `client_operation_id` is allowed.
 - **Do not confuse it with `kaspi_session_invalid`:** there the payment session is dead and the cashier must be reconnected, here the session is alive.
 - This case used to arrive as `receipt_kaspi_error`. If you branch on that code, add the new one to your handling.
-- The `simulate` parameter does not reproduce this outcome in the sandbox.
+- In the sandbox this outcome is reproduced by the `simulate` field of `POST /receipts` with `error_code: receipt_ofd_token_revoked`.
 
 ## Code Examples
 

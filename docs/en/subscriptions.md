@@ -344,7 +344,7 @@ curl "https://api.apipay.kz/api/v1/subscriptions/1/invoices?page=1&per_page=20" 
 
 | Status | Description |
 |--------|-------------|
-| `active` | Billing on schedule |
+| `active` | Invoices are issued on schedule |
 | `paused` | Temporarily paused, can be resumed |
 | `cancelled` | Permanently cancelled |
 | `expired` | Expired: the grace period ended (only without `bill_until_paid: true`) or `total_cycles` was exhausted. A subscription that expired after the grace period can be resumed (`resume`) |
@@ -392,6 +392,8 @@ Switching the mode via `PUT` in either direction resets `failed_attempts`. Enabl
 > issued for the current period and the schedule moves to the nearest future date.
 
 Webhook events: `subscription.payment_failed`, `subscription.grace_period_started`, `subscription.payment_succeeded`, `subscription.expired`, `subscription.cancelled`. See [Webhooks](webhooks.md).
+
+In the sandbox every outcome can be tested without waiting for the schedule: `POST /subscriptions/{subscription}/simulate-billing` issues a subscription invoice and drives it to the requested `outcome` (`paid`, `expired`, `cancelled`, `payer_refused`, `payer_error`, `error`), and `POST /subscriptions/{subscription}/simulate` with `grace_expired` ends the grace period. Details — [Sandbox](sandbox.md).
 
 ## Code Examples
 

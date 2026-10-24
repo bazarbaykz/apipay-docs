@@ -28,9 +28,11 @@ step by a check that runs on every pull request — see [CONTRIBUTING.md](CONTRI
 | [`openapi.yaml`](openapi.yaml) | OpenAPI specification, public API (`X-API-Key`) |
 | [`openapi-partner.yaml`](openapi-partner.yaml) | OpenAPI specification, Partner API (`X-Partner-Key`) |
 | [`llms.txt`](llms.txt) | Condensed reference for AI agents, with the API changelog |
+| [`sandbox-scenarios.json`](sandbox-scenarios.json) | Sandbox scenarios, magic phone numbers and simulations — see [Sandbox](docs/en/sandbox.md) |
 
-These three are mirrors of the upstream contract and are overwritten by the next sync —
-if you spot a problem in them, open an issue rather than a pull request.
+These four, `sandbox-scenarios.json` included, are mirrors of the upstream contract: they are
+changed only upstream and overwritten by the next sync — if you spot a problem in them, open
+an issue rather than a pull request.
 
 ## Code examples
 

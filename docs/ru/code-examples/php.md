@@ -124,7 +124,7 @@ switch ($code) {
 |------|----------------|
 | `create-invoice.php` | Создание счёта |
 | `check-client.php` | Проверка клиента по номеру телефона |
-| `create-subscription.php` | Подписка (регулярные списания) |
+| `create-subscription.php` | Подписка (счета по расписанию) |
 | `manage-catalog.php` | Работа с каталогом товаров |
-| `webhook-handler.php` | Приём и проверка подписи вебхука, отбрасывание песочных событий в рабочем режиме (`APIPAY_SANDBOX_MODE` — на время тестов) |
+| `webhook-handler.php` | Приём и проверка подписи вебхука, отбрасывание песочных событий в рабочем режиме (`APIPAY_SANDBOX_MODE` — на время тестов), дедупликация повторных доставок (`pending` после `error` и `error` после такого `pending` не теряются) |
 | `partner-onboarding.php` | Подключение организации через Partner API |

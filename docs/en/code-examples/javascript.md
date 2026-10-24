@@ -78,7 +78,7 @@ Complete working scripts live in [`examples/javascript/`](https://github.com/baz
 |------|---------------|
 | `create-invoice.js` | Creating an invoice |
 | `check-client.js` | Checking a customer by phone number |
-| `create-subscription.js` | A subscription (recurring charges) |
+| `create-subscription.js` | A subscription (invoices on a schedule) |
 | `manage-catalog.js` | Working with the product catalog |
-| `webhook-handler.js` | Receiving a webhook and verifying its signature, discarding sandbox events in production mode (`APIPAY_SANDBOX_MODE` — while testing) |
+| `webhook-handler.js` | Receiving a webhook and verifying its signature, discarding sandbox events in production mode (`APIPAY_SANDBOX_MODE` — while testing), deduplicating repeated deliveries (`pending` after `error` and `error` after such a `pending` are not lost) |
 | `partner-onboarding.js` | Onboarding an organization through the Partner API |

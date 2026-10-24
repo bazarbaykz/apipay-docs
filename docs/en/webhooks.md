@@ -24,10 +24,10 @@ ApiPay sends 23 event types:
 | `invoice.qr_scanned` | The customer scanned the QR (status stays `pending`, `qr_substate=scanned`) |
 | `invoice.refunded` | A refund on an invoice succeeded (or failed) |
 | `qr_refund.identified` | The customer scanned the refund QR (session → `customer_identified`) |
-| `qr_refund.completed` | The QR refund was completed (`refunded_amount`, `receipt_url`) |
-| `qr_refund.expired` | The refund QR expired before the customer was identified |
-| `qr_refund.failed` | The QR refund did not happen; the reason is in `error_code` |
-| `qr_refund.execution_uncertain` | The QR refund outcome is not proven: the money may have gone out. Do not start another refund — it is resolved manually via support |
+| `qr_refund.completed` | The refund via the buyer link was completed (`refunded_amount`, `receipt_url`) |
+| `qr_refund.expired` | The link ran out without a refund: it expired, was revoked, or the last scan window was missed. For a link bound to an invoice it can also arrive after `qr_refund.identified` if the refund did not go through in time. No money moved — a new link is needed |
+| `qr_refund.failed` | The refund via the link did not happen, no money moved. The reason is in `error_code`; for a link bound to an invoice it can also arrive after `qr_refund.identified` (for example, `refund_insufficient_funds`) |
+| `qr_refund.execution_uncertain` | The outcome of the refund via the link is not proven: the money may have gone out. Do not repeat the refund — not by request, not with a new link, not by hand in the Kaspi Pay app — it is resolved manually via support |
 | `catalog.item_processed` | An operation on a catalog item was closed. Sent **for every item, always** — there is no bulk aggregate any more |
 | `receipt.issued` | A fiscal receipt was successfully issued (Kaspi OFD) |
 | `receipt.failed` | Issuing a fiscal receipt failed |
@@ -44,7 +44,7 @@ ApiPay sends 23 event types:
 | `cashbox.shift_close_failed` | Closing a cash register shift failed (`error_code`) |
 | `webhook.test` | Test event from the dashboard |
 
-> Full payloads for the `qr_refund.*` events are in `openapi.yaml`, section `x-webhooks`.
+> Full payloads for the `qr_refund.*` events are in `openapi.yaml`, section `x-webhooks`. How to issue a link to the buyer and what to do with each event — [Refunds → Fallback](refunds.md#fallback-a-link-to-the-buyer).
 
 > ⛔ The `catalog.batch_processed` event is **never sent**: the aggregate for bulk catalog operations has been removed. Same address, same signature — just silence, and no error tells you so. If you were waiting on that webhook as the "upload finished" signal, switch to `catalog.item_processed` plus your own list of `external_ref` values.
 
@@ -78,7 +78,7 @@ Sent when an invoice status changes.
 }
 ```
 
-> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied. Every event carries an `is_sandbox` field at the root of the signed body: it shows whether the event's object was created in the sandbox; the nested `is_sandbox` (here, in `invoice`) matches it. The root `is_sandbox` describes the event's object, not the organization's current mode: your system knows its own mode. How to handle sandbox events in production mode is covered in "Response Requirements". Fields `kaspi_source_type` and `kaspi_sale_type` are gated by Kaspi returning a value (treat them as nullable).
+> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when the invoice has discounts applied. Every event carries an `is_sandbox` field at the root of the signed body: it shows whether the event's object was created in the sandbox; the nested `is_sandbox` (here, in `invoice`) matches it. The root `is_sandbox` describes the event's object, not the organization's current mode: your system knows its own mode. How to handle sandbox events in production mode is covered in "Response Requirements". Fields `kaspi_source_type` and `kaspi_sale_type` are gated by Kaspi returning a value (treat them as nullable). Next to `client_phone` comes `phone` — the same number under its REST name. For a payment attempt made via a payment link or a printed sheet, `invoice` carries `static_qr_id` and its synonym `static_qr_code_id` — use them to find the order (see [Invoices → Payment link and printed QR](invoices.md#payment-link-and-printed-qr)). There are no QR fields (`is_qr_token`, `qr_token_url`, `qr_image_url`) in this event — they are in `GET /invoices/{id}`.
 
 #### Invoice not processed (status: error)
 
@@ -164,6 +164,8 @@ Sent when an invoice status changes.
 | `invoice.subtotal` / `discount_sum` / `discount_percentage` | string \| null | Only for invoices with a cart/discount (`subtotal` and `discount_sum` come together). |
 | `invoice.kaspi_source_type` | string \| null | Customer funding source: `GOLD`, `RED`, `LOAN`, `BUSINESSACCOUNT`, `BANKINTEGRATIONACCOUNT`. Gated by Kaspi returning a value; the list may grow. |
 | `invoice.kaspi_sale_type` | string \| null | How the invoice was accepted: `Remote`, `QR`, `Restaurant`, `Static`. Gated by Kaspi returning a value; the list may grow. |
+| `invoice.static_qr_id` / `static_qr_code_id` | integer | The payment link or printed sheet this invoice is an attempt of. Only on such invoices. |
+| `invoice.phone` | string \| null | Synonym of `client_phone` (the REST name). |
 
 ### invoice.qr_scanned
 
@@ -275,10 +277,12 @@ Sent when an invoice refund either succeeds (`completed`) or fails (`failed`).
 |-------|------|-------------|
 | `refund.status` | string | `pending` / `processing` / `completed` / `failed`. The webhook arrives on both `completed` and `failed`. |
 | `refund.kaspi_refund_id` | string \| null | Refund ID in Kaspi; `null` on failure. |
-| `refund.error_code` | string \| null | Only at `status=failed`. For example `refund_window_expired` — Kaspi rejected the refund. There is no `error_message` in the webhook by design — read the text in `GET /invoices/{id}/refunds` or resolve the code via the catalog. |
+| `refund.error_code` | string \| null | Only at `status=failed`. `refund_requires_buyer_confirmation` and `refund_rejected_by_kaspi` signal the fallback: issue a link to the buyer with this refund's `source_refund_id` (see [Refunds](refunds.md#fallback-a-link-to-the-buyer)). There is no `error_message` in the webhook by design — read the text in `GET /invoices/{id}/refunds` or resolve the code via the catalog. |
 | `refund.items` | array \| null | Refund line items (only for itemized refunds): `catalog_item_id`, `name`, `price`, `count`, `amount`. |
 | `invoice.available_for_refund` | number | Amount still available for refund. Comes as a number (float), unlike `amount` and `total_refunded` (strings). |
 | `invoice.status` | string | Invoice status after the refund. A full refund does **not** change the status (stays `paid` — or `partially_refunded` if there was an earlier partial one) + `is_fully_refunded=true`; the first partial refund moves it to `partially_refunded` (and an `invoice.status_changed` is also sent). |
+
+> ⚠️ After `qr_refund.completed`, an `invoice.refunded` with `status: completed` and an **unfamiliar** `refund.id` may arrive — a record that the sync created for the operation carried out via the buyer link. It is the same amount, not a second refund: the original refund in `GET /invoices/{id}/refunds` will have `successor_refund_id` equal to this id. Resolving an unknown outcome as "money went out" (`refund_resolved_executed`) sends no webhook for the original refund.
 
 ### catalog.item_processed
 
@@ -389,7 +393,7 @@ Sent when issuing a fiscal receipt fails. The reason is in `receipt.error_code`:
 | `receipt.shift_number` | integer \| null | Shift number. Filled at `issued`. |
 | `receipt.error_code` | string \| null | Only at `status=failed` — a stable code from the catalog (see [Error Codes](errors.md)). Build your logic on it. |
 
-> Deduplicate by `(event, receipt.id)`. All dates are in UTC (`+00:00`).
+> Deduplicate by `(event, receipt.id)`: after your server fails (5xx, 429, network), the receipt notification is retried automatically, so one `receipt.*` event can arrive twice. All dates are in UTC (`+00:00`).
 
 ### subscription.created
 
@@ -653,7 +657,7 @@ For a subscription with `bill_until_paid: true` a cancellation also arrives when
 
 ### webhook.test
 
-Sent when you test a webhook from the dashboard (Settings → API Keys → Test webhook). A dummy invoice with `status=test` — your receiver should simply ignore it.
+Sent by the «Проверить уведомления» (check notifications) button on the key card in the dashboard or by a `POST /webhook-test` request with your key — synchronously, in a single attempt, with the outcome in the response. A dummy invoice with `status=test` — your receiver should simply ignore it.
 
 ```json
 {
@@ -679,6 +683,8 @@ Sent when you test a webhook from the dashboard (Settings → API Keys → Test 
 
 For `webhook.test` the root `is_sandbox` is always `true`: in production mode the handler discards it with a `2xx`, and the test passes. Verify the signature before discarding sandbox events — then a passing test also confirms the secret is correct.
 
+`POST /webhook-test` accepts `signature`: `valid` (default), `invalid` (signed with a foreign secret) or `missing` (no `X-Webhook-Signature`). The last two check that your handler **rejects** a forged or unsigned body, and work only in the sandbox (a production organization gets `403 not_sandbox`). A successful check also re-enables disabled sending (see "Sending pause").
+
 ## When a webhook arrives
 
 This section lists the events that make ApiPay send a webhook, and in which status it arrives. The technical statuses `processing`/`cancelling` produce **no** webhook.
@@ -693,8 +699,8 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 | `invoice.status_changed` | `error` | A technical error — the invoice is finalized, the system no longer retries it. The reason is in `error_code`/`error_message` (see "Response scenarios"). |
 | `invoice.status_changed` | `partially_refunded` | The first partial refund on the invoice (in addition to `invoice.refunded`). Subsequent partial refunds don't change the status. |
 | `invoice.refunded` | `completed` | The refund went through. Includes refunds made by the cashier in the Kaspi app (imported automatically). |
-| `invoice.refunded` | `failed` | The refund failed (`refund.error_code`). The system does **not** retry; the amount is not locked — you can create a new refund. |
-| `receipt.issued` | — | A fiscal receipt was issued in Kaspi OFD (after `POST /receipts`). Details in `fpd`/`operation_id`/`link`. Equivalent to polling `GET /receipts/{id}`. |
+| `invoice.refunded` | `failed` | The refund failed (`refund.error_code`). The system does **not** retry. On `refund_requires_buyer_confirmation` and `refund_rejected_by_kaspi`, issue a link to the buyer with `source_refund_id`; with `hold_for_buyer_confirmation: true` the invoice is held for this refund. |
+| `receipt.issued` | — | A fiscal receipt was issued in Kaspi OFD (after `POST /receipts`). Details in `fpd`/`operation_id`/`link`. Equivalent to polling `GET /receipts/{id}`. May arrive again. |
 | `receipt.failed` | — | The receipt was not issued (`receipt.error_code`). No fiscal document was created — retry with the same `client_operation_id` (for `shift_closed`, first open the shift in Kaspi Pos; for `receipt_ofd_token_revoked`, re-link the OFD). |
 | `subscription.created` | — | The subscription was created. The system issues subscription invoices automatically at `next_billing_at` (or immediately with `bill_immediately`). Each invoice triggers the regular invoice webhooks. |
 | `subscription.payment_succeeded` | — | The next subscription invoice was paid. `failed_attempts` is reset; the grace period (if any) is lifted. |
@@ -709,7 +715,9 @@ This section lists the events that make ApiPay send a webhook, and in which stat
 
 ## Status transitions
 
-ApiPay does not duplicate webhooks for the same status: consecutive duplicates of one status, the technical `processing`/`cancelling`, a stale `pending` after a terminal status, and `error` after `paid` are not sent. Delivery itself is at-least-once and not guaranteed: the same transition can be re-delivered (retries after a partial delivery), and during a circuit-breaker pause it is not delivered at all. Deduplicate by `(invoice.id, status)` and `(refund.id, status)`, and reconcile state via the GET methods. Respond `200 OK` quickly (≤5 seconds) and process asynchronously.
+ApiPay does not generate repeated events for the same status: consecutive duplicates of one status, the technical `processing`/`cancelling`, a stale `pending` after a terminal status, and `error` after `paid` are not sent. But delivery is not guaranteed, and the same event may arrive more than once; during a sending pause, invoice and refund events are not sent and not re-sent later (see [Sending pause](#sending-pause)). Deduplicate by `(invoice.id, invoice.status)` and `(refund.id, refund.status)`, and reconcile state via the GET methods. Respond `200 OK` quickly (≤5 seconds) and process asynchronously.
+
+> ⚠️ After `error`, `pending` may arrive again even if `pending` was already delivered for this invoice: it is a new transition, not a duplicate. Do not drop it — when `error` arrives, remove this invoice's `pending` key from your processed-events table, and when `pending` arrives — its `error` key: the chain `error → pending → … → error` is possible. In the sandbox this transition also sends a webhook, as in production.
 
 **Allowed transitions:**
 
@@ -717,7 +725,7 @@ ApiPay does not duplicate webhooks for the same status: consecutive duplicates o
 |------|----|---------|
 | `pending` | `paid` / `cancelled` / `expired` / `error` | the normal lifecycle |
 | `cancelled` / `expired` | `paid` | a last-second payment wins the race — handle it as "money received": ship the order or issue a refund. This is not a bug. |
-| `error` | `pending` | reconciliation: the invoice actually did get created in Kaspi — follow the latest status |
+| `error` | `pending` | reconciliation: the invoice actually did get created in Kaspi — follow the latest status. If you have already issued a new invoice for the order, cancel one of the two, otherwise the buyer can pay both |
 | `paid` | `partially_refunded` | the first partial refund |
 
 **Never happen:**
@@ -757,7 +765,7 @@ When a webhook brings `status=error` (invoice) or `status=failed` (refund), the 
 - **The client scanned the QR** — an `invoice.qr_scanned` webhook (`qr_substate=scanned`, status stays `pending`): the customer is on the payment screen. A "payment started" signal — do not treat the invoice as paid, wait for `paid`.
 - **Invoice expired** — an `expired` webhook (phone invoices — 24h; QR — minutes, on the terminal from Kaspi). Create a new invoice if needed.
 - **Payment after cancellation/expiry** — a `paid` webhook after `cancelled`/`expired`: the money is received — ship the order or issue a refund.
-- **Back to `pending` after `error`** — a corrective `pending` webhook (reconciliation). Follow the latest status.
+- **Back to `pending` after `error`** — a corrective `pending` webhook (reconciliation). It is a new transition, not a duplicate — even if `pending` was already delivered for the invoice. Follow the latest status and do not close the order for good on `error`.
 
 ## Signature Verification
 
@@ -798,42 +806,61 @@ function verifyWebhook($payload, $signature, $secret) {
 
 ## Delivery
 
-All webhook events — both invoice and subscription — are retried on delivery failure.
+A failed delivery is retried automatically. The number of attempts depends on the event and the mode:
 
-- **Up to 11 attempts:** 1 initial delivery + 10 retries
-- **Exponential backoff intervals:** 10s, 30s, 1m, 1.5m, 2m, 5m, 10m, 15m, 30m, 1h — about 2 hours total
-- **Sandbox:** in sandbox mode, invoice webhooks are delivered in just **3 attempts** (intervals 5s, 15s). Refund and subscription webhooks always use the full 11 attempts — no sandbox shortcut for them
+| Event | Attempts in production mode | Attempts in the sandbox |
+|---|---|---|
+| `invoice.status_changed` | up to 11 | up to 3 (up to 11 with `webhook_retry_grid: live` in the [sandbox state](sandbox.md)) |
+| `invoice.refunded`, `subscription.*` | up to 11 | up to 11 |
+| `invoice.qr_scanned`, `qr_refund.*`, `cashbox.*` | up to 11 | up to 3 |
+| `receipt.*`, `catalog.item_processed` | up to 3 | up to 3 |
+| `webhook.test` | one synchronous attempt | one synchronous attempt |
+
+- **Intervals in production mode** (attempts include the first one, delays are approximate):
+  - `invoice.status_changed`, `invoice.refunded`, `subscription.*` — retries after 10s, 30s, 1m, 1.5m, 2m, 5m, 10m, 15m, 30m, 1h: about 2 hours from the first attempt to the last;
+  - `qr_refund.*`, `cashbox.*` — after 10s, 30s, 1m, 1.5m, 2m, 5m, then every 10m: about 50 minutes;
+  - `invoice.qr_scanned` — after 10s, 30s, 1m, then every 2m: about 16 minutes, a scan matters only while the QR is alive;
+  - `receipt.*`, `catalog.item_processed` — after 10s and 1m.
+- **Intervals in the sandbox.** `invoice.refunded`, `subscription.*`, `receipt.*` and `catalog.item_processed` retry as in production mode. `invoice.status_changed`, `invoice.qr_scanned`, `qr_refund.*` and `cashbox.*` retry after 5s and 15s; `invoice.status_changed` with `webhook_retry_grid: live` gets 11 attempts with the production delays compressed to about 10 minutes.
 - **Success:** a delivery counts as successful only on an HTTP **2xx** response
-- **3xx/4xx:** only HTTP ≥500, exactly 429, and network errors are retried. 3xx and 4xx responses (except 429) are **not** retried — the attempt is recorded as delivered immediately. You can only re-send such a delivery manually: dashboard → Webhook logs → Retry (for entries with `status=failed`, 10-second cooldown between manual retries)
+- **What is retried:** HTTP ≥500, exactly 429, and network errors. 4xx responses (except 429) are not retried: the attempt is recorded as failed (`status: failed`), and this transition will not be sent again on its own.
+- **Redirects:** 307 and 308 are followed — the same `POST` with the same body and signature. 301, 302 and 303 are not followed (a client must change the method on them and drop the body): the delivery fails without a retry, and the log shows `redirect not followed`. Configure the final `https://` address right away.
+- **Manual retry:** a failed delivery can be re-sent in the dashboard — «Лог уведомлений» (notification log), the retry button on the entry. In the sandbox, `POST /webhook-logs/{id}/retry` does the same — with the same body to the key's current address.
 - **All dates in webhooks are in UTC** (ISO 8601, `+00:00`)
 
-### Circuit breaker
+### Delivery log
 
-If your endpoint is consistently unavailable, delivery to the key is paused:
+`GET /webhook-logs` — rows for all of the organization's events except `catalog.item_processed` (the catalog has its own log, `GET /catalog/webhook-logs`): invoices, refunds, `qr_refund.*`, `subscription.*`, `receipt.*`, `cashbox.*`, `webhook.test`. Filters — `invoice_id`, `event`, `status` (`success`, `failed`, `skipped`), dates. A `qr_refund.*` row has `invoice_id` filled in — the invoice the link was issued for; `subscription.payment_succeeded` and `subscription.payment_failed` rows carry the charge invoice. The log is kept for 14 days; details of one delivery — `GET /webhook-logs/{id}`.
 
-- 5 consecutive failures → pause 5 minutes
-- 10 → pause 30 minutes
-- 20 → pause 2 hours
-- 50 → full shutdown until manual intervention
+### Sending pause
 
-Webhooks during the pause are **not** re-sent — reconcile state via the GET methods. Any successful delivery (or a successful test webhook from the dashboard) resets the counter. The status is visible in the API keys list.
+After a series of consecutive failed deliveries, webhook sending for the key is paused automatically.
 
-> `subscription.*` events are not written to the dashboard Webhook logs: there is no manual retry or circuit breaker for them — reconcile subscription state via `GET /subscriptions/{id}`.
+- **What observes the pause:** invoice events (`invoice.status_changed`, `invoice.qr_scanned`), refunds (`invoice.refunded`) and `qr_refund.*`. While the pause is on, they are **neither sent nor queued**: each one lands in the log as a `status: skipped` row ("skipped: pause", `error_message: circuit_open`), and such events are not retried later.
+- **What goes out as usual:** `subscription.*`, `receipt.*`, `cashbox.*` and `catalog.item_processed` ignore the pause and go out with the usual retries.
+- **State of your key** — `GET /webhook-logs/delivery-state`: `state` (`open`, `paused`, `disabled`), `paused_until`, `consecutive_failures`. `paused` lifts on its own after `paused_until`. If failures persist, sending is disabled (`disabled`) — it is re-enabled by changing the address or the secret (including issuing a new secret), or by a successful webhook check («Проверить уведомления» in the dashboard or `POST /webhook-test`). The same actions also lift a pause early.
+- **The consecutive-failure counter** is reset by a successful delivery of an invoice, refund, `qr_refund.*` or `cashbox.*` event.
+
+Recover transitions skipped during a pause by polling: `GET /invoices/{id}`, `GET /invoices/{id}/refunds`, `GET /qr-refunds/{id}`. Reconcile subscription and receipt events that were not delivered after all retries via `GET /subscriptions/{id}` and `GET /receipts/{id}`.
 
 ## Response Requirements
 
 1. Return a **2xx status** within **5 seconds** (delivery timeout: 5s for the response plus up to 3s to establish the connection)
-2. Be **idempotent** — handle duplicate deliveries
+2. Be **idempotent** — the same event may arrive several times, including a receipt notification; a repeated delivery must not ship the order again, send the receipt to the buyer again or record the refund twice
 3. In production mode, verify the signature first, then discard events with `is_sandbox: true` at the root of the body: reply `2xx` and do not act on them. An event about a sandbox object sent before the organization switched to production may arrive after the switch.
 
 ### Deduplication
 
-Client-side deduplication is **mandatory**: a retry after a partial delivery to multiple receivers re-sends the webhook to all of them. Deduplication keys:
+Client-side deduplication is **mandatory**: a retry after a partial delivery to multiple receivers re-sends the webhook to all of them. Take the key before processing and release it if processing fails. Deduplication keys:
 
-- `(invoice.id, invoice.status)` — for invoice events
-- `(refund.id, refund.status)` — for refunds
+- `(invoice.id, invoice.status)` — for `invoice.status_changed`. The exception is `pending` after `error` and `error` after such a `pending`: these are new transitions, not duplicates. When `error` arrives, remove this invoice's `pending` key, and when `pending` arrives — its `error` key
+- `(refund.id, refund.status)` — for refunds. An unfamiliar `refund.id` after `qr_refund.completed` is the same amount — reconcile by `successor_refund_id`
+- `(event, qr_refund.id)` — for the buyer-link events `qr_refund.*`
 - `(event, receipt.id)` — for receipt events (`receipt.issued`/`receipt.failed`)
-- `(event, subscription.id, invoice_id)` — for subscription events, and for `subscription.period_skipped` — `(event, subscription.id, billing_period_start)`: it has no `invoice_id`
+- `(event, operation.id)` — for `cashbox.*`
+- `(event, subscription.id, invoice_id)` — for subscription events. A root `invoice_id` is present only in `subscription.payment_succeeded`, `subscription.payment_failed` and `subscription.cancelled` with `reason` `payer_refused` or `payer_error`; `subscription.period_skipped` has none — the key is `(event, subscription.id, billing_period_start)`
+
+If you deduplicate by `invoice.id` alone, you will lose the `paid → partially_refunded` transition. And do not close an order for good on `cancelled` or `expired`: `cancelled → paid` and `expired → paid` are legitimate.
 
 ## Security Best Practices
 

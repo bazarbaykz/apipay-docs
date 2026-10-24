@@ -14,13 +14,16 @@ ApiPay.kz is an independent service that provides a REST API for Kaspi Pay. Auto
 
 ### 1. Prerequisites
 
-Before creating invoices, you must connect your Kaspi cashier:
+Start in the sandbox — it needs neither the business profile nor a cashier:
 
-1. Register at [ApiPay.kz](https://apipay.kz/login)
-2. [Connect your Kaspi cashier](https://apipay.kz/connect-cashier) yourself in the dashboard (Settings → Kaspi Authorization) — a 2–3 minute wizard: add an employee with the **"Cashier"** role in the Kaspi Pay app, enter that number, confirm the SMS code. The connection is instant.
-3. Get your API key from Settings → Connection
+1. Register at [ApiPay.kz](https://apipay.kz/login) — a new organization is created in the sandbox
+2. Get your API key from Settings → Connection — the same key will also work in production mode
+3. Build and test your integration in the [sandbox](sandbox.md): invoices do not go to Kaspi, no money moves
+4. Path to production mode: business profile → profile review → [Kaspi cashier](https://apipay.kz/connect-cashier) (dashboard wizard, Settings → Kaspi Authorization) → tariff → switch. The cashier cannot be connected before the profile is approved. Details — [Getting Started](getting-started.md#path-to-production-mode)
 
-> Do not sign in to the Kaspi Pay app with the cashier's number afterwards — it breaks the connection. If the wizard does not work for you, [WhatsApp support](https://wa.me/77003076512) can connect it manually.
+> After linking the cashier, do not sign in to the Kaspi Pay app with the cashier's number — it breaks the connection. If the wizard does not work for you, [WhatsApp support](https://wa.me/77003076512) can connect it manually.
+>
+> You can hand the integration to an AI assistant — see [Getting Started → Connecting with an AI assistant](getting-started.md#connecting-with-an-ai-assistant).
 
 ### 2. Create Invoice
 
@@ -37,7 +40,9 @@ Response:
   "id": 124,
   "amount": "10000.00",
   "status": "processing",
+  "paid_at": null,
   "phone": "87001234567",
+  "is_imported": false,
   "created_at": "2026-01-15T10:00:00+00:00"
 }
 ```
@@ -49,7 +54,7 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 | Endpoint | Description |
 |----------|-------------|
 | `POST /invoices` | Create payment invoice |
-| `POST /invoices/qr` | Create QR invoice (cashier display) |
+| `POST /invoices/qr` | QR invoice for immediate payment or a payment link (`static: true`) |
 | `GET /invoices` | List invoices |
 | `GET /invoices/{id}` | Get invoice details |
 | `GET /invoices/{id}/receipt` | Kaspi receipt for a paid invoice |
@@ -58,6 +63,12 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 | `GET /invoices/{id}/refunds` | Invoice refunds |
 | `POST /invoices/status/check` | Check pending invoice statuses |
 | `GET /refunds` | List all refunds |
+| `POST /qr-refunds/links` | «Возврат ApiPay» buyer link (refund fallback path) |
+| `POST /static-qr` | Printable QR and payment link for a deal |
+| `GET /webhook-logs` | Webhook delivery log |
+| `GET /webhook-logs/delivery-state` | Webhook sending pause for your key |
+| `POST /webhook-test` | Test webhook to the key's address |
+| `GET /sandbox/state` | Sandbox state (plus `PUT`, `POST /sandbox/clear`) |
 | `POST /clients/check` | Check whether a phone number is registered in Kaspi |
 | `POST /receipts` | Issue a fiscal receipt (Kaspi OFD) |
 | `POST /receipts/preview` | Preview a receipt before issuing |
@@ -99,10 +110,11 @@ The invoice is created asynchronously: `201` returns `status: "processing"`. The
 
 - [Getting Started](getting-started.md) — Prerequisites, connection, first invoice
 - [Invoices](invoices.md) — Create, list, cancel invoices
-- [Subscriptions](subscriptions.md) — Recurring billing and subscription management
+- [Subscriptions](subscriptions.md) — Automatic invoicing on a schedule (the buyer pays each invoice themselves)
 - [Catalog](catalog.md) — Product catalog management
 - [Refunds](refunds.md) — Full and partial refunds
 - [Webhooks](webhooks.md) — Real-time payment notifications
+- [Sandbox](sandbox.md) — Scenarios, outcomes and errors without real money
 - [Clients](clients.md) — Check a phone number before invoicing
 - [Fiscal Receipts](receipts.md) — Kaspi OFD receipts for cash and non-Kaspi POS payments
 - [Cash register](cashbox.md) — Kaspi shifts, cash, reconciliation and reports

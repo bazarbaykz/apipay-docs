@@ -1,0 +1,417 @@
+{
+    "header": "X-Sandbox-Scenario",
+    "applied_header": "X-Sandbox-Scenario-Applied",
+    "ignored_header": "X-Sandbox-Scenario-Ignored",
+    "unknown_scenario": {
+        "http": 422,
+        "error_code": "sandbox_scenario_unknown"
+    },
+    "scenarios": [
+        {
+            "slug": "tariff_inactive",
+            "http": 403,
+            "error_code": "tariff_inactive",
+            "applies_to": "платные операции (создание и изменение)"
+        },
+        {
+            "slug": "kaspi_session_expired",
+            "http": 409,
+            "error_code": "kaspi_session_expired",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "kaspi_session_invalid",
+            "http": 503,
+            "error_code": "kaspi_session_invalid",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "kaspi_session_not_configured",
+            "http": 400,
+            "error_code": "kaspi_session_not_configured",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "trial_daily_limit",
+            "http": 429,
+            "error_code": "trial_daily_limit",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "tariff_limit_reached",
+            "http": 429,
+            "error_code": "tariff_limit_reached",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "kyc_daily_limit_reached",
+            "http": 429,
+            "error_code": "kyc_daily_limit_reached",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "kyc_rejected",
+            "http": 403,
+            "error_code": "kyc_rejected",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "invoices_disabled",
+            "http": 503,
+            "error_code": "invoices_disabled",
+            "applies_to": "двери выставления счетов (POST /invoices, /invoices/bulk, /invoices/qr, /static-qr)"
+        },
+        {
+            "slug": "qr_rate_limit",
+            "http": 429,
+            "error_code": "qr_rate_limit",
+            "applies_to": "POST /invoices/qr без static"
+        },
+        {
+            "slug": "connection_ambiguous",
+            "http": 422,
+            "error_code": "connection_ambiguous",
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "organization_not_verified",
+            "http": 400,
+            "error_code": null,
+            "applies_to": "POST /invoices"
+        },
+        {
+            "slug": "recipient_name_unavailable",
+            "http": 422,
+            "error_code": "recipient_name_unavailable",
+            "applies_to": "POST /static-qr и POST /invoices/qr со static"
+        },
+        {
+            "slug": "static_qr_disabled",
+            "http": 403,
+            "error_code": "static_qr_disabled",
+            "applies_to": "POST /invoices/qr со static"
+        },
+        {
+            "slug": "request_rate_limited",
+            "http": 429,
+            "error_code": "request_rate_limited",
+            "applies_to": "любой путь /api/v1"
+        }
+    ],
+    "magic_phones": [
+        {
+            "phone": "87770000002",
+            "outcome": "client_not_found"
+        },
+        {
+            "phone": "87770100003",
+            "outcome": "kaspi_throttled"
+        },
+        {
+            "phone": "87770100004",
+            "outcome": "network_unavailable"
+        },
+        {
+            "phone": "87770100005",
+            "outcome": "session_transient"
+        },
+        {
+            "phone": "87770100006",
+            "outcome": "kaspi_error"
+        },
+        {
+            "phone": "87770100007",
+            "outcome": "unknown_error"
+        },
+        {
+            "phone": "87770100008",
+            "outcome": "organization_not_configured"
+        },
+        {
+            "phone": "87770100009",
+            "outcome": "kaspi_session_unavailable"
+        }
+    ],
+    "client_check": {
+        "door": "POST /clients/check",
+        "phones": [
+            {
+                "phone": "87770000001",
+                "http": 200,
+                "has_kaspi": true
+            },
+            {
+                "phone": "87770000002",
+                "http": 200,
+                "has_kaspi": false
+            },
+            {
+                "phone": "87770100003",
+                "http": 429,
+                "scope": "kaspi_throttle"
+            },
+            {
+                "phone": "87770100004",
+                "http": 503
+            },
+            {
+                "phone": "87770100005",
+                "http": 503
+            },
+            {
+                "phone": "87770100006",
+                "http": 503
+            },
+            {
+                "phone": "87770100007",
+                "http": 503
+            },
+            {
+                "phone": "87770100008",
+                "http": 503
+            },
+            {
+                "phone": "87770100009",
+                "http": 503
+            }
+        ]
+    },
+    "simulations": {
+        "invoice_status": {
+            "door": "POST /invoices/{id}/simulate-status",
+            "transitions": {
+                "pending": [
+                    "paid",
+                    "cancelled",
+                    "expired",
+                    "error",
+                    "qr_scanned"
+                ],
+                "cancelled": [
+                    "paid"
+                ],
+                "expired": [
+                    "paid"
+                ],
+                "error": [
+                    "pending"
+                ],
+                "cancelling": [
+                    "cancelled",
+                    "pending",
+                    "error"
+                ],
+                "paid": [
+                    "qr_scanned"
+                ]
+            },
+            "error_codes": [
+                "sandbox_simulated_error",
+                "client_not_found",
+                "kaspi_throttled",
+                "network_unavailable",
+                "session_transient",
+                "kaspi_error",
+                "unknown_error",
+                "organization_not_configured",
+                "kaspi_session_unavailable"
+            ]
+        },
+        "phone_invoice": {
+            "door": "поле simulate в POST /invoices",
+            "statuses": [
+                "pending",
+                "error"
+            ],
+            "error_codes": [
+                "client_not_found",
+                "kaspi_throttled",
+                "network_unavailable",
+                "session_transient",
+                "kaspi_error",
+                "unknown_error",
+                "organization_not_configured",
+                "kaspi_session_unavailable"
+            ],
+            "live_organization": "поле simulate игнорируется; магический номер — обычный номер, счёт уйдёт реальному абоненту"
+        },
+        "qr_invoice": {
+            "door": "поле simulate в POST /invoices/qr",
+            "statuses": [
+                "error"
+            ],
+            "error_codes": [
+                "kaspi_error",
+                "qr_render_failed",
+                "kaspi_session_invalid"
+            ]
+        },
+        "invoice_cancel": {
+            "door": "поле simulate в POST /invoices/{id}/cancel",
+            "outcomes": [
+                "cancelled",
+                "rejected",
+                "error"
+            ],
+            "error_codes": [
+                "invoice_already_paid",
+                "invoice_already_cancelled",
+                "invoice_not_found_in_kaspi",
+                "kaspi_error"
+            ]
+        },
+        "invoice_receipt": {
+            "door": "POST /invoices/{id}/receipt/simulate",
+            "outcomes": [
+                "pending_then_ready",
+                "requires_kaspi_kassa",
+                "unavailable",
+                "rate_limited",
+                "kaspi_session_expired",
+                "kaspi_session_unavailable"
+            ]
+        },
+        "refund": {
+            "door": "поле simulate в POST /invoices/{id}/refund",
+            "statuses": [
+                "completed",
+                "failed",
+                "uncertain"
+            ],
+            "error_codes": [
+                "refund_requires_buyer_confirmation",
+                "refund_rejected_by_kaspi",
+                "refund_insufficient_funds",
+                "refund_window_expired",
+                "kaspi_throttled",
+                "network_unavailable",
+                "kaspi_error",
+                "unknown_error"
+            ],
+            "resolve": "POST /invoices/{id}/refunds/{refund}/simulate-resolve, …/simulate-release-hold"
+        },
+        "qr_refund_link": {
+            "door": "POST /qr-refunds/{id}/simulate",
+            "events": [
+                "identified",
+                "expired",
+                "activated",
+                "link_expired",
+                "failed",
+                "execution_uncertain"
+            ],
+            "error_codes": [
+                "qr_refund_activation_failed",
+                "operation_not_returnable",
+                "refund_amount_exceeds_available",
+                "qr_refund_expired",
+                "refund_insufficient_funds",
+                "kaspi_error",
+                "qr_refund_execution_disabled",
+                "qr_refund_execution_context_unavailable",
+                "kaspi_session_invalid",
+                "qr_refund_actor_no_longer_authorized",
+                "qr_refund_execution_attempts_exhausted",
+                "qr_refund_execution_result_unavailable"
+            ]
+        },
+        "qr_refund_execution": {
+            "door": "поле simulate в POST /qr-refunds/links и POST /qr-refunds/{id}/execute",
+            "statuses": [
+                "completed",
+                "failed",
+                "execution_uncertain"
+            ],
+            "error_codes": [
+                "operation_not_returnable",
+                "refund_amount_exceeds_available",
+                "qr_refund_expired",
+                "refund_insufficient_funds",
+                "kaspi_error",
+                "qr_refund_execution_disabled",
+                "qr_refund_execution_context_unavailable",
+                "kaspi_session_invalid",
+                "qr_refund_actor_no_longer_authorized",
+                "qr_refund_execution_attempts_exhausted",
+                "qr_refund_execution_result_unavailable"
+            ]
+        },
+        "fiscal_receipt": {
+            "door": "поле simulate в POST /receipts",
+            "statuses": [
+                "issued",
+                "failed"
+            ],
+            "error_codes": [
+                "shift_closed",
+                "item_not_fiscal",
+                "receipt_kaspi_error",
+                "receipt_ofd_token_revoked",
+                "kaspi_session_invalid",
+                "kaspi_session_not_configured",
+                "rfo_missing",
+                "receipt_dispatch_error",
+                "receipt_unavailable"
+            ]
+        },
+        "catalog_item": {
+            "door": "поле items[].simulate в POST /catalog",
+            "statuses": [
+                "active",
+                "failed"
+            ],
+            "error_codes": [
+                "catalog_create_unresolved",
+                "catalog_create_blocked"
+            ]
+        },
+        "cashbox_close": {
+            "door": "поле simulate в POST /cashbox/shifts/close",
+            "statuses": [
+                "failed"
+            ],
+            "error_codes": [
+                "cashbox_no_open_shift",
+                "cashbox_busy",
+                "cashbox_operation_failed",
+                "cashbox_unavailable"
+            ]
+        },
+        "subscription_billing": {
+            "door": "POST /subscriptions/{id}/simulate-billing",
+            "outcomes": [
+                "paid",
+                "expired",
+                "cancelled",
+                "payer_refused",
+                "payer_error",
+                "error"
+            ],
+            "error_codes": [
+                "client_not_found",
+                "kaspi_throttled",
+                "network_unavailable",
+                "session_transient",
+                "kaspi_error",
+                "unknown_error",
+                "organization_not_configured",
+                "kaspi_session_unavailable"
+            ]
+        },
+        "subscription": {
+            "door": "POST /subscriptions/{id}/simulate",
+            "events": [
+                "grace_expired",
+                "busy_lock"
+            ]
+        },
+        "static_qr": {
+            "door": "POST /static-qr/{id}/simulate",
+            "events": [
+                "scanned",
+                "paid",
+                "cancelled"
+            ]
+        }
+    }
+}

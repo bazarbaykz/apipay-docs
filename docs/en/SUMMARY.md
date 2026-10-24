@@ -13,6 +13,7 @@
 * [Fiscal Receipts](receipts.md)
 * [Cash register](cashbox.md)
 * [Webhooks](webhooks.md)
+* [Sandbox](sandbox.md)
 * [Errors](errors.md)
 * [Partner API](partner-api.md)
 

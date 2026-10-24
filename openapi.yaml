@@ -145,6 +145,65 @@ info:
     В рабочем режиме после проверки подписи отбрасывайте события с `is_sandbox: true`
     (отвечайте 2xx и не исполняйте): событие, отправленное до перевода организации
     в рабочий режим, может прийти уже после него.
+
+    Песочница воспроизводит ВСЕ исходы боевого API, включая отказы, — тела и коды отказов
+    те же, что в бою. Три способа:
+
+    1. **Синхронный отказ — заголовок `X-Sandbox-Scenario: <slug>`.** Запрос получает ровно тот
+       ответ, что дала бы боевая дверь, ДО проверки тела; ответ несёт
+       `X-Sandbox-Scenario-Applied: <slug>`. Сценарий действует только там, где так отвечает
+       бой, иначе запрос идёт обычным путём с `X-Sandbox-Scenario-Ignored: not_applicable`.
+       Неизвестный slug — `422 sandbox_scenario_unknown` со списком `scenarios`.
+       | slug | где | ответ |
+       |---|---|---|
+       | `tariff_inactive` | платные операции (те, что закрывает тарифный гейт) | `403` |
+       | `kaspi_session_expired` | `POST /invoices` | `409` |
+       | `kaspi_session_invalid` | `POST /invoices` | `503` |
+       | `kaspi_session_not_configured` | `POST /invoices` | `400` |
+       | `trial_daily_limit`, `tariff_limit_reached`, `kyc_daily_limit_reached` | `POST /invoices` | `429` + `Retry-After` |
+       | `kyc_rejected` | `POST /invoices` | `403` |
+       | `connection_ambiguous` | `POST /invoices` | `422` |
+       | `organization_not_verified` | `POST /invoices` | `400` |
+       | `invoices_disabled` | `POST /invoices`, `/invoices/bulk`, `/invoices/qr`, `POST /static-qr` | `503` |
+       | `qr_rate_limit` | `POST /invoices/qr` без `static` | `429` |
+       | `static_qr_disabled` | `POST /invoices/qr` со `static: true` | `403` |
+       | `recipient_name_unavailable` | `POST /static-qr`, `POST /invoices/qr` со `static: true` | `422` |
+       | `request_rate_limited` | любой запрос | `429` + `Retry-After` |
+    2. **Состояние организации — `GET|PUT /sandbox/state`.** Изображает тариф, анкету, сессию
+       кассира, паузу запросов в Kaspi, накопление счетов и сетку повторов вебхука на все
+       следующие запросы без заголовка (схема `SandboxState`). Сбрасывается сменой режима и
+       `POST /sandbox/clear`.
+    3. **Заказанный исход — поле `simulate` и двери `…/simulate*`.** Исход асинхронной операции
+       заказывается при её создании или отдельной дверью:
+       | что | как |
+       |---|---|
+       | телефонный счёт | `simulate` в `POST /invoices` либо магический номер (см. `CreateInvoiceRequest.simulate`) |
+       | QR-счёт | `simulate` в `POST /invoices/qr` (строка — терминал, объект — синхронный отказ) |
+       | статус счёта | `POST /invoices/{id}/simulate-status` (таблица переходов — в операции) |
+       | отмена | `simulate` в `POST /invoices/{id}/cancel` |
+       | чек Kaspi по счёту | `POST /invoices/{id}/receipt/simulate` |
+       | возврат | `simulate` в `POST /invoices/{id}/refund`; разбор — `…/refunds/{refund}/simulate-resolve`, удержание — `…/simulate-release-hold` |
+       | ссылка покупателю | `simulate` в `POST /qr-refunds/links` и `execute`; события — `POST /qr-refunds/{id}/simulate` |
+       | позиция каталога | `items[].simulate` в `POST /catalog` |
+       | фискальный чек | `simulate` в `POST /receipts` |
+       | закрытие смены | `simulate` в `POST /cashbox/shifts/close` |
+       | подписка | `POST /subscriptions/{id}/simulate-billing`, `POST /subscriptions/{id}/simulate` |
+       | печатный лист | `POST /static-qr/{id}/simulate` |
+       | тест подписи вебхука | `POST /webhook-test` с `signature` `invalid` или `missing` |
+       | повтор доставки | `POST /webhook-logs/{id}/retry` |
+
+    ⛔ **Боевая организация.** Заголовок `X-Sandbox-Scenario` игнорируется, ответ прежний плюс
+    `X-Sandbox-Scenario-Ignored: live_organization`. Поле `simulate` в `POST /invoices`
+    игнорируется с тем же заголовком; в `cancel`, `refund`, `/qr-refunds/links`, `/catalog`,
+    `/cashbox/shifts/close` и строковое `simulate` в `/invoices/qr` — игнорируются молча
+    (заголовка нет); объектное `simulate` в `/invoices/qr` отклоняется `422`. ⛔ Магический
+    номер у боевой организации — обычный номер: счёт уйдёт реальному абоненту.
+    `simulate` в `POST /receipts` и `POST /qr-refunds/{id}/execute` и все песочные двери
+    (`…/simulate*`, `/sandbox/*`, `retry`, испорченная подпись `webhook-test`) отвечают
+    `403 not_sandbox`. ⛔ Игнорированное поле не делает запрос пробным: он выполняется
+    по-настоящему — счёт уходит покупателю, отмена отменяет настоящий счёт, возврат уходит
+    настоящими деньгами, ссылка покупателю выпускается настоящая. Убирайте `simulate` из
+    боевого кода.
   contact:
     name: ApiPay.kz Support
     url: https://wa.me/77003076512
@@ -177,11 +236,11 @@ tags:
   - name: Subscriptions
     description: Рекуррентные подписки с автоматическим перевыставлением счетов.
   - name: Sandbox
-    description: Симуляция жизненного цикла счетов и подписок (только при sandbox_mode=true).
+    description: Песочница — симуляции и заказанные исходы счетов, возвратов, ссылок покупателю, чеков, подписок и печатных листов, состояние песочной организации и её очистка (только у песочной организации; у боевой — 403 not_sandbox). Обзор — раздел «Sandbox» в описании API.
   - name: Cashbox
     description: Касса Kaspi — смены, сводка по наличным, сверка наших счетов с кассой, PDF-отчёт, тумблеры (автозакрытие/автоизъятие) и async-закрытие смены. Работают у организаций, к аккаунту Kaspi Pay которых подключена касса Kaspi (ОФД) — та же связка, что включает каталог товаров; без неё GET /cashbox/shifts и POST /cashbox/shifts/close отвечают 409 cashbox_kkm_unknown, а GET /cashbox/summary и оба тумблера — 409 rfo_missing. У кассовых эндпоинтов отдельный минутный лимит — 30 запросов/мин на ключ. В песочнице касса отвечает детерминированными данными по вашим sandbox-счетам, к Kaspi не обращается, подключённого кассира и кассы Kaspi не требует — идентификаторы смен там синтетические, поэтому интеграцию, прошедшую в песочнице, проверяйте и на боевой организации.
   - name: Webhooks
-    description: Исходящие вебхук-события (секция x-webhooks) + read-only логи их доставки (/webhook-logs). HMAC-подпись по сырому телу, таймстампы UTC +00:00.
+    description: Исходящие вебхук-события (секция x-webhooks), логи их доставки (/webhook-logs), состояние паузы отправки и тестовый вебхук. HMAC-подпись по сырому телу, таймстампы UTC +00:00.
   - name: Request Logs
     description: Read-only журнал изменяющих запросов (POST/PUT/PATCH/DELETE) ключей вашей организации за 7 дней — что именно присылала ваша интеграция и что ApiPay ответил. Тело запроса хранится маскированным, запросы GET не сохраняются, строки появляются с небольшой задержкой.
 paths:
@@ -260,6 +319,7 @@ paths:
             Фильтр по статусам (можно несколько значений).
             `partially_refunded` — счёт, по которому уже был частичный возврат: деньги он
             принял, поэтому фильтр «покажи оплаченные» без него неполон.
+            `error` — счёт не выставился в Kaspi (принимается с 7.0.0; прежде — 422).
             ⚠️ Для сверки кассы фильтруйте по обоим статусам сразу
             (`status[]=paid&status[]=partially_refunded`) либо берите итоги из
             `GET /api/v1/cashbox/reconciliation`.
@@ -267,7 +327,7 @@ paths:
             type: array
             items:
               type: string
-              enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded]
+              enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded, error]
         - name: origin
           in: query
           description: |
@@ -403,6 +463,12 @@ paths:
         ⚠️ Скидка здесь считается иначе, чем на QR-счёте (`POST /invoices/qr`): там процент
         только целый и скидка строки округляется ВВЕРХ до целого тенге. Одинаковая корзина
         со скидкой может дать разный итог телефонного и QR-счёта.
+
+        **Песочница.** Исход счёта заказывается полем `simulate` или магическим номером
+        покупателя (см. `CreateInvoiceRequest.simulate`): `error` терминализует счёт с боевым
+        `error_code` и текстом и шлёт вебхук `error`, `delay_seconds` держит счёт в
+        `processing`. У боевой организации поле игнорируется (ответ прежний плюс
+        `X-Sandbox-Scenario-Ignored: live_organization`), магический номер — обычный номер.
       operationId: createInvoice
       requestBody:
         required: true
@@ -429,7 +495,7 @@ paths:
                 kaspi_session_not_configured:
                   value: {error: "kaspi_session_not_configured", message: "Kaspi session is not configured. Please contact support."}
                 sandbox_invoice_limit:
-                  value: {error: "sandbox_invoice_limit", message: "Maximum sandbox invoices limit reached (1000)."}
+                  value: {error: "sandbox_invoice_limit", message: "Maximum sandbox invoices limit reached (1000). Clear sandbox data: POST /api/v1/sandbox/clear (or «Очистить тестовые данные» in the dashboard)."}
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
@@ -617,8 +683,13 @@ paths:
         клиентом. Когда клиент отсканировал QR — приходит событие `invoice.qr_scanned`
         (`qr_substate: "scanned"`; статус счёта событие не меняет, `status` в payload —
         текущий на момент отправки). Отмена QR-счёта не
-        поддерживается; возврат — через `POST /qr-refunds/links` (ссылка на возврат для
-        покупателя; немедленный `POST /qr-refunds` — deprecated).
+        поддерживается. Возврат по оплаченному QR-счёту — сначала обычный
+        `POST /invoices/{id}/refund`, как у любого счёта. Если Kaspi требует подтверждения
+        покупателя, возврат завершается `failed` с `refund_requires_buyer_confirmation` (или
+        `refund_rejected_by_kaspi`) — тогда выпускайте ссылку покупателю
+        `POST /qr-refunds/links` с `source_refund_id` этого возврата (немедленный
+        `POST /qr-refunds` — deprecated). Чтобы счёт не заняли другим возвратом до ссылки,
+        создавайте возврат с `hold_for_buyer_confirmation: true`.
 
         ⛔ **Позиция корзины с `operation=delete` отбивается `422`** —
         `errors["cart_items.N.catalog_item_id"]`, отдельного `error_code` у этой ветки нет.
@@ -802,7 +873,7 @@ paths:
             type: array
             items:
               type: string
-              enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded]
+              enum: [processing, pending, cancelling, paid, cancelled, expired, partially_refunded, error]
         - name: search
           in: query
           description: Поиск, тот же что у `GET /invoices` (описание, телефон, external_order_id и прочее).
@@ -942,9 +1013,9 @@ paths:
       tags: [Invoices]
       summary: Отменить счёт
       description: |
-        Отменяет счёт в статусе `pending` или `processing`. Sandbox / счёт без
-        `kaspi_invoice_id` → `200` (синхронно) + вебхук `cancelled`. Production → `202`,
-        статус `cancelling` — **не считайте счёт отменённым сразу**. Итог придёт вебхуком
+        Отменяет счёт в статусе `pending` или `processing`. Счёт без `kaspi_invoice_id`
+        (ещё в `processing`) → `200` (синхронно) + вебхук `cancelled`. Счёт, уже переданный в
+        Kaspi, → `202`, статус `cancelling` — **не считайте счёт отменённым сразу**. Итог придёт вебхуком
         (`cancelled` — отмена прошла, либо `error` с `invoice_already_paid`/
         `invoice_already_cancelled`/`invoice_not_found_in_kaspi`). Если Kaspi отказал
         (обычно счёт уже оплачен) — счёт тихо вернётся в `pending`, реальный статус
@@ -956,6 +1027,14 @@ paths:
         точный момент указан в поле `expires_at` ответа, длительность окна константой не
         зашивайте. Нужен другой счёт — просто выставьте новый: QR сосуществуют, старый
         не мешает.
+
+        **Песочница отменяет так же, как бой:** QR-счёт — тот же `409 qr_cancel_unsupported`,
+        счёт с `kaspi_invoice_id` — `202 cancelling`, исход приходит вебхуком. Исход
+        заказывается полем `simulate: {outcome, error_code}`: `cancelled` (по умолчанию) —
+        отменён; `rejected` — Kaspi отказал, счёт тихо возвращается в `pending` без вебхука;
+        `error` — `error` с `error_code` (`invoice_already_paid`, `invoice_already_cancelled`,
+        `invoice_not_found_in_kaspi`, `kaspi_error` — по умолчанию). Неверное поле — `422`.
+        У боевой организации поле игнорируется — счёт отменяется по-настоящему.
       operationId: cancelInvoice
       parameters:
         - name: id
@@ -963,9 +1042,24 @@ paths:
           required: true
           schema:
             type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                simulate:
+                  type: object
+                  nullable: true
+                  description: "**Только песочница** — заказанный исход отмены (см. описание операции)."
+                  required: [outcome]
+                  properties:
+                    outcome: {type: string, enum: [cancelled, rejected, error]}
+                    error_code: {type: string, nullable: true, enum: [invoice_already_paid, invoice_already_cancelled, invoice_not_found_in_kaspi, kaspi_error]}
       responses:
         '200':
-          description: Счёт отменён синхронно (sandbox / без kaspi_invoice_id)
+          description: Счёт отменён синхронно (счёт без kaspi_invoice_id)
           content:
             application/json:
               schema:
@@ -977,7 +1071,7 @@ paths:
                   invoice:
                     $ref: '#/components/schemas/Invoice'
         '202':
-          description: Отмена поставлена в очередь (production)
+          description: Отмена поставлена в очередь (счёт с kaspi_invoice_id — в бою и в песочнице)
           content:
             application/json:
               schema:
@@ -1027,8 +1121,18 @@ paths:
       tags: [Invoices]
       summary: Создать возврат
       description: |
-        Принятие в очередь не означает успех. При потере ответа сначала прочитайте состояние.
-        `processing` с `error_code: refund_execution_uncertain` требует ручной проверки, повтор запрещён.
+        Принятие в очередь не означает успех: итог — вебхук `invoice.refunded` или
+        `GET /invoices/{id}/refunds`.
+
+        ⛔ **Ретрай после таймаута или потери ответа — ТОЛЬКО с тем же `Idempotency-Key`**
+        (см. «Идемпотентность»): тогда вы получите тот же возврат, а не второй. Без ключа
+        сначала прочитайте `GET /invoices/{id}/refunds`.
+
+        ⛔ **`processing` с `error_code: refund_execution_uncertain` (`operation_state:
+        uncertain`) — деньги, возможно, ушли.** Не повторяйте этот возврат и не создавайте
+        новый по счёту: исход разбирается вручную (см. «Неизвестный исход»), счёт до разбора
+        занят.
+
         Способ возврата, выбранный в настройках кабинета, на возвраты через API не влияет.
         Полный или частичный возврат по оплаченному счёту. Без `amount` — полный возврат.
         Ответ `201` = возврат принят и поставлен в очередь (`status: pending`). Итог —
@@ -1061,6 +1165,16 @@ paths:
         синхронизация с Kaspi заведёт эту операцию отдельной строкой, и тогда исходный возврат
         получает `failed` с `error_code: refund_resolved_executed` и `resolved_refund_id` — ту
         строку (деньги учтены один раз, `operation_state: completed`).
+
+        Срок возврата при создании не проверяется: истёкший срок приходит асинхронно —
+        `invoice.refunded` со `status: failed` и `error_code: refund_window_expired`.
+
+        **Песочница.** Исход заказывается полем `simulate` (см. `CreateRefundRequest`):
+        `failed` — боевой код и текст, вебхук `invoice.refunded`; `uncertain` — неизвестный исход
+        (`processing` с `refund_execution_uncertain`, вебхука нет). Неизвестный исход разбирает
+        `POST /invoices/{id}/refunds/{refund}/simulate-resolve`, удержание снимает
+        `…/simulate-release-hold` — в бою это делает сотрудник в кабинете. У боевого счёта поле
+        игнорируется и в сравнение «та же просьба» не входит.
       operationId: createRefund
       parameters:
         - name: id
@@ -1147,7 +1261,7 @@ paths:
         '404':
           description: Счёт не найден
         '422':
-          description: refund_window_expired / контент-скрин / ошибки return_items / `idempotency_key` (или заголовок) длиннее 191 символа
+          description: контент-скрин / ошибки return_items / `idempotency_key` (или заголовок) длиннее 191 символа / неверное поле `simulate` (песочница)
           content:
             application/json:
               schema:
@@ -1166,6 +1280,17 @@ paths:
         правилом, что проверяет сам возврат: учитывает и проведённую ссылку, ещё не подтянутую
         синхронизацией, и незавершённые возвраты, поэтому может быть меньше
         `amount − total_refunded`.
+
+        ⚠️ Ссылка, выпущенная без `source_refund_id`, своего `operation_state` не имеет: пока она
+        не завершилась, её видно только в `qr_refund_sessions` и по `refund_in_progress: true`.
+        Когда деньги по ней ушли, синхронизация заводит по ней запись в `refunds`
+        (`operation_state: completed`).
+
+        ⛔ Деньги по счёту ещё могут уйти, пока у возврата `operation_state` — `processing` или
+        `buyer_link_active`, а у ссылки статус — `awaiting_customer`, `activating`, `awaiting_scan`,
+        `customer_identified` или `executing`. `uncertain` у возврата и `execution_uncertain` у
+        ссылки — деньги, возможно, уже ушли: не повторяйте. Отзыв ссылки во время окна скана окно
+        не прерывает.
       operationId: listInvoiceRefunds
       parameters:
         - name: id
@@ -1236,7 +1361,8 @@ paths:
 
         Фискальный чек Kaspi формирует только при подключённой Kaspi Кассе. Без Кассы ответ —
         `409 receipt_requires_kaspi_kassa`, отказ постоянный: повторять запрос по этому счёту
-        не нужно. В песочнице ответ приходит сразу, и ссылки
+        не нужно. Песочница поллит, как бой: первый запрос — `202`, следующий — `200`, а
+        отказ заказывается `POST /invoices/{id}/receipt/simulate`. Ссылки песочного чека
         ведут на тестовую страницу чека ApiPay: сумма, дата и позиции — из счёта, реквизиты
         продавца и фискальные данные — заглушки «Тест тест», `download_link` — её PDF. В бою
         ссылки всегда ведут на `receipt.kaspi.kz` — на хост песочных ссылок не завязывайтесь.
@@ -1356,7 +1482,7 @@ paths:
                         error_message: {type: string, nullable: true}
                         updated_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
         '400':
-          description: Организация не верифицирована
+          description: Боевая организация не верифицирована (песочная проходит)
           content:
             application/json:
               schema:
@@ -1371,20 +1497,34 @@ paths:
       summary: Симулировать статус счёта
       description: |
         **Только sandbox** (`is_sandbox=true` у счёта; в рабочем режиме недоступно
-        ни при каких условиях). Переводит sandbox-счёт из `pending` в
-        `paid`/`cancelled`/`expired`/`error` и шлёт вебхук `invoice.status_changed`,
-        либо симулирует транзиентное событие `qr_scanned` (только для QR-счетов:
-        статус остаётся `pending`, уходит вебхук `invoice.qr_scanned` с
-        `qr_substate: "scanned"`, повтор → `400 already_scanned`).
+        ни при каких условиях). Переводит песочный счёт по ТАБЛИЦЕ переходов — тех, что
+        бывают в бою — и шлёт вебхук `invoice.status_changed`:
 
-        Требование «счёт в `pending`» действует и для `qr_scanned`, и проверяется в
-        момент выполнения: счёт, отменённый между запросом и его обработкой, получает
-        `400 invalid_status_transition`, отметку сканирования не получает и вебхука
-        не порождает.
+        | из | в | что изображает |
+        |---|---|---|
+        | `pending` | `paid`, `cancelled`, `expired`, `error`, `qr_scanned` | исходы ожидания и скан |
+        | `cancelled`, `expired` | `paid` | поздняя оплата |
+        | `error` | `pending` | сверка нашла живую операцию (вебхук `pending`, как в бою) |
+        | `cancelling` | `cancelled`, `pending`, `error` | исходы отмены (возврат в `pending` — без вебхука) |
+        | `paid` | `qr_scanned` | скан пришёл после оплаты |
 
-        При `status=error` счёт получает `error_code: sandbox_simulated_error` и
+        Пары нет в таблице — `400 invalid_status_transition` с `current_status` и
+        `allowed_from`. Допустимость проверяется в момент выполнения.
+
+        `qr_scanned` — транзиентное событие только QR-счёта: статус не меняется, уходит вебхук
+        `invoice.qr_scanned` с `qr_substate: "scanned"`; не QR-счёт — `400 not_qr_invoice`,
+        повтор — `400 already_scanned`.
+
+        При `status=error` счёт получает `error_code` (по умолчанию
+        `sandbox_simulated_error`; можно задать любой код отказа телефонного счёта) и
         `error_message` (свой текст — через одноимённый параметр). Опционально можно
         задать `kaspi_source_type`/`kaspi_sale_type` (иначе выбираются случайно при `paid`).
+
+        Если счёт привязан к прогону проверки ИИ-агента, заявленному на другой исход, —
+        `409 run_event_mismatch` с `expected_event`, переход не исполнен. Прогон оплаты по ссылке
+        или листу (`static_qr`) привязан к попытке оплаты и принимает только её истечение
+        (`expired`, покупатель не успел — заказ должен остаться ждущим) и оплату (`paid`, в том
+        числе после `expired`); отмена и ошибка попытки — `409 run_event_mismatch`.
 
         Rate-limit: 60/мин на ключ (отдельный бакет, не расходует общий лимит 200/мин).
       operationId: simulateInvoiceStatus
@@ -1404,7 +1544,12 @@ paths:
               properties:
                 status:
                   type: string
-                  enum: [paid, cancelled, expired, error, qr_scanned]
+                  enum: [paid, cancelled, expired, error, qr_scanned, pending]
+                error_code:
+                  type: string
+                  nullable: true
+                  enum: [sandbox_simulated_error, client_not_found, kaspi_throttled, network_unavailable, session_transient, kaspi_error, unknown_error, organization_not_configured, kaspi_session_unavailable]
+                  description: Код при `status=error`; по умолчанию `sandbox_simulated_error`.
                 kaspi_source_type:
                   type: string
                   nullable: true
@@ -1444,6 +1589,16 @@ paths:
                   allowed_from: {type: array, items: {type: string}, example: [pending]}
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: run_event_mismatch — счёт привязан к прогону проверки, заявленному на другой исход; переход не исполнен (`expected_event` — заявленный).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: run_event_mismatch}
+                  message: {type: string}
+                  expected_event: {type: string, nullable: true, example: paid}
         '403':
           description: not_sandbox — симуляция доступна только для sandbox-счетов
           content:
@@ -1462,6 +1617,298 @@ paths:
               example:
                 error: not_found
                 message: Invoice not found
+  "/invoices/{invoice}/refunds/{refund}/simulate-resolve":
+    post:
+      tags: [Sandbox]
+      summary: Разобрать неизвестный исход возврата (sandbox)
+      description: |
+        Только песочный счёт песочной организации (иначе `403 not_sandbox` / `404`). То, что в
+        бою делает сотрудник в кабинете: возврат с неизвестным исходом (`operation_state:
+        uncertain`) получает `failed` с `refund_resolved_not_executed` (`not_executed`, вебхук
+        `invoice.refunded`) либо `refund_resolved_executed` и `resolved_refund_id` (`executed`:
+        песочница сама заводит строку исполненной операции, её `completed` и вебхук — как
+        синхронизация истории Kaspi в бою). Возврат с известным исходом — `409 refund_not_uncertain`.
+      operationId: simulateRefundResolve
+      parameters:
+        - {name: invoice, in: path, required: true, schema: {type: integer}}
+        - {name: refund, in: path, required: true, schema: {type: integer}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome: {type: string, enum: [executed, not_executed]}
+      responses:
+        '200': {description: "Исход разобран; тело — как у разбора в кабинете (возврат и итоги счёта)"}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '404': {description: "Счёт или возврат не найден"}
+        '409': {description: "refund_not_uncertain — исход возврата известен, разбирать нечего"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  "/invoices/{invoice}/refunds/{refund}/simulate-release-hold":
+    post:
+      tags: [Sandbox]
+      summary: Снять удержание возврата (sandbox)
+      description: |
+        Только песочный счёт песочной организации. То, что в бою делает сотрудник в кабинете:
+        снимает удержание до подтверждения покупателя (`hold_for_buyer_confirmation`), счёт
+        освобождается. Повтор — `200`. Удержания нет — `409 refund_not_held`; по возврату
+        живая ссылка покупателю — `409 refund_hold_link_active`.
+      operationId: simulateRefundReleaseHold
+      parameters:
+        - {name: invoice, in: path, required: true, schema: {type: integer}}
+        - {name: refund, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200': {description: "Удержание снято; тело — как у снятия в кабинете"}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '404': {description: "Счёт или возврат не найден"}
+        '409': {description: "refund_not_held / refund_hold_link_active"}
+  "/invoices/{id}/receipt/simulate":
+    post:
+      tags: [Sandbox]
+      summary: Заказать исход чека Kaspi по счёту (sandbox)
+      description: |
+        Только песочный счёт песочной организации (иначе `403 not_sandbox`). Задаёт, чем
+        ответит `GET /invoices/{id}/receipt`: `pending_then_ready` (по умолчанию) — первый
+        запрос `202`, следующий `200`; остальные — каждым запросом тот же отказ, что в бою:
+        `requires_kaspi_kassa` — `409 receipt_requires_kaspi_kassa`, `kaspi_session_expired` и
+        `kaspi_session_unavailable` — `409` с этим кодом, `rate_limited` —
+        `429 receipt_rate_limited`, `unavailable` — `503 receipt_unavailable` (оба с `Retry-After`).
+      operationId: simulateInvoiceReceipt
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome: {type: string, enum: [pending_then_ready, requires_kaspi_kassa, unavailable, rate_limited, kaspi_session_expired, kaspi_session_unavailable]}
+      responses:
+        '200':
+          description: Исход заказан
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invoice_id: {type: integer}
+                  outcome: {type: string}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '404': {description: "Счёт не найден"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  "/subscriptions/{subscription}/simulate-billing":
+    post:
+      tags: [Sandbox]
+      summary: Списание подписки с заказанным исходом (sandbox)
+      description: |
+        Только песочная подписка песочной организации (иначе `403 not_sandbox`). Выставляет
+        счёт подписки тем же путём, что ручное списание (строка истории, сдвиг расписания,
+        не дожидаясь `next_billing_at`), и доводит его до исхода, а подписка реагирует как в
+        бою: `paid` — `subscription.payment_succeeded`; `expired`, `cancelled`, `error` —
+        `subscription.payment_failed` (`error` — с `error_code`, по умолчанию `kaspi_error`);
+        `payer_refused` — явный отказ плательщика, подписка отменяется (`subscription.cancelled`,
+        `reason: payer_refused`); `payer_error` — `client_not_found`, доказанная вина плательщика.
+        Календарный автоплатёж, подписка без оставшихся оплат или с уже висящим счётом —
+        `409 subscription_simulation_not_applicable`; занятое выставление —
+        `409 subscription_busy`.
+      operationId: simulateSubscriptionBilling
+      parameters:
+        - {name: subscription, in: path, required: true, schema: {type: integer}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome: {type: string, enum: [paid, expired, cancelled, payer_refused, payer_error, error]}
+                error_code:
+                  type: string
+                  nullable: true
+                  description: Только при `outcome=error`.
+                  enum: [client_not_found, kaspi_throttled, network_unavailable, session_transient, kaspi_error, unknown_error, organization_not_configured, kaspi_session_unavailable]
+      responses:
+        '202':
+          description: Счёт выставлен, исход придёт вебхуком
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: {type: string, example: Subscription billing simulated}
+                  outcome: {type: string}
+                  invoice_id: {type: integer}
+                  subscription_invoice: {type: object, description: "Строка истории платежей подписки (форма `GET /subscriptions/{id}/invoices`)."}
+        '400': {description: "organization_required / subscription_not_active / sandbox_invoice_limit"}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '404': {description: "not_found"}
+        '409': {description: "subscription_simulation_not_applicable / subscription_busy"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  "/subscriptions/{subscription}/simulate":
+    post:
+      tags: [Sandbox]
+      summary: Событие песочной подписки (sandbox)
+      description: |
+        Только песочная подписка песочной организации. `grace_expired` — льготный период
+        кончился сейчас: подписка `expired`, вебхук `subscription.expired` (не в льготном
+        периоде — `409 subscription_simulation_not_applicable`). `busy_lock` — выставление
+        подписки занято на `duration_seconds` (не больше 120): пропуск периода отвечает
+        `409 subscription_busy`, плановое списание пропускает такт; занятость снимается сама.
+      operationId: simulateSubscriptionEvent
+      parameters:
+        - {name: subscription, in: path, required: true, schema: {type: integer}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event]
+              properties:
+                event: {type: string, enum: [grace_expired, busy_lock]}
+                duration_seconds: {type: integer, minimum: 1, maximum: 120, nullable: true, description: Только при `event=busy_lock`.}
+      responses:
+        '200':
+          description: Событие исполнено
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: {type: string}
+                  event: {type: string}
+                  subscription: {type: object, description: "Подписка (форма `GET /subscriptions/{id}`)."}
+                  locked_until: {type: string, format: date-time, description: Только у `busy_lock`.}
+        '400': {description: "organization_required"}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '404': {description: "not_found"}
+        '409': {description: "subscription_simulation_not_applicable / subscription_busy"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  "/static-qr/{id}/simulate":
+    post:
+      tags: [Sandbox]
+      summary: Оплата по печатному листу (sandbox)
+      description: |
+        Только песочная организация (иначе `403 not_sandbox`). Изображает покупателя у
+        печатного листа: счёт берётся тем же путём, что при нажатии на странице листа (живой
+        QR переиспользуется, потолки листа действуют), без Kaspi. `scanned` — QR листа
+        отсканирован (`invoice.qr_scanned`); `paid` / `cancelled` — последний открытый счёт листа
+        (или выпущенный сейчас) оплачен / отменён, витрина листа меняется как в бою. Лист сейчас
+        счёт не выставляет — `409 static_qr_unavailable` с машинной причиной в `reason`. Переход
+        не из таблицы — те же отказы, что у `simulate-status`.
+        `scanned` создаёт ПОПЫТКУ оплаты (счёт, как при нажатии покупателя «Оплатить»): её
+        `invoice.id` — в ответе, у счёта `static_qr_id` листа. Дальнейшие исходы этой попытки
+        (истечение, поздняя оплата) играются `POST /invoices/{id}/simulate-status` по этому
+        `invoice.id`. После истечения попытки повторный `scanned` создаёт новую; оплата новой, а
+        затем поздняя оплата истёкшей — вторая оплата того же заказа.
+      operationId: simulateStaticQr
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event]
+              properties:
+                event: {type: string, enum: [scanned, paid, cancelled]}
+      responses:
+        '200':
+          description: Событие исполнено
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: {type: string}
+                  event: {type: string}
+                  static_qr: {type: object, description: "Лист (форма `GET /static-qr/{id}`)."}
+                  invoice: {$ref: '#/components/schemas/Invoice'}
+        '400': {description: "organization_required / invalid_status_transition / not_qr_invoice / already_scanned"}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '404': {description: "Лист не найден"}
+        '409': {description: "static_qr_unavailable / run_event_mismatch"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  "/sandbox/state":
+    get:
+      tags: [Sandbox]
+      summary: Состояние песочной организации
+      description: |
+        Что песочница изображает поверх «всё в порядке» (схема `SandboxState`). Боевая
+        организация — `403 not_sandbox`.
+      operationId: getSandboxState
+      responses:
+        '200':
+          description: Состояние (все поля)
+          content: {application/json: {schema: {$ref: '#/components/schemas/SandboxState'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+    put:
+      tags: [Sandbox]
+      summary: Изменить состояние песочной организации
+      description: |
+        Меняет только переданные поля, остальные остаются прежними. Неизвестное поле —
+        `422` (а не молчание). Действует на все следующие запросы без `X-Sandbox-Scenario`.
+        Сбрасывается сменой режима и `POST /sandbox/clear`. Боевая организация —
+        `403 not_sandbox`.
+      operationId: updateSandboxState
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/SandboxState'}}}
+      responses:
+        '200':
+          description: Новое состояние (все поля)
+          content: {application/json: {schema: {$ref: '#/components/schemas/SandboxState'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  "/sandbox/clear":
+    post:
+      tags: [Sandbox]
+      summary: Очистить песочные данные
+      description: |
+        Удаляет песочные счета, подписки, возвраты, сессии возвратов и позиции каталога
+        организации, заказанные исходы и состояние песочницы — снимает потолок песочных
+        счетов (`sandbox_invoice_limit`). Та же очистка, что в кабинете. Слишком частая
+        очистка — `429 clear_cooldown` с `retry_after` (секунды); очистка уже идёт —
+        `409 operation_in_progress`; боевая организация — `403 not_sandbox`.
+      operationId: clearSandbox
+      responses:
+        '200':
+          description: Очищено
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleared: {type: boolean, example: true}
+                  message: {type: string, example: Sandbox data cleared}
+                  counts:
+                    type: object
+                    properties:
+                      invoices: {type: integer}
+                      subscriptions: {type: integer}
+                      refunds: {type: integer}
+                      catalog_items: {type: integer}
+                      refund_sessions: {type: integer}
+                      stopped_simulations: {type: integer}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: "not_sandbox"}
+        '409': {description: "operation_in_progress"}
+        '429': {description: "clear_cooldown — повторите через `retry_after` секунд"}
   "/static-qr":
     post:
       tags: [Static QR]
@@ -1818,8 +2265,8 @@ paths:
         **Песочница.** Чек зеркалит бой, те же отказы: позиция каталога даёт `issued` с
         реальными суммами, `ntin_missing` — `item_not_fiscal`. Kaspi не вызывается,
         фискальный документ не пишется. Поле `simulate` (только sandbox,
-        иначе `403 not_sandbox`) форсирует исход — так воспроизводятся `shift_closed`,
-        `item_not_fiscal`, `receipt_kaspi_error`. Вебхуки `receipt.issued`/`receipt.failed`
+        иначе `403 not_sandbox`) форсирует исход — так воспроизводятся все отказы чека
+        (`error_code` ниже) с боевыми текстами. Вебхуки `receipt.issued`/`receipt.failed`
         уходят при любом терминальном статусе чека.
       operationId: createReceipt
       requestBody:
@@ -1854,7 +2301,7 @@ paths:
                   required: [status]
                   properties:
                     status: {type: string, enum: [issued, failed], description: "issued — обычный sandbox-путь (корзина резолвится строго); failed — терминальный сбой."}
-                    error_code: {type: string, nullable: true, enum: [shift_closed, item_not_fiscal, receipt_kaspi_error], description: "Код при status=failed; по умолчанию receipt_kaspi_error."}
+                    error_code: {type: string, nullable: true, enum: [shift_closed, item_not_fiscal, receipt_kaspi_error, receipt_ofd_token_revoked, kaspi_session_invalid, kaspi_session_not_configured, rfo_missing, receipt_dispatch_error, receipt_unavailable], description: "Код при status=failed; по умолчанию receipt_kaspi_error."}
       responses:
         '202':
           description: Чек принят в обработку
@@ -2155,6 +2602,14 @@ paths:
                   type: integer
                   minimum: 1
                   description: "Отказанный возврат этого счёта с error_code=refund_rejected_by_kaspi или refund_requires_buyer_confirmation. Сервер восстанавливает сумму, товары и причину из него, игнорируя переданную reason. amount/return_items одновременно запрещены. Изменившийся план требует нового подтверждения мерчанта. ⚠️ Один отказанный возврат — одни деньги: если по нему уже есть ссылка завершённая, с неизвестным исходом или ещё живая, новая ссылка отклоняется (422, errors.source_refund_id). Источник снова годен, только когда все его ссылки истекли или не состоялись. Удержание до подтверждения покупателя (hold_for_buyer_confirmation у возврата) такую ссылку пропускает."
+                simulate:
+                  type: object
+                  nullable: true
+                  description: "**Только песочница.** Заказанный исход денежного выполнения ссылки (автопроведения либо `execute` без `simulate`): `failed` с кодом — тот же отказ, что в бою, `execution_uncertain` — неизвестный исход (`qr_refund.execution_uncertain`). Без поля — успех. У боевой организации поле игнорируется: ссылка выпускается настоящая, и после подтверждения покупателя уходят настоящие деньги."
+                  required: [status]
+                  properties:
+                    status: {type: string, enum: [completed, failed, execution_uncertain]}
+                    error_code: {type: string, nullable: true, enum: [operation_not_returnable, refund_amount_exceeds_available, qr_refund_expired, refund_insufficient_funds, kaspi_error, qr_refund_execution_disabled, qr_refund_execution_context_unavailable, kaspi_session_invalid, qr_refund_actor_no_longer_authorized, qr_refund_execution_attempts_exhausted, qr_refund_execution_result_unavailable]}
       responses:
         '201':
           description: Ссылка выпущена
@@ -2247,7 +2702,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '429': {$ref: '#/components/responses/RateLimitWindow'}
         '403': {$ref: '#/components/responses/TariffInactive'}
-        '404': {description: not_found}
+        '404': {description: "not_found"}
         '409': {description: "qr_refund_not_identified / qr_refund_expired / qr_refund_completed"}
   "/qr-refunds/{id}/operations/{ref}":
     get:
@@ -2264,7 +2719,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '429': {$ref: '#/components/responses/RateLimitWindow'}
         '403': {$ref: '#/components/responses/TariffInactive'}
-        '404': {description: not_found}
+        '404': {description: "not_found"}
         '409': {description: "qr_refund_not_identified / qr_refund_expired / qr_refund_completed"}
         '422': {description: "operation_not_returnable (в т.ч. невалидный ref)"}
   "/qr-refunds/{id}/execute":
@@ -2333,11 +2788,11 @@ paths:
             `qr_refund_execution_uncertain` — со снимком сессии;
             `qr_refund_execution_result_unavailable` — без снимка.
           content: {application/json: {schema: {$ref: '#/components/schemas/QrRefundExecutionAccepted'}}}
-        '400': {description: organization_not_verified}
+        '400': {description: "organization_not_verified"}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '429': {$ref: '#/components/responses/RateLimitWindow'}
         '403': {description: "tariff_inactive / qr_refund_actor_no_longer_authorized / not_sandbox (поле simulate вне песочницы)"}
-        '404': {description: not_found}
+        '404': {description: "not_found"}
         '409': {description: "qr_refund_not_identified / qr_refund_expired / qr_refund_completed / qr_refund_execution_in_progress / qr_refund_execution_uncertain / qr_refund_execution_attempts_exhausted (исчерпан лимит денежных попыток сессии: Kaspi не вызывался, нужна новая сессия)"}
         '422': {description: "operation_not_returnable / refund_amount_exceeds_available / partial_refund_requires_return_items / refund_insufficient_funds (доказанный отказ Kaspi: деньги не двигались, сессия остаётся customer_identified, повтор допустим, пока жив срок подтверждения покупателя)"}
         '502': {description: "kaspi_error — Kaspi недоступен, ответил неразбираемо на ревалидации ДО отправки денег либо ДОКАЗАННО отказал в возврате. Деньги не двигались, сессия остаётся customer_identified, повтор допустим"}
@@ -2354,11 +2809,23 @@ paths:
   "/qr-refunds/{id}/simulate":
     post:
       tags: [Sandbox]
-      summary: Симулировать переход QR-возврата (sandbox)
+      summary: Симулировать событие QR-возврата (sandbox)
       description: |
-        Только sandbox (боевая сессия → `403 not_sandbox`). `identified` — клиент
-        отсканировал (client_name = "Иван И."); `expired` — QR просрочен. «Не отсканировал,
-        ждёт» = начальное `awaiting_scan` (просто `GET /qr-refunds/{id}`, без simulate).
+        Только sandbox (боевая сессия → `403 not_sandbox`). Ссылка покупателю начинает, как в
+        бою, с `awaiting_customer`; немедленный старт (`POST /qr-refunds`) — с `awaiting_scan`.
+
+        | `event` | переход |
+        |---|---|
+        | `activated` | `awaiting_customer → awaiting_scan` — покупатель нажал «вернуть» |
+        | `identified` | `awaiting_scan → customer_identified` (`client_name` = «Иван И.»); у ссылки под счёт запускает автопроведение |
+        | `expired` | окно скана закрыто: ссылка, у которой остались окна, возвращается в `awaiting_customer` (`error_code: qr_return_scan_timeout`, вебхука нет), иначе `expired`; из `customer_identified` — `expired` |
+        | `link_expired` | `awaiting_customer → expired` (`qr_refund_link_expired`) без суточного ожидания |
+        | `failed` + `error_code: qr_refund_activation_failed` | `awaiting_customer`/`activating → failed` |
+        | `failed` + другой код, `execution_uncertain` | перехода нет — заказ исхода СЛЕДУЮЩЕГО денежного выполнения (как `simulate` в `execute`) |
+
+        Событие, которое из текущего состояния не исполняется, — `409
+        qr_refund_simulation_not_applicable`; занятая сессия — `409 refund_effect_in_progress`.
+        В обоих случаях переход НЕ исполнен.
       operationId: simulateQrRefund
       parameters:
         - {name: id, in: path, required: true, schema: {type: integer}}
@@ -2370,14 +2837,21 @@ paths:
               type: object
               required: [event]
               properties:
-                event: {type: string, enum: [identified, expired]}
+                event: {type: string, enum: [activated, identified, expired, link_expired, failed, execution_uncertain]}
+                error_code:
+                  type: string
+                  nullable: true
+                  description: Обязателен при `event=failed` и запрещён при остальных.
+                  enum: [qr_refund_activation_failed, operation_not_returnable, refund_amount_exceeds_available, qr_refund_expired, refund_insufficient_funds, kaspi_error, qr_refund_execution_disabled, qr_refund_execution_context_unavailable, kaspi_session_invalid, qr_refund_actor_no_longer_authorized, qr_refund_execution_attempts_exhausted, qr_refund_execution_result_unavailable]
       responses:
         '200':
           description: Снимок сессии
           content: {application/json: {schema: {$ref: '#/components/schemas/QrRefundSession'}}}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: not_sandbox}
-        '404': {description: not_found}
+        '403': {description: "not_sandbox"}
+        '404': {description: "not_found"}
+        '409': {description: "qr_refund_simulation_not_applicable — событие из текущего состояния не исполняется; refund_effect_in_progress — по сессии идёт другая операция, повторите через `retry_after_seconds`"}
+        '422': {$ref: '#/components/responses/ValidationError'}
   "/refunds":
     get:
       tags: [Refunds]
@@ -2459,8 +2933,15 @@ paths:
         Read-only список доставок вебхуков своей организации — для верификации,
         что вебхук по счёту/событию реально ушёл и что ответил приёмник (в т.ч.
         для автономных агент-циклов в sandbox). Пагинация — **плоская**
-        `{current_page, data, total}`. Ре-отправка (retry) здесь недоступна —
-        только в кабинете.
+        `{current_page, data, total}`. Боевая ре-отправка — только в кабинете; в
+        песочнице неудачную доставку повторяет `POST /webhook-logs/{id}/retry`.
+
+        В журнале есть строки всех событий организации, кроме `catalog.item_processed`
+        (у каталога свой журнал `/catalog/webhook-logs`): счета, возвраты, `qr_refund.*`,
+        `subscription.*`, `receipt.*`, `cashbox.*`, `webhook.test`. Событие, которое не
+        отправлено из-за паузы отправки ключа, лежит строкой `status: skipped`,
+        `error_message: circuit_open` — попытки не было; состояние паузы —
+        `GET /webhook-logs/delivery-state`.
       operationId: listWebhookLogs
       parameters:
         - name: invoice_id
@@ -2470,15 +2951,15 @@ paths:
             type: integer
         - name: event
           in: query
-          description: Фильтр по событию (например `invoice.status_changed`, `invoice.qr_scanned`, `invoice.refunded`).
+          description: Фильтр по событию (например `invoice.status_changed`, `invoice.refunded`, `qr_refund.completed`, `subscription.payment_succeeded`, `receipt.issued`).
           schema:
             type: string
         - name: status
           in: query
-          description: Статус доставки.
+          description: "Статус доставки: `skipped` — событие не отправлено из-за паузы отправки ключа."
           schema:
             type: string
-            enum: [success, failed]
+            enum: [success, failed, skipped]
         - name: date_from
           in: query
           schema:
@@ -2535,6 +3016,53 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '422':
           $ref: '#/components/responses/ValidationError'
+  "/webhook-logs/delivery-state":
+    get:
+      tags: [Webhooks]
+      summary: Пауза отправки вебхуков своего ключа
+      description: |
+        Состояние отправки вебхуков ключа запроса. После серии неудачных доставок подряд
+        отправка ставится на паузу (`state: paused`); пауза снимается сама после
+        `paused_until`. При затянувшихся отказах отправка отключается (`state: disabled`) —
+        включает её смена адреса или секрета (в том числе выпуск нового секрета) либо
+        успешная проверка вебхука («Проверить уведомления» в кабинете или
+        `POST /webhook-test`); те же действия снимают и паузу досрочно. Пока
+        `state` не `open`, события счёта (`invoice.status_changed`, `invoice.qr_scanned`), возвратов (`invoice.refunded`) и `qr_refund.*` этого ключа не
+        отправляются и не откладываются: каждое ложится в журнал строкой `status: skipped`.
+        `subscription.*`, `receipt.*`, `cashbox.*` и `catalog.item_processed` паузу не соблюдают и уходят как обычно.
+        Счётчик обнуляет успешная доставка события счёта, возврата, `qr_refund.*` или
+        `cashbox.*`; успех `subscription.*` и `receipt.*` его не трогает. У песочной организации ответ — про песочную
+        отправку: она считается отдельно от боевой.
+
+        Отвечает только про ключ запроса: `api_key_id` необязателен, любой другой номер —
+        `404`.
+      operationId: getWebhookDeliveryState
+      parameters:
+        - name: api_key_id
+          in: query
+          required: false
+          description: ID ключа запроса (по умолчанию — он же).
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Состояние отправки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Ключ не ключ запроса
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: {type: string, example: Not found}
+        '422':
+          $ref: '#/components/responses/ValidationError'
   "/webhook-logs/{id}":
     get:
       tags: [Webhooks]
@@ -2566,6 +3094,108 @@ paths:
                 type: object
                 properties:
                   message: {type: string, example: Not found}
+  "/webhook-logs/{id}/retry":
+    post:
+      tags: [Sandbox]
+      summary: Повторить неудачную доставку (sandbox)
+      description: |
+        **Только песочница** (боевая организация → `403 not_sandbox`; боевая ре-отправка —
+        в кабинете). Повторяет строку `status: failed` тем же телом, подписывая его текущим
+        секретом и отправляя на ТЕКУЩИЙ адрес вебхука ключа — так проверяется починка
+        адреса или обработчика. Строку `skipped` (пауза отправки) и успешную доставку не
+        повторяет (`422 webhook_log_not_retryable`). На паузе отправки ключа отказывает
+        `409 webhook_circuit_open`. Частота повторов ограничена: `429 request_rate_limited`
+        с `Retry-After`. Новая строка журнала ссылается `retry_of` на исходную доставку
+        цепочки повторов.
+      operationId: retryWebhookLog
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200':
+          description: Повтор выполнен; исход — в `status` новой строки журнала
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  new_log_id: {type: integer, example: 912}
+                  status: {type: string, enum: [success, failed]}
+                  retry_of: {type: integer, description: "ID исходной доставки цепочки.", example: 905}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: not_sandbox — организация не в песочнице
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '404':
+          description: Строка не найдена (или принадлежит другой организации)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: {type: string, example: Not found}
+        '409':
+          description: |
+            `webhook_circuit_open` — отправка вебхуков ключа на паузе (см.
+            `GET /webhook-logs/delivery-state`); `sandbox_effect_in_progress` — организация
+            сейчас меняет режим, повторите через `retry_after_seconds`.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '422':
+          description: |
+            `webhook_log_not_retryable` — строка не `failed` (в т.ч. `skipped`), у ключа нет
+            действующего одобренного адреса вебхука, ключ отключён или событие не
+            повторяется.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '429':
+          $ref: '#/components/responses/RateLimitWindow'
+  "/webhook-test":
+    post:
+      tags: [Webhooks]
+      summary: Тестовый вебхук на адрес своего ключа
+      description: |
+        Синхронно отправляет `webhook.test` на `webhook_url` ключа запроса — то же, что
+        кнопка «Проверить уведомления» в кабинете: строка в журнале, ответ с исходом.
+
+        `signature` — форма подписи: `valid` (по умолчанию, как у любой доставки),
+        `invalid` (подпись чужим секретом) или `missing` (без `X-Webhook-Signature`).
+        Две последние проверяют, что ваш обработчик ОТКАЗЫВАЕТ поддельному и
+        неподписанному телу, и доступны **только в песочнице** (боевая организация →
+        `403 not_sandbox`).
+      operationId: sendWebhookTest
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                signature: {type: string, enum: [valid, invalid, missing], default: valid}
+      responses:
+        '200':
+          description: |
+            Исход доставки. Наш HTTP — 200 при любом ответе получателя: `success` и
+            `outcome` описывают ЕГО ответ (`ok`, `no_url`, `pending_review`, `http_error`,
+            `blocked_redirect`, `ssrf_blocked`, `transport_error`, `payload_error`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: {type: boolean}
+                  outcome: {type: string, example: ok}
+                  status_code: {type: integer, nullable: true, example: 200}
+                  response: {type: string, nullable: true, description: "Тело ответа получателя (обрезано)."}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: not_sandbox — `signature` ≠ `valid` вне песочницы
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '409':
+          description: webhook_pending_review — адрес вебхука на проверке (поле `error_code`)
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimitWindow'
   "/request-logs":
     get:
       tags: [Request Logs]
@@ -3797,9 +4427,10 @@ paths:
       tags: [Catalog]
       summary: Создать товары каталога
       description: |
-        Создаёт 1–100 товаров пакетно. Ответ всегда `202` — «принято»: в песочнице позиция
+        Создаёт 1–100 товаров пакетно. Ответ `202` — «принято»: в песочнице позиция
         возвращается уже активной, в бою она получает статус `pending` и уезжает в Kaspi
-        фоновой обработкой. `external_ref` — клиентская ссылка (например код 1С) для
+        фоновой обработкой. Точный повтор запроса с тем же `Idempotency-Key` отвечает `200`
+        с `idempotent_replay: true` и не выполняется снова. `external_ref` — клиентская ссылка (например код 1С) для
         последующего точечного чтения (`?external_refs[]=`).
 
         **Валидация per-item lenient.** Каждая позиция валидируется отдельно: валидные
@@ -3917,6 +4548,15 @@ paths:
                       gtin: {type: string, nullable: true, maxLength: 50, description: "GTIN кандидата Нацкаталога (GS1)."}
                       external_ref: {type: string, nullable: true, maxLength: 191, description: "Клиентская ссылка (1С), UNIQUE в пределах боевой/песочной оси организации."}
                       from_catalog: {type: boolean, nullable: true, default: false}
+                      simulate:
+                        type: object
+                        nullable: true
+                        description: "**Только песочница** (у боевой организации поле не проверяется и ничего не значит — позиция заводится как обычно). Заказанный исход создания позиции: `active` или `failed` с боевым кодом и текстом; `delay_seconds` держит позицию `pending` до исхода. Итог — вебхук `catalog.item_processed`."
+                        required: [status]
+                        properties:
+                          status: {type: string, enum: [active, failed]}
+                          error_code: {type: string, nullable: true, enum: [catalog_create_unresolved, catalog_create_blocked], description: "По умолчанию catalog_create_unresolved."}
+                          delay_seconds: {type: integer, minimum: 0, maximum: 120, nullable: true}
       responses:
         '200':
           description: "Точный повтор Idempotency-Key: запрос не выполнен снова"
@@ -3929,7 +4569,7 @@ paths:
                   rejected: {type: array, items: {$ref: '#/components/schemas/RejectedCatalogItem'}, example: []}
                   idempotent_replay: {type: boolean, example: true}
         '202':
-          description: "Принято: валидные товары созданы (невалидные — в rejected[]). В бою status=pending, operation=create до фонового подтверждения; в песочнице операция уже закрыта (status=active, operation=null)."
+          description: "Принято: валидные товары созданы (невалидные — в rejected[]). В бою status=pending, operation=create до фонового подтверждения; в песочнице операция уже закрыта (status=active, operation=null), а с `items[].simulate` — как в бою, до заказанного исхода."
           content:
             application/json:
               schema:
@@ -4535,11 +5175,14 @@ paths:
 
         **Лимиты:** 60/мин + 10 000/сутки на ключ; 200/мин + 20 000/сутки на организацию;
         10/мин на одного кассира. При троттле Kaspi — `429 scope=kaspi_throttle`.
-        Дождитесь времени из `retry_after_seconds` (заголовок `Retry-After`) и повторите.
+        Дождитесь времени из `retry_after` (секунды; заголовок `Retry-After`) и повторите.
 
         ⚠️ **Запрещён массовый перебор** (enumeration). При злоупотреблении ключ
         деактивируется без предупреждения.
         Sandbox: `87770000001` → true/"Иван И.", `87770000002` → false, иначе false.
+        Магические номера песочницы воспроизводят отказы Kaspi: `87770100003` →
+        `429 scope=kaspi_throttle`, `87770100004`–`87770100009` → `503`. У боевой организации
+        это обычные номера.
       operationId: checkClient
       requestBody:
         required: true
@@ -4583,8 +5226,9 @@ paths:
           description: |
             Превышен лимит. Два РАЗНЫХ источника, тела похожи, но различаются полем `scope`:
 
-            * **наш лимитер** — `scope` одно из `minute`, `day`, `org_minute`, `org_day`,
-              `cashier_minute`; список открыт, неизвестное значение обрабатывайте общей веткой.
+            * **наш лимитер** — `scope` одно из `minute`, `day` (ключ), `org_minute`,
+              `org_day` (организация), `kaspi_user` (кассир), `ip_minute`, `ip_day` (источник
+              запроса); список открыт, неизвестное значение обрабатывайте общей веткой.
               ⚠️ Часть окон СУТОЧНЫЕ (`*_day`) — ориентируйтесь на `retry_after`, а не на
               «подожду минуту»;
             * **троттл Kaspi** — `scope: kaspi_throttle` (сработал circuit-breaker).
@@ -5308,9 +5952,9 @@ paths:
         '200':
           description: Сводка по наличным
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxDaySummary'}}}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: tariff_inactive}
+        '403': {description: "tariff_inactive"}
         '409': {description: "kaspi_session_not_configured / kaspi_session_expired (кассир есть, а сессии нет — переавторизуйте кассира) / rfo_missing"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -5337,13 +5981,13 @@ paths:
         '200':
           description: Результат сверки
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxReconciliation'}}}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: tariff_inactive}
+        '403': {description: "tariff_inactive"}
         '404': {description: "cashbox_shift_not_found — смена с таким id недоступна (не листали GET /cashbox/shifts). Организация без кассы Kaspi (ОФД) приходит сюда же: смен ей не отдаёт и сам листинг"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
-        '503': {description: cashbox_unavailable}
+        '503': {description: "cashbox_unavailable"}
   "/cashbox/shifts":
     get:
       tags: [Cashbox]
@@ -5361,13 +6005,13 @@ paths:
         '200':
           description: Список смен
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxShiftList'}}}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: tariff_inactive}
+        '403': {description: "tariff_inactive"}
         '409': {description: "kaspi_session_not_configured / kaspi_session_expired (кассир есть, а сессии нет — переавторизуйте кассира) / cashbox_kkm_unknown"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
-        '503': {description: cashbox_unavailable}
+        '503': {description: "cashbox_unavailable"}
   "/cashbox/shifts/close":
     post:
       tags: [Cashbox]
@@ -5395,6 +6039,14 @@ paths:
                 client_operation_id: {type: string, minLength: 8, maxLength: 191, pattern: '^[A-Za-z0-9._:-]+$', description: "Ключ идемпотентности (уникален на организацию)."}
                 shift_number: {type: integer, description: "Номер смены Kaspi для закрытия."}
                 kaspi_connection_id: {type: integer, nullable: true}
+                simulate:
+                  type: object
+                  nullable: true
+                  description: "**Только песочница** (у боевой организации поле игнорируется — смена закрывается по-настоящему). Заказанный отказ закрытия: операция становится `failed` с кодом, приходит вебхук `cashbox.shift_close_failed`; ключ, как в бою, не освобождается."
+                  required: [status]
+                  properties:
+                    status: {type: string, enum: [failed]}
+                    error_code: {type: string, nullable: true, enum: [cashbox_no_open_shift, cashbox_busy, cashbox_operation_failed, cashbox_unavailable], description: "По умолчанию cashbox_operation_failed."}
       responses:
         '202':
           description: Закрытие принято в обработку
@@ -5407,9 +6059,9 @@ paths:
                   status: {type: string, example: pending}
                   client_operation_id: {type: string}
                   poll_url: {type: string, description: "GET-адрес статуса операции (…/cashbox/operations/{id})."}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: tariff_inactive}
+        '403': {description: "tariff_inactive"}
         '409': {description: "kaspi_session_not_configured / cashbox_kkm_unknown / cashbox_duplicate_operation"}
         '422': {$ref: '#/components/responses/ValidationError'}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
@@ -5431,7 +6083,7 @@ paths:
         '200':
           description: Статус операции
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxOperation'}}}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {description: "cashbox_operation_not_found (в т.ч. чужой id)"}
   "/cashbox/shifts/{shift}/report":
@@ -5459,10 +6111,10 @@ paths:
                 properties:
                   url: {type: string}
                   expires_at: {type: string, format: date-time}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: tariff_inactive}
-        '409': {description: kaspi_session_not_configured}
+        '403': {description: "tariff_inactive"}
+        '409': {description: "kaspi_session_not_configured"}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
         '503': {description: "cashbox_report_unavailable — не удалось получить отчёт"}
   "/cashbox/settings":
@@ -5490,9 +6142,9 @@ paths:
                   auto_close_shift: {type: boolean, nullable: true}
                   auto_withdrawal: {type: boolean, nullable: true}
                   kaspi_connection_id: {type: integer, nullable: true}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: tariff_inactive}
+        '403': {description: "tariff_inactive"}
         '429': {description: "Превышен отдельный лимит кассовых запросов (30/мин)"}
   "/cashbox/settings/auto-close":
     put:
@@ -5515,7 +6167,7 @@ paths:
         '200':
           description: Результат переключения
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: "cashbox_settings_owner_key_required / tariff_inactive"}
         '409': {description: "kaspi_session_not_configured / rfo_missing"}
@@ -5540,7 +6192,7 @@ paths:
         '200':
           description: Результат переключения
           content: {application/json: {schema: {$ref: '#/components/schemas/CashboxToggleResult'}}}
-        '400': {description: organization_required}
+        '400': {description: "organization_required"}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: "cashbox_settings_owner_key_required / tariff_inactive"}
         '409': {description: "kaspi_session_not_configured / rfo_missing"}
@@ -6155,14 +6807,19 @@ components:
           type: object
           nullable: true
           description: |
-            **Только песочница** (боевая → `403 not_sandbox`). Форсирует исход возврата.
+            **Только песочница** (боевая → `403 not_sandbox`). Форсирует исход возврата:
+            `failed` — отказ тем же HTTP и кодом, что в бою (`refund_insufficient_funds` и
+            `kaspi_error` — доказанный отказ Kaspi, сессия остаётся `customer_identified`);
+            `execution_uncertain` — `202 qr_refund_execution_uncertain` со снимком в статусе
+            `execution_uncertain`, вебхук `qr_refund.execution_uncertain`;
+            `qr_refund_execution_result_unavailable` — `202` без снимка.
           required: [status]
           properties:
-            status: {type: string, enum: [completed, failed]}
+            status: {type: string, enum: [completed, failed, execution_uncertain]}
             error_code:
               type: string
               nullable: true
-              enum: [operation_not_returnable, refund_amount_exceeds_available, qr_refund_expired, refund_insufficient_funds, kaspi_error]
+              enum: [operation_not_returnable, refund_amount_exceeds_available, qr_refund_expired, refund_insufficient_funds, kaspi_error, qr_refund_execution_disabled, qr_refund_execution_context_unavailable, kaspi_session_invalid, qr_refund_actor_no_longer_authorized, qr_refund_execution_attempts_exhausted, qr_refund_execution_result_unavailable]
     QrRefundExecuted:
       type: object
       properties:
@@ -6364,6 +7021,30 @@ components:
           minimum: 1
           maximum: 99
           description: Глобальная скидка на весь чек (%).
+        simulate:
+          type: object
+          nullable: true
+          description: |
+            **Только песочница.** Заказанный исход счёта. Без поля исход задаёт номер покупателя:
+            магические номера дают `error` с кодом — `87770000002` `client_not_found`,
+            `87770100003` `kaspi_throttled`, `87770100004` `network_unavailable`,
+            `87770100005` `session_transient`, `87770100006` `kaspi_error`,
+            `87770100007` `unknown_error`, `87770100008` `organization_not_configured`,
+            `87770100009` `kaspi_session_unavailable`; остальные номера — `pending`.
+            Неверное поле — `422`. У боевой организации поле игнорируется целиком — счёт
+            уходит покупателю по-настоящему, ответ лишь помечается
+            `X-Sandbox-Scenario-Ignored: live_organization`.
+            ⛔ У боевой организации магический номер — обычный номер: счёт уйдёт реальному
+            абоненту. Не используйте эти номера вне песочницы.
+          required: [status]
+          properties:
+            status: {type: string, enum: [pending, error], description: "Исход выставления счёта."}
+            error_code:
+              type: string
+              nullable: true
+              enum: [client_not_found, kaspi_throttled, network_unavailable, session_transient, kaspi_error, unknown_error, organization_not_configured, kaspi_session_unavailable]
+              description: "Код при `status: error`; по умолчанию `kaspi_error`. Текст — боевой."
+            delay_seconds: {type: integer, minimum: 0, maximum: 120, nullable: true, description: "Сколько секунд счёт держится в `processing` до исхода."}
     CreateQrInvoiceRequest:
       type: object
       description: |
@@ -6416,9 +7097,21 @@ components:
         kaspi_connection_id:
           type: integer
         simulate:
-          type: string
-          enum: [paid, cancelled, expired]
-          description: Только sandbox — сразу перевести созданный QR-счёт в статус.
+          description: |
+            **Только песочница.** Строка `paid|cancelled|expired` — сразу перевести созданный
+            QR-счёт в статус. Объект `{status: error, error_code}` — синхронный отказ ТЕМИ ЖЕ
+            ответами, что в бою, и вебхук `error`: `kaspi_error` (по умолчанию) — `502`,
+            `qr_render_failed` — `500`, `kaspi_session_invalid` — `503`. Без `simulate` песочный
+            QR истекает сам после `qr_expires_at` (статус `expired` и вебхук). У боевой
+            организации строка игнорируется, объект отклоняется `422` прежним правилом.
+            Со `static: true` поле запрещено.
+          oneOf:
+            - {type: string, enum: [paid, cancelled, expired]}
+            - type: object
+              required: [status]
+              properties:
+                status: {type: string, enum: [error]}
+                error_code: {type: string, nullable: true, enum: [kaspi_error, qr_render_failed, kaspi_session_invalid]}
         cart_items:
           type: array
           minItems: 1
@@ -6760,7 +7453,8 @@ components:
       properties:
         id: {type: integer, example: 42}
         amount: {type: string, example: "15000.00"}
-        phone_number: {type: string, example: "87001234567"}
+        phone: {type: string, nullable: true, description: "Номер плательщика (в запросе создания — `phone_number`). `null` у QR-счёта без номера.", example: "87001234567"}
+        is_recurring: {type: boolean, description: "Счёт выставлен подпиской.", example: false}
         description: {type: string, nullable: true}
         external_order_id: {type: string, nullable: true}
         status: {$ref: '#/components/schemas/InvoiceStatus'}
@@ -6774,15 +7468,25 @@ components:
         is_fully_refunded: {type: boolean, example: false}
         kaspi_invoice_id: {type: string, nullable: true, example: "13234689513"}
         kaspi_qr_link: {type: string, nullable: true, description: "QR-ссылка Kaspi на этот счёт — нарисуйте из неё QR-код или откройте на телефоне покупателя. Вычисляется из kaspi_invoice_id, не хранится. `null`, пока Kaspi не присвоил идентификатор (статус `processing`), и всегда `null` в песочнице. Не путать с `qr_token_url` — то отдельный механизм QR-token счетов.", example: "https://kaspi.kz/qr/pay?tranId=QR13234689513"}
+        kaspi_source_type: {type: string, nullable: true, enum: [GOLD, RED, LOAN, BUSINESSACCOUNT, BANKINTEGRATIONACCOUNT, null], description: "Источник оплаты; обычно появляется после оплаты."}
+        kaspi_sale_type: {type: string, nullable: true, enum: [Remote, QR, Static, Restaurant, null]}
+        is_qr_token: {type: boolean, description: "`true` — QR-счёт (`POST /invoices/qr`).", example: false}
+        qr_token_url: {type: string, nullable: true, description: "Ссылка QR-token Kaspi (только у QR-счёта)."}
+        qr_image_url: {type: string, nullable: true, description: "Абсолютный адрес картинки QR (с 7.0.0); `null` — картинки нет. Та же формула, что в ответе `POST /invoices/qr`.", example: "https://apipay.kz/storage/qr/abc.png"}
+        qr_image_path: {type: string, nullable: true, description: "Относительный путь картинки QR — оставлен для совместимости; используйте `qr_image_url`."}
+        qr_expires_at: {type: string, format: date-time, nullable: true}
+        qr_scanned_at: {type: string, format: date-time, nullable: true, description: "Когда покупатель отсканировал QR."}
         error_message: {type: string, nullable: true}
         error_code: {$ref: '#/components/schemas/ErrorCode'}
+        last_kaspi_error_code: {type: integer, nullable: true, description: "Числовой код последнего ответа Kaspi по счёту (диагностика повторов выставления). Ветвитесь по `error_code`, а не по нему."}
+        last_kaspi_error_message: {type: string, nullable: true, description: "Текст последнего ответа Kaspi по счёту (диагностика)."}
         items:
           type: array
           items:
             $ref: '#/components/schemas/InvoiceItem'
-        subtotal: {type: string, description: "Только при наличии скидки."}
-        discount_sum: {type: string, description: "Только при наличии скидки."}
-        discount_percentage: {type: string, description: "Только если передан."}
+        subtotal: {type: string, nullable: true, description: "Сумма до скидки; `null` — скидки и корзины нет."}
+        discount_sum: {type: string, nullable: true, description: "`null` — скидки нет."}
+        discount_percentage: {type: string, nullable: true, description: "Строка `\"10.00\"`; `null`, если не передан."}
         paid_at: {type: string, format: date-time, nullable: true}
         created_at: {type: string, format: date-time, example: "2026-01-10T12:00:00+00:00"}
     InvoiceReceipt:
@@ -6869,6 +7573,27 @@ components:
             `refund_rejected_by_kaspi` / `refund_requires_buyer_confirmation` счёт остаётся занятым,
             пока по этому возврату не выпущена и не завершена ссылка покупателю или пока сотрудник
             не снимет удержание в кабинете (см. операцию). Входит в сравнение «та же просьба».
+            ⭐ Интеграциям — всегда `true` и запасной путь: на отказ одним из этих двух кодов
+            (или `operation_state: awaiting_buyer` в `GET /invoices/{id}/refunds`) приложение само
+            выпускает ссылку `POST /qr-refunds/links` с `invoice_id` и `source_refund_id` этого
+            возврата. На прочие отказы ссылку не выпускайте: она не поможет.
+        simulate:
+          type: object
+          nullable: true
+          description: |
+            **Только песочный счёт.** Заказанный исход возврата. `failed` без кода — `kaspi_error`.
+            ⛔ У боевого счёта поле не читается вовсе, без отказа: возврат уходит настоящими
+            деньгами.
+            `refund_requires_buyer_confirmation` и `refund_rejected_by_kaspi` с
+            `hold_for_buyer_confirmation: true` держат счёт, как в бою. Входит в сравнение
+            «та же просьба» только у песочного счёта.
+          required: [status]
+          properties:
+            status: {type: string, enum: [completed, failed, uncertain]}
+            error_code:
+              type: string
+              nullable: true
+              enum: [refund_requires_buyer_confirmation, refund_rejected_by_kaspi, refund_insufficient_funds, refund_window_expired, kaspi_throttled, network_unavailable, kaspi_error, unknown_error]
     RefundShort:
       type: object
       properties:
@@ -6922,7 +7647,8 @@ components:
             `processing` — в очереди или выполняется; `completed` — деньги вернулись (прямым
             возвратом или ссылкой по нему); `failed` — отказ, деньги не двигались;
             `awaiting_buyer` — Kaspi требует покупателя (`refund_rejected_by_kaspi` /
-            `refund_requires_buyer_confirmation`), а ссылки по возврату ещё нет или все истекли;
+            `refund_requires_buyer_confirmation`), а ссылки по возврату ещё нет или все истекли
+            либо не состоялись;
             `buyer_link_active` — ссылка по нему выпущена и жива; `uncertain` — исход не доказан,
             деньги, возможно, ушли: повторять нельзя, разбирает сотрудник в кабинете; `released` —
             удержание снято, а завершённой, неразобранной или живой ссылки по возврату нет.
@@ -6995,17 +7721,82 @@ components:
         id: {type: integer, example: 1}
         api_key_id: {type: integer, nullable: true, example: 1}
         api_key_name: {type: string, nullable: true, example: Production}
-        invoice_id: {type: integer, nullable: true, example: 42}
-        event: {type: string, nullable: true, description: "Событие вебхука (invoice.status_changed / invoice.qr_scanned / invoice.refunded / ...).", example: invoice.status_changed}
+        invoice_id: {type: integer, nullable: true, description: "Счёт события. У `qr_refund.*` — счёт, под который выпущена ссылка; у `subscription.payment_succeeded` и `subscription.payment_failed` — счёт списания (у прочих `subscription.*` — `null`); у `receipt.*`, `cashbox.*`, `webhook.test` — `null`.", example: 42}
+        event: {type: string, nullable: true, description: "Событие вебхука: `invoice.*`, `qr_refund.*`, `subscription.*`, `receipt.*`, `cashbox.*`, `webhook.test`. `null` — старая строка.", example: invoice.status_changed}
         url: {type: string, example: "https://example.com/webhook"}
         request_body: {type: string, description: Полный отправленный payload (JSON-строка).}
         response_body: {type: string, nullable: true, description: Ответ приёмника (обрезан до 4096 байт).}
         response_status: {type: integer, nullable: true, example: 200}
-        status: {type: string, enum: [success, failed], description: Итог доставки этой попытки.}
+        status: {type: string, enum: [success, failed, skipped], description: "Итог этой попытки. `skipped` — событие не отправлено из-за паузы отправки ключа (`error_message: circuit_open`, `response_status: null`); такую строку не повторяют."}
         response_time_ms: {type: integer, nullable: true, example: 150}
         error_message: {type: string, nullable: true}
         created_at: {type: string, format: date-time}
         retry_of: {type: integer, nullable: true, description: "ID исходного лога, если это повторная отправка."}
+    SandboxState:
+      type: object
+      description: |
+        Состояние песочной организации — что песочница изображает поверх «всё в порядке».
+        Первое значение каждого поля — «всё в порядке». Читают его только ответы
+        `/api/v1` этой организации; на боевые проверки оно не влияет.
+      properties:
+        tariff:
+          type: string
+          enum: [active, inactive, trial_exhausted, limit_reached]
+          description: |
+            `inactive` — платные операции отвечают `403 tariff_inactive`, `GET /tariff` и
+            `/account/health` показывают `none`; `trial_exhausted` — `POST /invoices`
+            `429 trial_daily_limit`; `limit_reached` — `429 tariff_limit_reached`.
+        kyc:
+          type: string
+          enum: [approved, pending, rejected]
+          description: "`rejected` — `POST /invoices` отвечает `403 kyc_rejected`. `pending` пока ничего не изображает."
+        cashier_session:
+          type: string
+          enum: [ok, expired, invalid, not_configured]
+          description: |
+            Сессия кассира: `POST /invoices` отвечает `409 kaspi_session_expired`,
+            `503 kaspi_session_invalid` или `400 kaspi_session_not_configured`; `/account/health`
+            показывает соответствующий `connection.session_status` и `needs_reauth`.
+        kaspi_egress:
+          type: string
+          enum: [open, paused]
+          description: "`paused` — запросы в Kaspi приостановлены: телефонный счёт принимается и держится в `processing`, пока паузу не снимут, как при технических работах в бою."
+        webhook_retry_grid:
+          type: string
+          enum: [short, live]
+          description: "Повторы вебхука песочного счёта: `short` — несколько коротких попыток; `live` — столько же попыток, сколько в бою, со сжатыми интервалами. Действует на следующие события."
+        hold:
+          type: boolean
+          description: "`true` — `/account/health` показывает накопление счетов (`invoicing.accumulating`, `held_since`)."
+    WebhookDeliveryState:
+      type: object
+      description: Состояние отправки вебхуков ключа (GET /webhook-logs/delivery-state).
+      properties:
+        api_key_id: {type: integer, example: 77}
+        state:
+          type: string
+          enum: [open, paused, disabled]
+          description: "`open` — отправка идёт; `paused` — пауза, снимается сама после `paused_until`; `disabled` — отправка отключена, пока не сменят адрес или секрет (в том числе не выпустят новый секрет) либо не пройдёт успешная проверка вебхука — «Проверить уведомления» в кабинете или `POST /webhook-test`. Те же действия снимают и паузу досрочно."
+          example: open
+        paused_until: {type: string, format: date-time, nullable: true, description: "Только при `state: paused`."}
+        consecutive_failures: {type: integer, description: "Неудачных доставок подряд (счёт, возврат, `qr_refund.*`); успешная доставка этих событий или `cashbox.*` обнуляет.", example: 0}
+    DailyUsage:
+      type: object
+      description: |
+        Расход лимита счетов — тот же, что видит кабинет. `count`/`limit` — сегодняшние
+        сутки; `period_*` — бюджет текущего периода (сутки или 30-дневный блок, `mode`).
+      properties:
+        count: {type: integer, description: Счетов за сегодня., example: 12}
+        limit: {type: integer, nullable: true, description: Суточный лимит тарифа., example: 300}
+        status: {type: string, enum: [green, yellow, red], example: green}
+        mode: {type: string, enum: [daily, monthly], example: daily}
+        period_limit: {type: integer, nullable: true, example: 300}
+        period_used: {type: integer, example: 12}
+        period_start: {type: string, format: date-time}
+        period_reset_at: {type: string, format: date-time}
+        hard_limited: {type: boolean, description: "true — выставление счетов остановлено за превышение лимита.", example: false}
+        hard_limited_at: {type: string, format: date-time, nullable: true}
+        forecast: {type: object, nullable: true, description: "В API всегда null (прогноз считает только кабинет)."}
     CatalogWebhookLogEntry:
       type: object
       description: Запись лога доставки вебхука catalog.item_processed (GET /catalog/webhook-logs). Логи хранятся 3 дня.
@@ -7230,10 +8021,16 @@ components:
             gross_amount: {type: integer, description: "Сумма без партнёрской скидки; скидка за длинный период учтена.", example: 71250}
             partner_discount_percent: {type: integer, description: "Скидка партнёра, целые проценты; 0 — скидки нет.", example: 0}
             tier: {type: string, example: business}
+        daily_usage: {$ref: '#/components/schemas/DailyUsage'}
     AccountHealth:
       type: object
       description: Health аккаунта. Даты Asia/Almaty +05:00.
       properties:
+        mode:
+          type: string
+          enum: [sandbox, production]
+          description: Режим организации ключа. В песочнице счета и события тестовые.
+          example: production
         api:
           type: object
           properties:
@@ -7570,6 +8367,7 @@ components:
       properties:
         id: {type: integer, example: 123}
         static_qr_code_id: {type: integer, description: ID связанной ссылки Static QR; поле присутствует только у счетов по ссылке.}
+        static_qr_id: {type: integer, description: "Тот же ID под именем из REST (`static_qr_id`); присутствует вместе с `static_qr_code_id`."}
         external_order_id: {type: string, nullable: true}
         amount: {type: string, example: "1000.00"}
         status: {$ref: '#/components/schemas/InvoiceStatus'}
@@ -7577,13 +8375,14 @@ components:
         kaspi_invoice_id: {type: string, nullable: true}
         client_name: {type: string, nullable: true}
         client_phone: {type: string, nullable: true, description: "null для QR-счетов без номера."}
+        phone: {type: string, nullable: true, description: "Тот же номер под именем из REST (`phone`); всегда рядом с `client_phone`."}
         is_sandbox: {type: boolean}
         internal_comment: {type: string, description: "Внутренняя заметка мерчанта. Только если non-null."}
         kaspi_source_type: {type: string, enum: [GOLD, RED, LOAN, BUSINESSACCOUNT, BANKINTEGRATIONACCOUNT], description: "Только если non-null (обычно после оплаты)."}
         kaspi_sale_type: {type: string, enum: [Remote, QR, Static, Restaurant], description: "Только если non-null."}
         subtotal: {type: string, description: "Только со скидкой/корзиной (вместе с discount_sum)."}
         discount_sum: {type: string}
-        discount_percentage: {type: integer, description: "Только если non-null."}
+        discount_percentage: {type: string, description: "Строка с двумя знаками (`\"10.00\"`). Только если non-null.", example: "10.00"}
         paid_at: {type: string, format: date-time, description: "Только при status=paid."}
         cancelled_at: {type: string, format: date-time, description: "Только при status=cancelled."}
         expired_at: {type: string, format: date-time, description: "Только при status=expired."}
@@ -7608,6 +8407,7 @@ components:
           properties:
             id: {type: integer, example: 108565}
             static_qr_code_id: {type: integer, description: ID ссылки; только для связанного счёта.}
+            static_qr_id: {type: integer, description: "Синоним `static_qr_code_id` (имя из REST)."}
             external_order_id: {type: string, nullable: true}
             amount: {type: string, example: "1500.00"}
             status: {type: string, example: pending, description: "Текущий статус счёта на момент отправки — обычно `pending`, но может быть уже `paid` (и любой другой), если оплата успела пройти."}
@@ -7616,6 +8416,7 @@ components:
             kaspi_invoice_id: {type: string, nullable: true}
             client_name: {type: string, nullable: true}
             client_phone: {type: string, nullable: true}
+            phone: {type: string, nullable: true, description: "Синоним `client_phone` (имя из REST)."}
             is_sandbox: {type: boolean}
             internal_comment: {type: string, description: "Внутренняя заметка мерчанта. Только если non-null."}
         source: {type: string, nullable: true}
@@ -7627,6 +8428,10 @@ components:
         is_sandbox: {$ref: '#/components/schemas/WebhookRootIsSandbox'}
         refund:
           type: object
+          description: |
+            Текста ошибки (`error_message`) в событии нет: причину отказа показывайте своим текстом
+            по `error_code`. `refund_requires_buyer_confirmation` и `refund_rejected_by_kaspi` —
+            сигнал запасного пути: ссылка покупателю с `source_refund_id` этого возврата.
           properties:
             id: {type: integer, example: 55}
             amount: {type: string, example: "500.00"}
@@ -7651,6 +8456,7 @@ components:
           properties:
             id: {type: integer, example: 123}
             static_qr_code_id: {type: integer, description: ID ссылки; только для связанного счёта.}
+            static_qr_id: {type: integer, description: "Синоним `static_qr_code_id` (имя из REST)."}
             external_order_id: {type: string, nullable: true}
             amount: {type: string, example: "1000.00"}
             total_refunded: {type: string, example: "500.00"}
@@ -7685,6 +8491,20 @@ components:
             failed_attempts: {type: integer, example: 2}
             in_grace_period: {type: boolean, example: false}
             is_sandbox: {type: boolean, example: false}
+        invoice_id:
+          type: integer
+          description: >-
+            Счёт подписки, к которому относится событие. Только у `payment_succeeded`,
+            `payment_failed` и `cancelled` с `reason` `payer_refused`/`payer_error`; у прочих
+            событий ключа в теле нет. Ключ дедупа — `(event, subscription.id, invoice_id)`.
+          example: 1234
+        billing_period_start:
+          type: string
+          format: date
+          description: >-
+            Начало пропущенного периода (`YYYY-MM-DD`). Только у `period_skipped`; ключ
+            дедупа — `(event, subscription.id, billing_period_start)`.
+          example: "2026-10-01"
         source: {type: string, nullable: true}
         timestamp: {type: string, format: date-time}
     WebhookRootIsSandbox:
@@ -7714,6 +8534,7 @@ components:
             kaspi_invoice_id: {type: string, nullable: true, example: null}
             client_name: {type: string, example: Test Client}
             client_phone: {type: string, example: "87771234567"}
+            phone: {type: string, example: "87771234567"}
             is_sandbox: {type: boolean, example: true}
             kaspi_source_type: {type: string, example: GOLD}
             kaspi_sale_type: {type: string, example: Remote}
@@ -7878,7 +8699,11 @@ x-webhooks:
   # Исходящие POST на webhook_url API-ключа. Заголовки: Content-Type: application/json,
   # User-Agent: Kaspi-Pay-API/1.0, X-Webhook-Signature: sha256=<hmac_sha256(raw_body, webhook_secret)>
   # (если задан секрет — верифицировать по СЫРОМУ телу). Таймауты 3с+5с. Успех = любой 2xx.
-  # Ретраятся 5xx/429/сетевые (invoice/refund/subscription 11 попыток; sandbox invoice — 3).
+  # Ретраятся 5xx/429/сетевые. Попыток всего (бой / песочница): invoice.status_changed 11/3
+  # (11 — при webhook_retry_grid: live в состоянии песочницы), invoice.qr_scanned 11/3,
+  # invoice.refunded 11/11, qr_refund.* 11/3, subscription.* 11/11, cashbox.* 11/3,
+  # receipt.* 3/3 (повтор — только адресам, ещё не принявшим событие), catalog.item_processed
+  # 3/3, webhook.test — одна синхронная попытка без повторов.
   # Редиректы: 307/308 поддерживаются (повторяем тот же POST с тем же телом и подписью,
   # до 2 переходов). 301/302/303 НЕ поддерживаются — по ним клиент обязан сменить метод
   # на GET и потерять тело, поэтому это недоставка, без ретрая
@@ -7897,6 +8722,8 @@ x-webhooks:
         возможны — дедуп по `(invoice.id, invoice.status)`. Легитимные «странные»
         последовательности (обрабатывайте!): `cancelled→paid`, `expired→paid` (оплата
         выиграла гонку), `error→pending` (реконсиляция), `paid→partially_refunded`.
+        После `error` может снова прийти `pending`, даже если `pending` по этому счёту уже
+        приходил: это новый переход, а не дубль — не отбрасывайте его.
       requestBody:
         content:
           application/json:
@@ -7970,7 +8797,11 @@ x-webhooks:
       summary: QR-возврат выполнен
       description: |
         Возврат по сессии выполнен (`qr_refund.status: completed`, `refunded_amount`,
-        `receipt_url`). Терминал сессии. Дедуп по `qr_refund.id`.
+        `receipt_url`). Терминал сессии. Дедуп по `qr_refund.id`. У ссылки под счёт следом
+        приходит `invoice.refunded` (`completed`) с ДРУГИМ `refund.id` — запись, которую
+        синхронизация заводит по этой операции (в песочнице так же, сразу после события). Это
+        те же деньги, а не второй возврат: незнакомый `refund.id` сверяйте с `successor_refund_id`
+        исходного возврата в `GET /invoices/{id}/refunds`.
       requestBody:
         content:
           application/json:
@@ -7989,6 +8820,13 @@ x-webhooks:
         (отсутствие скана не подтверждено либо Kaspi потерял операцию), пропущено последнее из
         не более чем трёх окон скана, истёк `link_expires_at` или ссылка отозвана. Пропущенное
         окно, после которого ссылка снова ждёт покупателя, события не порождает.
+        ⚠️ У ссылки под счёт событие приходит и ПОСЛЕ `qr_refund.identified`, если
+        автопроведение не успело в окно подтверждения покупателя: не считайте
+        `identified` гарантией возврата.
+        Причины (`error_code`) в теле этого события нет — читайте её в `GET /qr-refunds/{id}`:
+        `qr_refund_link_revoked` (отозвали сами), `qr_refund_link_expired` (покупатель не открыл
+        ссылку за срок), `qr_return_scan_timeout`, `qr_return_identity_timeout`. Деньги не
+        двигались; новую ссылку по тому же `source_refund_id` выпустить можно.
       requestBody:
         content:
           application/json:
@@ -8068,7 +8906,7 @@ x-webhooks:
         `operation` — незакрытое либо отказавшее намерение (`create|update|delete`), null —
         работа завершена; причина отказа лежит в `error_code`, момент — в `failed_at`.
         Шлётся всегда, отключить его нельзя.
-        Неуспешная доставка повторяется до трёх раз с нарастающей паузой.
+        Доставка — до трёх попыток всего (первая и два повтора) с нарастающей паузой.
         Сверяйте по `external_ref` (ключ маппинга 1С,
         UNIQUE в пределах оси организации). Для большой заливки используйте targeted-GET
         `GET /catalog?external_refs[]=…` для сверки и счётчики `GET /catalog/queue` для
@@ -8090,7 +8928,8 @@ x-webhooks:
         Чек успешно выбит в Kaspi OFD (`POST /receipts`). В `receipt` — `fpd`,
         `operation_id`, `link` (публичная страница чека — открывается в обычном
         браузере), `shift_number`. Шлётся безусловно при
-        терминальном статусе чека. Неуспешная доставка повторяется до трёх раз.
+        терминальном статусе чека. Доставка — до трёх попыток всего; повтор — только на
+        5xx, 429 и сбой сети и только адресам, ещё не принявшим событие.
         Дедуп по `(event, receipt.id)`. Равноправен поллингу `GET /receipts/{id}`.
       requestBody:
         content:
@@ -8292,7 +9131,10 @@ x-webhooks:
       tags: [Webhooks]
       summary: Тест вебхука
       description: |
-        Ручной тест из ЛК (`POST /api/api-keys/{id}/test-webhook`, 5/мин). Фиктивный
+        Тест адреса вебхука: кнопка «Проверить уведомления» в личном кабинете или
+        `POST /webhook-test` по `X-API-Key` (адрес ключа запроса; поле `signature` —
+        `valid`, а в песочнице ещё `invalid`/`missing` для проверки отказа обработчика).
+        Одна синхронная попытка, исход — в ответе и в журнале доставок. Фиктивный
         invoice-конверт со `status: "test"` — receiver должен спокойно его игнорировать.
         Корневой `is_sandbox` у него всегда `true`: обработчик в рабочем режиме отбросит
         его с ответом 2xx, и проверка пройдёт. Проверяйте подпись до отбрасывания

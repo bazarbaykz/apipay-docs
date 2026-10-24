@@ -13,6 +13,7 @@
 * [Фискальные чеки](receipts.md)
 * [Касса](cashbox.md)
 * [Вебхуки](webhooks.md)
+* [Песочница](sandbox.md)
 * [Ошибки](errors.md)
 * [Partner API](partner-api.md)
 

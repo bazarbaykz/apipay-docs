@@ -24,7 +24,7 @@ We welcome improvements to:
 - **Typos** — Fix spelling and grammar errors
 
 > **Which files can be edited.** Pull requests are accepted only for `docs/**` and `examples/**`.
-> The files `openapi.yaml`, `openapi-partner.yaml` and `llms.txt` are mirrors of the upstream
+> The files `openapi.yaml`, `openapi-partner.yaml`, `llms.txt` and `sandbox-scenarios.json` are mirrors of the upstream
 > source and are regenerated automatically — any change to them will be overwritten by the next
 > sync. If you spot a problem in those files, please open an issue instead of a pull request.
 

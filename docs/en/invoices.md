@@ -70,19 +70,19 @@ Amount is calculated automatically from catalog item prices. Supports custom pri
   "id": 124,
   "amount": "9500.00",
   "status": "processing",
-  "description": "Payment for order #123",
-  "external_order_id": "order_123",
-  "phone_number": "87001234567",
+  "paid_at": null,
+  "phone": "87001234567",
+  "is_imported": false,
+  "created_at": "2026-01-31T12:00:00+00:00",
   "subtotal": "10000.00",
   "discount_sum": "500.00",
-  "discount_percentage": "10",
-  "error_message": null,
-  "paid_at": null,
-  "created_at": "2025-01-31T12:00:00Z"
+  "discount_percentage": "10"
 }
 ```
 
-> **Note:** Fields `subtotal`, `discount_sum`, and `discount_percentage` appear only when a discount is applied (backward compatible).
+> **Note:** The payer's number in the response is the `phone` field (in the request — `phone_number`). The create response does not echo `description` and `external_order_id` — they are in `GET /invoices/{id}`. Conditional fields appear only when they have a value: `subtotal`, `discount_sum` and `discount_percentage` — with a discount or a cart, `buyer_bin` — if passed, `error_message` — in the `error` status. `is_imported: true` — a sale pulled in from the Kaspi history (made in the app, bypassing ApiPay).
+
+`201` with `status: processing` is not an error: the final status (`pending` or `error`) arrives via the `invoice.status_changed` webhook or `GET /invoices/{id}`. Do not re-create an invoice that is in `processing`. To guard against duplicates on retry, use the `external_order_id_idempotency` field: a repeat answers `409 duplicate_idempotency_key` with the id of the earlier invoice.
 
 ## Create QR Invoice (cashier display)
 
@@ -94,7 +94,7 @@ Differences from `POST /invoices`:
 - No `phone_number` required.
 - Synchronous response — the QR (`qr_token_url` + ready PNG) is returned immediately.
 - A QR invoice's lifecycle is measured in **minutes** (vs 24h for regular phone invoices). Kaspi dictates the exact expiry moment; the terminal status (`paid`/`cancelled`/`expired`) arrives via webhook. The `qr_expires_at` field is informational, not for local termination.
-- Cancelling a QR invoice is not supported — if no payment arrives, the invoice flips to `expired` after a few minutes (on the terminal from Kaspi). A refund for a paid QR invoice goes through a separate branch, `POST /qr-refunds`: the customer scans a refund QR (see `openapi.yaml`).
+- Cancelling a QR invoice is not supported — if no payment arrives, the invoice flips to `expired` after a few minutes (on the terminal from Kaspi). A refund for a paid QR invoice is the regular `POST /invoices/{id}/refund`, as for any invoice; if Kaspi requires the buyer's confirmation, issue them a link via `POST /qr-refunds/links` (see [Refunds → Fallback](refunds.md#fallback-a-link-to-the-buyer)).
 - Per-org rate limit: **200 QR requests per minute per organization** — one counter for all of its keys, separate from the general API limit (200 requests per minute per key).
 
 > ⚠️ **A QR invoice is for paying right away only.** Use `POST /invoices/qr` when the customer is next to you and pays now: the QR lives for a few minutes. If the customer will pay later, use a static QR (`POST /static-qr`) or a payment link (`POST /invoices/qr` with `static: true`). See «Which QR to choose» below.
@@ -141,7 +141,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/qr \
 | `cart_items` | array | Yes* | Only when has_catalog=true. 1 to 100 items |
 | `discount_percentage` | integer | No | Discount percentage — **a whole number only**, 1–99; a fractional one → `422` with `errors.discount_percentage`. The discount of each line is rounded **up** to a whole tenge, see [QR discount](#qr-discount) |
 | `buyer_bin` | string | No | The buyer's IIN/BIN — under the same rules as in `POST /invoices`: a string of exactly 12 digits, otherwise `422` with `errors.buyer_bin`. Not accepted with `static: true` (`422`). If the organization has a Kaspi register connected, the number goes into the Kaspi receipt |
-| `simulate` | string | No | Sandbox only: `paid` \| `cancelled` \| `expired`. See [Sandbox mode](#sandbox-mode) |
+| `simulate` | string \| object | No | Sandbox only: the string `paid` \| `cancelled` \| `expired` or the object `{"status": "error", "error_code": …}`. Not allowed with `static: true`. See [Sandbox mode](#sandbox-mode) |
 
 \* depends on `has_catalog`: either `amount` or `cart_items`.
 
@@ -191,18 +191,18 @@ The quantity in a cart line is at most 100,000 (`422` with `errors.cart_items.N.
 | Field | Description |
 |-------|-------------|
 | `id` | Invoice ID in our system. Use it to fetch status (`GET /invoices/{id}`); webhooks reference it too. |
-| `is_qr_token` | QR-invoice flag. Also returned by `GET /invoices/{id}` and inside webhook payloads. |
-| `qr_token_url` | Direct Kaspi URL (`qr.kaspi.kz/...`). Same payload as encoded in the PNG. You can re-render the QR on your side if you want a different style/size. |
-| `qr_image_url` | Ready-made PNG 600×600 with the Kaspi logo in the center (ECC=High). Hosted on our CDN-storage, accessible without auth, lives until `qr_expires_at + 60s` (then returns 404). |
+| `is_qr_token` | QR-invoice flag. Also returned by `GET /invoices/{id}`; it is not in the webhook body. |
+| `qr_token_url` | The Kaspi link to this QR invoice. Same payload as encoded in the PNG: it can be opened on the buyer's phone instead of scanning, or re-rendered as a QR in your own style. It lives as long as the QR — do not send it «for later». |
+| `qr_image_url` | Ready-made PNG 600×600 with the Kaspi logo in the center (ECC=High). Hosted on our CDN-storage, accessible without auth, lives until `qr_expires_at + 60s` (then returns 404 — issue a new invoice). The same address comes in `GET /invoices/{id}`. |
 | `qr_expires_at` | The last moment at which the QR can still be **scanned** (UTC). Kaspi sets the window length — read it from this field rather than hard-coding a constant. The window limits scanning only: a payment started near the end of it completes after `qr_expires_at`. The terminal status is Kaspi's call — wait for the webhook, not for a local countdown. |
 
 ### Lifecycle and status handling
 
 1. Created in status `pending`. The service tracks the status change on the Kaspi side itself.
-2. On terminal status (`paid`, `cancelled`, `expired`) we send the regular `invoice.status_changed` webhook — same format as for regular invoices, but `invoice` contains `is_qr_token: true` and the QR fields.
+2. On terminal status (`paid`, `cancelled`, `expired`) we send the regular `invoice.status_changed` webhook — same format as for regular invoices. It carries no QR fields and no `is_qr_token`: if you need them, read `GET /invoices/{id}`.
 3. Alternative poll: hit `GET /invoices/{id}` every 2-3 sec.
 4. After a few minutes without payment the status becomes `expired` — but only once Kaspi returns the terminal (via webhook), not on a local timer. The PNG is removed from storage within ~1 minute — `qr_image_url` will start returning 404 (by design).
-5. Cancelling a QR invoice is not supported — just wait for it to expire (a few minutes). A refund for a paid QR invoice is performed through the separate `POST /qr-refunds` branch — the customer scans a refund QR.
+5. Cancelling a QR invoice is not supported — just wait for it to expire (a few minutes). A refund for a paid QR invoice is `POST /invoices/{id}/refund`; if it is refused with a demand for the buyer's confirmation — a link via `POST /qr-refunds/links` with `source_refund_id`. The immediate `POST /qr-refunds` with a QR at the till is deprecated.
 
 ### Which QR to choose
 
@@ -212,7 +212,7 @@ The quantity in a cart line is at most 100,000 (`422` with `errors.cart_items.N.
 | The customer will pay later: wants to think, gets a link in a messenger, pays from paper | Static QR (`POST /static-qr`) or a payment link (`POST /invoices/qr` with `static: true`) |
 
 - **A QR invoice lives for a few minutes.** Kaspi sets the exact window, and it arrives in `qr_expires_at`. If the customer does not make it in time, the invoice becomes `expired` and a new QR is needed to pay.
-- **In live mode every issued QR invoice takes a slot in the daily plan limit** — in any status, including one that expired unpaid and every re-created one. On systematic excess, creation is rejected with `429 tariff_limit_reached`.
+- **In live mode every issued QR invoice takes a slot in the daily plan limit** — in any status, including one that expired unpaid and every re-created one; the slot is not returned. On systematic excess, creation is rejected with `429 tariff_limit_reached`.
 - **With a static QR or a payment link, the invoice is created only when the customer taps «Оплатить в Kaspi» (Pay in Kaspi).** While the customer is thinking, no slot in the limit is taken.
 - **After «Оплатить в Kaspi» (Pay in Kaspi) is tapped, the issued Kaspi QR takes a slot in the limit too.** For a single-use code (the default; a payment link is always single-use), tapping again while that QR is still valid and not scanned returns the same QR. For a reusable static QR (`single_use: false`), every tap issues a new invoice, and each one takes a slot in the limit. If the QR has expired, a new invoice is issued — and it takes another slot.
 
@@ -220,21 +220,24 @@ The quantity in a cart line is at most 100,000 (`422` with `errors.cart_items.N.
 
 ### Sandbox mode
 
-If the organization has `sandbox_mode=true`, the endpoint works WITHOUT calling Kaspi: it returns a synthetic `qr_token_url` (`https://qr.kaspi.kz/sandbox/<uuid>`) and a real rendered PNG. You can display it in the UI and test the entire frontend logic, but the real Kaspi app will not accept this QR — it does not exist on Kaspi's side.
+If the organization has `sandbox_mode=true`, the endpoint works WITHOUT calling Kaspi: `qr_token_url` leads to an ApiPay test page (`https://qr.apipay.kz/sandbox/…`) that shows the invoice amount, description and status, and the PNG is really rendered and encodes the same address. You can display it in the UI and test the entire frontend logic, but such an invoice cannot be paid in Kaspi. Do not parse the address path — its format is not part of the contract; the sandbox flag is `is_sandbox`. Without `simulate`, a sandbox QR expires on its own after `qr_expires_at` (status `expired` and a webhook).
 
 #### `simulate` parameter (sandbox only)
 
 To quickly test terminal scenarios, pass `simulate` right inside the create payload — in a single call you get a ready, terminal-status invoice (no need for a separate `/simulate-status` call):
 
-| `simulate` | Resulting `status` | `qr_expires_at` | `paid_at` | Webhook immediately? |
-|------------|-------------------|-----------------|-----------|----------------------|
-| (omitted) | `pending` | now + 5 min | `null` | no |
-| `expired` | `expired` | now − 1 min (in the past) | `null` | yes |
-| `paid` | `paid` | now + 5 min | now | yes |
-| `cancelled` | `cancelled` | now + 5 min | `null` | yes |
+| `simulate` | Result | Webhook |
+|------------|--------|---------|
+| (omitted) | `pending`; after `qr_expires_at` the invoice becomes `expired` on its own | on expiry |
+| `expired` | `expired` | yes |
+| `paid` | `paid` | yes |
+| `cancelled` | `cancelled` | yes |
 
-- The parameter is silently ignored for non-sandbox organizations — production lifecycle is driven by Kaspi.
-- Valid values go through standard validation; unknown values → 422.
+The object `{"status": "error", "error_code": "kaspi_error" | "qr_render_failed" | "kaspi_session_invalid"}` gives a synchronous refusal with the same responses as in production (`502`, `500`, `503`) and an `error` webhook.
+
+- For a production organization the string value is silently ignored, and the object is rejected with `422`.
+- Not allowed with `static: true`. Unknown values → 422.
+- All the ways to request an outcome — [Sandbox](sandbox.md).
 
 ##### Example: get an already-expired QR
 
@@ -252,13 +255,13 @@ Response (excerpt):
   "id": 63497,
   "status": "expired",
   "is_qr_token": true,
-  "qr_token_url": "https://qr.kaspi.kz/sandbox/b5d6ffe9-…",
-  "qr_image_url": "https://api.apipay.kz/storage/qr/b5d6ffe9-….png",
+  "qr_token_url": "https://qr.apipay.kz/sandbox/…",
+  "qr_image_url": "https://api.apipay.kz/storage/qr/….png",
   "qr_expires_at": "2026-05-09T07:52:08+00:00"
 }
 ```
 
-`POST /api/v1/invoices/{id}/simulate-status` separately also works with QR invoices (for dynamic scenarios: create `pending` → wait in UI → explicitly flip to `paid`/`cancelled`/`expired`).
+`POST /invoices/{invoice}/simulate-status` separately also works with QR invoices (for dynamic scenarios: create `pending` → wait in UI → explicitly flip to `paid`/`cancelled`/`expired` or simulate a `qr_scanned` scan).
 
 ### Errors
 
@@ -280,6 +283,38 @@ Response (excerpt):
 
 > The two catalog-parity codes arrive in the **`error_code`** field, not in `error`, and without an `errors` object — only `message` sits next to them. The `message` texts did not change when the codes were added, so string parsing keeps working; move your branching to `error_code`.
 
+## Payment link and printed QR
+
+For paying «later» — when the buyer wants to think, gets a link in a messenger or pays from paper:
+
+- **Payment link** — `POST /invoices/qr` with `static: true`. The response carries `payment_url` (send it to the buyer or put it behind a button on your site) and `static_qr_id`. An active plan is required. A repeat with the same `external_order_id_idempotency` answers `409 idempotency_conflict` with the same link.
+- **Printed sheet** — `POST /static-qr`. The response carries `print_url` (the sheet address encoded in its QR), `short_code` for manual entry, `qr_image_url` and `payment_url` — a payment link for the same deal. To disable — `DELETE /static-qr/{id}`: new scans show «inactive», invoices already created are not touched.
+
+**There is no invoice at issue time.** `static_qr_id` is not an invoice ID; do not pass it to `GET /invoices/{id}`. An invoice — a payment attempt — is created only when the buyer taps «Оплатить» (Pay) on the page; opening the page and a messenger preview do not create an invoice. One link or sheet can have several attempts.
+
+### Plan limit
+
+| Action | Slot in the daily limit |
+|---|---|
+| `POST /invoices`, `POST /invoices/qr`, each row of `POST /invoices/bulk`, each invoice of a subscription created via the API | takes one — in any status, the slot is not returned |
+| Issuing a `static: true` link or a `POST /static-qr` sheet | does not take one |
+| Opening the link or sheet page, a messenger preview | does not take one |
+| Tapping «Оплатить» (Pay) on the page (a new attempt) | takes one — each attempt |
+| Sandbox, invoices from the dashboard | do not take one |
+
+Every invoice created with your key uses the limit — paid, expired, cancelled or with an error. While the buyer is thinking over a link or sheet, no slot is taken; each attempt after a «Оплатить» (Pay) tap takes one. For a single-use link or sheet, tapping again while the issued QR is still valid and not scanned does not create a new invoice; for a reusable sheet (`single_use: false`) every tap is a new invoice. If the QR expired unscanned, the open page issues a new invoice on its own, without a tap — and it takes a slot too. The plan limit is up to 30, up to 100, up to 300 or up to 600 invoices a day depending on the plan; usage is shown in `GET /tariff` → `daily_usage`. On systematic excess, creation is rejected with `429 tariff_limit_reached`. While such a restriction is in effect, a subscription created via the API does not issue the invoice for the period: the next invoice date does not move, and missed periods are not caught up.
+
+### How to match a payment to an order
+
+The payment arrives as an `invoice.status_changed` webhook of an attempt whose `invoice.id` is not known in advance:
+
+1. Find the order by `invoice.static_qr_id` (synonym `static_qr_code_id`), then by `external_order_id`. On the first payment, save `invoice.id` — refunds are made by it.
+2. `expired`, `cancelled` and `error` of an attempt **do not cancel the order**: the link or sheet is alive, and the buyer can tap «Оплатить» (Pay) again. An attempt expiring is not an order cancellation.
+3. The same `invoice.id` with the same status is a repeated delivery. **A different `invoice.id` of the same link with status `paid` is the buyer's second payment**, not a duplicate: refund it (`POST /invoices/{id}/refund` on that attempt) or hand it over to a person for review.
+4. There is no notification about the link itself expiring: your application tracks the order deadline.
+
+For reconciliation, `GET /invoices?static_qr_id={id}` returns all attempts of one link or sheet, and `GET /static-qr/{id}` gives the outcome. In the sandbox, an attempt is created by `POST /static-qr/{id}/simulate` (see [Sandbox](sandbox.md)).
+
 ## List Invoices
 
 **Endpoint:** `GET /invoices`
@@ -296,10 +331,11 @@ curl "https://api.apipay.kz/api/v1/invoices?page=1&per_page=20&status[]=paid&sor
 | `page` | integer | 1 | Page number |
 | `per_page` | integer | 10 | Items per page (1-100) |
 | `search` | string | — | Search in description/order ID |
-| `status[]` | array | — | Filter by status |
+| `status[]` | array | — | Filter by status, including `status[]=error` |
 | `date_from` | string | — | Window start, inclusive: `YYYY-MM-DD` (= the merchant's whole calendar day) or `YYYY-MM-DD HH:MM` (exact minute). Timezone — Asia/Almaty |
 | `date_to` | string | — | Window end, inclusive, same format |
 | `date_field` | string | created_at | Which field the window applies to: `created_at` or `paid_at` (the latter excludes unpaid invoices) |
+| `static_qr_id` | integer | — | All attempt invoices of one payment link or printed sheet |
 | `sort_by` | string | created_at | Sort field |
 | `sort_order` | string | desc | `asc` or `desc` |
 
@@ -312,7 +348,7 @@ curl https://api.apipay.kz/api/v1/invoices/42 \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-> Response includes `items` array — snapshot of cart items at invoice creation: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id, original_price, discount }]`. Fields `subtotal`, `discount_sum`, `discount_percentage` appear at top level only when discount is applied.
+> Response includes `items` array — snapshot of cart items at invoice creation: `[{ id, invoice_id, catalog_item_id, name, price, count, unit_id, discount, barcode, ntin, gtin }]`. Fields `subtotal`, `discount_sum`, `discount_percentage` — the pre-discount total and the discount, `null` when there is no discount and no cart. A QR invoice has `qr_image_url` — the absolute address of the QR image (`qr_image_path` is kept for compatibility). A payment attempt via a link or sheet has `static_qr_id`.
 
 **The `kaspi_qr_link` field** is a link for paying this invoice by QR, shaped like `https://kaspi.kz/qr/pay?tranId=QR…`. Draw a QR code from it for the customer. The field is also present in every `data` element of `GET /invoices`. It is computed from the Kaspi identifier and not stored, so it comes back `null` until Kaspi has assigned that identifier (the `processing` status), and it is always `null` in the sandbox.
 
@@ -374,16 +410,16 @@ A receipt exists only for an invoice in the `paid` or `partially_refunded` statu
 
 **Endpoint:** `POST /invoices/{id}/cancel`
 
-Invoices with `status: "pending"` or `"processing"` can be cancelled. In sandbox returns `200 OK` (synchronous), in production returns `202 Accepted` with status `cancelling` (async processing via Kaspi).
+Invoices with `status: "pending"` or `"processing"` can be cancelled. An invoice not yet passed to Kaspi (no `kaspi_invoice_id`) is cancelled synchronously — `200` and a `cancelled` webhook. An invoice already passed to Kaspi — `202 Accepted` with status `cancelling`: do not treat it as cancelled right away, the outcome arrives via webhook. If Kaspi refuses, the invoice returns to `pending` without a webhook; the current status arrives with the next webhook or is visible in `GET /invoices/{id}`. **The sandbox cancels the same way as production**; there, the cancellation outcome is requested with the `simulate` field (see [Sandbox](sandbox.md)).
 
-> ⛔ **A QR invoice (`is_qr_token: true`) cannot be cancelled** — the request answers `409 qr_cancel_unsupported` and the invoice status does not change. The response body carries `expires_at`, the moment after which the QR stops being payable. Wait for `expired` or issue a new invoice.
+> ⛔ **A QR invoice (`is_qr_token: true`) cannot be cancelled — neither in production nor in the sandbox:** the request answers `409 qr_cancel_unsupported` and the invoice status does not change. The response body carries `expires_at`, the moment after which the QR stops being payable. Wait for `expired` or issue a new invoice. A payment link (`static: true`) and a printed sheet are disabled with `DELETE /static-qr/{id}`.
 
 ```bash
 curl -X POST https://api.apipay.kz/api/v1/invoices/42/cancel \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-### Response 202 (production)
+### Response 202
 
 ```json
 {
@@ -396,7 +432,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/42/cancel \
 
 **Endpoint:** `POST /invoices/status/check`
 
-Force-check the status of specified invoices. Accepts an array of invoice IDs (up to 100). Useful when webhooks are delayed.
+Force-check the status of specified invoices. Accepts an array of invoice IDs (up to 100). Useful when webhooks are delayed. Works in the sandbox too.
 
 ### Parameters
 
@@ -471,7 +507,11 @@ processing → pending → paid → partially_refunded
 
 pending → expired
 processing → cancelled (via cancel)
+cancelled → paid, expired → paid (last-moment payment)
+error → pending (reconciliation found a live invoice)
 ```
+
+The sequences `cancelled → paid`, `expired → paid` and `error → pending` are legitimate and arrive via webhook — do not close an order for good on `cancelled`, `expired` or `error`. If after `error` you have already issued a new invoice for the order and the old one returned to `pending`, cancel one of them. More — [Webhooks → Status transitions](webhooks.md#status-transitions).
 
 ## Code Examples
 
