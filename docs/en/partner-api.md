@@ -255,7 +255,7 @@ If a limits grid is set, only tiers from it are allowed — otherwise `422 tier_
 
 ### POST /organizations/{id}/tariff/invoice
 
-A company invoice for the tariff: synchronously builds a PDF with the buyer's details and returns a public `download_url`. Body: `tier_id`, `period_months`, `buyer_bin`, `buyer_name`, optionally `contract` and `upgrade`.
+A company invoice for the tariff: synchronously builds a PDF with the buyer's details and returns a public `download_url`. Body: `tier_id`, `period_months`, `buyer_bin`, `buyer_name`, optionally `buyer_address`, `contract` and `upgrade`.
 
 > ⛔ `download_url` opens **without authentication** — anyone holding the string gets the PDF. Pass it to the buyer directly; do not publish it and do not write it to your logs.
 
@@ -265,9 +265,11 @@ Payment is by bank transfer; **there is no auto-activation** — the ApiPay owne
 
 The tier the upgrade came from arrives in `upgrade_from` — in the invoice object, in the payment history and in the `tariff.activated` webhook. For a regular plan it is `null`.
 
-> ⛔ **`409 invoice_pdf_failed` must not be retried.** The invoice has already been issued: the records exist and a number was allocated; only the PDF failed to build. A retry would print a second accounting document. The body carries `invoice` with `payment_id` and `number`, without `download_url`; take the number and contact support. If your handler treats this code as retryable, remove the retry.
+> **Repeating the same issue does not print a second document** if the matching invoice is the organization's latest unpaid invoice and the plan has not been paid since it was issued. A match means the same `tier_id`, `period_months`, amount and buyer details (`buyer_bin`, `buyer_name`, `buyer_address`, `contract` are compared verbatim, case-sensitively; an empty string equals an absent field). The response is then `409 invoice_already_pending`, and that invoice arrives in the `invoice` field in the same shape as on `201` (`download_url` only if the PDF is ready). Show the client this invoice; no automatic retry is needed. If any of these fields differs, another unpaid invoice has been issued to the organization after it, or the plan has been paid since it was issued, the request issues a new invoice with a new number. So do not re-issue to fetch an existing invoice — read it by `payment_id` via `GET .../tariff/payments/{paymentId}`.
 
-**Refusals:** `400 downgrade_not_supported` (the target tier is not higher than the current one; downgrades are arranged with support), `409 invoice_locked`, `409 test_organization`, `409 organization_deleted`, `409 no_paid_tariff` (with `upgrade` only — there is nothing to move from), `409 upgrade_invoice_pending` (an unpaid upgrade invoice already exists and is returned in the `invoice` field), `409 custom_tariff_locked`, `422 invalid_tariff_plan`, `422 invalid_upgrade_plan`, `422 upgrade_period_not_supported`, `429 invoice_cooldown` (too many invoices issued in the last 24 hours — wait for `Retry-After`, also `retry_after_seconds` in the body).
+> ⛔ **`409 invoice_pdf_failed` does not need a retry.** The invoice has already been issued: a number was allocated; only the PDF failed to build. While this is the organization's latest unpaid invoice, repeating the same issue returns `409 invoice_already_pending` with this same invoice rather than a second document. The body carries `invoice` with `payment_id` and `number`, without `download_url`; take the number and contact support.
+
+**Refusals:** `400 downgrade_not_supported` (the target tier is not higher than the current one; downgrades are arranged with support), `409 invoice_locked`, `409 test_organization`, `409 organization_deleted`, `409 no_paid_tariff` (with `upgrade` only — there is nothing to move from), `409 upgrade_invoice_pending` (an unpaid upgrade invoice already exists and is returned in the `invoice` field), `409 invoice_already_pending` (the same invoice has already been issued and is unpaid; it is returned in the `invoice` field), `409 custom_tariff_locked`, `422 invalid_tariff_plan`, `422 invalid_upgrade_plan`, `422 upgrade_period_not_supported`, `429 invoice_cooldown` (too many invoices issued in the last 24 hours — wait for `Retry-After`, also `retry_after_seconds` in the body).
 
 ### GET /organizations/{id}/tariff/payments and /payments/{paymentId}
 

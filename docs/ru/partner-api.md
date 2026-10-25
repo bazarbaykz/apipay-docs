@@ -256,7 +256,7 @@ X-Partner-Key: pk_your_partner_key_here
 
 ### POST /organizations/{id}/tariff/invoice
 
-Счёт на оплату тарифа для юрлица: синхронно формирует PDF с реквизитами покупателя и возвращает публичную ссылку `download_url`. Тело: `tier_id`, `period_months`, `buyer_bin`, `buyer_name`, опционально `contract` и `upgrade`.
+Счёт на оплату тарифа для юрлица: синхронно формирует PDF с реквизитами покупателя и возвращает публичную ссылку `download_url`. Тело: `tier_id`, `period_months`, `buyer_bin`, `buyer_name`, опционально `buyer_address`, `contract` и `upgrade`.
 
 > ⛔ `download_url` открывается **без авторизации**, по одному лишь адресу. Отдавайте её покупателю адресно, не публикуйте и не кладите в логи.
 
@@ -266,9 +266,11 @@ X-Partner-Key: pk_your_partner_key_here
 
 Тариф, с которого выполнен переход, приходит в поле `upgrade_from` — в объекте счёта, в истории платежей и в вебхуке `tariff.activated`. У обычного плана там `null`.
 
-> ⛔ **`409 invoice_pdf_failed` повторять нельзя.** Счёт уже выписан: строки созданы, номер выделен, не собрался только PDF. Ретрай напечатает второй бухгалтерский документ. В теле — `invoice` с `payment_id` и `number`, без `download_url`; заберите номер и обратитесь в поддержку. Если ваш обработчик считает этот код повторяемым — снимите повтор.
+> **Повтор той же выписки второй документ не печатает**, если совпадающий счёт — последний неоплаченный счёт организации и тариф после его выписки не оплачивали. Совпадение — те же `tier_id`, `period_months`, сумма и реквизиты покупателя (`buyer_bin`, `buyer_name`, `buyer_address`, `contract` сравниваются дословно, с учётом регистра; пустая строка равна отсутствию поля). Тогда ответ — `409 invoice_already_pending`, а этот счёт приходит в поле `invoice` той же формой, что на `201` (`download_url` — только если PDF готов). Покажите клиенту этот счёт, автоповтор не нужен. Если любое из этих полей отличается, после этого счёта организации выставлен другой неоплаченный счёт или тариф после его выписки оплачен, запрос выпишет новый счёт с новым номером. Поэтому уже выставленный счёт повторной выпиской не запрашивайте — читайте его по `payment_id` в `GET .../tariff/payments/{paymentId}`.
 
-**Отказы:** `400 downgrade_not_supported` (целевой тариф не выше текущего; понижение оформляется через поддержку), `409 invoice_locked`, `409 test_organization`, `409 organization_deleted`, `409 no_paid_tariff` (только при `upgrade` — переходить не с чего), `409 upgrade_invoice_pending` (неоплаченный счёт на переход уже есть, он же приходит в поле `invoice`), `409 custom_tariff_locked`, `422 invalid_tariff_plan`, `422 invalid_upgrade_plan`, `422 upgrade_period_not_supported`, `429 invoice_cooldown` (превышен лимит выписок за 24 часа — ждите `Retry-After`, он же `retry_after_seconds` в теле).
+> ⛔ **`409 invoice_pdf_failed` повторять не нужно.** Счёт уже выписан: номер выделен, не собрался только PDF. Пока этот счёт последний неоплаченный у организации, повтор той же выписки вернёт `409 invoice_already_pending` с этим же счётом, а не второй документ. В теле — `invoice` с `payment_id` и `number`, без `download_url`; заберите номер и обратитесь в поддержку.
+
+**Отказы:** `400 downgrade_not_supported` (целевой тариф не выше текущего; понижение оформляется через поддержку), `409 invoice_locked`, `409 test_organization`, `409 organization_deleted`, `409 no_paid_tariff` (только при `upgrade` — переходить не с чего), `409 upgrade_invoice_pending` (неоплаченный счёт на переход уже есть, он же приходит в поле `invoice`), `409 invoice_already_pending` (такой же счёт уже выставлен и не оплачен, он же приходит в поле `invoice`), `409 custom_tariff_locked`, `422 invalid_tariff_plan`, `422 invalid_upgrade_plan`, `422 upgrade_period_not_supported`, `429 invoice_cooldown` (превышен лимит выписок за 24 часа — ждите `Retry-After`, он же `retry_after_seconds` в теле).
 
 ### GET /organizations/{id}/tariff/payments и /payments/{paymentId}
 

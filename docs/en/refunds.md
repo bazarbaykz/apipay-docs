@@ -31,7 +31,7 @@ curl -X POST https://api.apipay.kz/api/v1/invoices/42/refund \
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `amount` | number | No | Partial refund amount (0.01-99999999.99). Omit for a full refund. |
-| `reason` | string | No | Refund reason (max 500 characters) |
+| `reason` | string | No | Refund reason (max 255 characters; longer — `422` with the error in `errors.reason`) |
 | `return_items` | array | No | Items for an itemized refund from the cart. For each item set EXACTLY one of: `count` (whole units) OR `amount` (an arbitrary amount for the item). Both or neither is a 422 error. |
 | `hold_for_buyer_confirmation` | boolean | No | Hold until the buyer confirms (default `false`). If Kaspi refuses with `refund_requires_buyer_confirmation` or `refund_rejected_by_kaspi`, the invoice stays reserved for this refund, and only a buyer link carrying its `source_refund_id` can go through. For integrations — always `true`, see [Fallback](#fallback-a-link-to-the-buyer). |
 | `idempotency_key` | string | No | Idempotency key in the body — the same as the `Idempotency-Key` header (up to 191 characters). If both are sent, the header wins. |

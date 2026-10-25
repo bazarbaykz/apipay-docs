@@ -120,6 +120,16 @@ info:
     (регэксп `^7\d{10}$`). Lookup (`POST /clients/check`) принимает разные формы и
     нормализует к `8XXXXXXXXXX`.
 
+    ## Суммы
+
+    Денежные поля запроса — `amount`, `cart_items[].price`, `return_items[].amount`,
+    `items[].amount`, `received_amt`, `total_price` — не больше двух знаков после точки:
+    `100.004` → `422` с ошибкой по полю, а не тихое округление. Сумму можно передать числом
+    (`5000`) или строкой (`"5000.00"`). Телефонный счёт и подписка дополнительно требуют целых
+    тенге.
+    Присланный `amount` вместе с `cart_items` в `POST /invoices`, `/invoices/qr` и у подписки не
+    проверяется на точность: сумму тогда считает сервер.
+
     ## Пагинация
 
     Формы различаются по эндпоинту:
@@ -145,6 +155,12 @@ info:
     В рабочем режиме после проверки подписи отбрасывайте события с `is_sandbox: true`
     (отвечайте 2xx и не исполняйте): событие, отправленное до перевода организации
     в рабочий режим, может прийти уже после него.
+
+    **Песочница без публичного адреса.** Принимать уведомления песочницы можно на компьютере
+    разработчика, без ngrok: `apipay-cli listen --forward-to http://localhost:3000/webhook`
+    открывает сессию ключа (`POST /webhook-listen/sessions`), забирает события и отправляет их
+    на локальный обработчик с той же подписью. Доставка засчитывается так же, как доставка
+    по адресу; для рабочего режима публичный адрес вебхука по-прежнему нужен.
 
     Песочница воспроизводит ВСЕ исходы боевого API, включая отказы, — тела и коды отказов
     те же, что в бою. Три способа:
@@ -241,6 +257,8 @@ tags:
     description: Касса Kaspi — смены, сводка по наличным, сверка наших счетов с кассой, PDF-отчёт, тумблеры (автозакрытие/автоизъятие) и async-закрытие смены. Работают у организаций, к аккаунту Kaspi Pay которых подключена касса Kaspi (ОФД) — та же связка, что включает каталог товаров; без неё GET /cashbox/shifts и POST /cashbox/shifts/close отвечают 409 cashbox_kkm_unknown, а GET /cashbox/summary и оба тумблера — 409 rfo_missing. У кассовых эндпоинтов отдельный минутный лимит — 30 запросов/мин на ключ. В песочнице касса отвечает детерминированными данными по вашим sandbox-счетам, к Kaspi не обращается, подключённого кассира и кассы Kaspi не требует — идентификаторы смен там синтетические, поэтому интеграцию, прошедшую в песочнице, проверяйте и на боевой организации.
   - name: Webhooks
     description: Исходящие вебхук-события (секция x-webhooks), логи их доставки (/webhook-logs), состояние паузы отправки и тестовый вебхук. HMAC-подпись по сырому телу, таймстампы UTC +00:00.
+  - name: Device Pairing
+    description: Привязка устройства — ключ и секрет попадают в `.env` проекта без копирования с экрана. Заявку создаёт утилита (`apipay-cli pair`), подтверждает человек в кабинете по коду, значения забирает та же утилита (`apipay-cli pull`) ровно один раз. Двери без `X-API-Key`.
   - name: Request Logs
     description: Read-only журнал изменяющих запросов (POST/PUT/PATCH/DELETE) ключей вашей организации за 7 дней — что именно присылала ваша интеграция и что ApiPay ответил. Тело запроса хранится маскированным, запросы GET не сохраняются, строки появляются с небольшой задержкой.
 paths:
@@ -269,6 +287,164 @@ paths:
                     format: date-time
                     description: Текущее время сервера, ISO 8601 UTC (+00:00).
                     example: "2026-07-05T14:30:00+00:00"
+  "/device-pairings":
+    post:
+      tags: [Device Pairing]
+      summary: Заявка на выпуск ключа для проекта
+      description: |
+        Первый шаг привязки устройства. **Без авторизации.** Возвращает предъявительский
+        `device_code` (хранить только у себя, никому не показывать) и `user_code` — короткий код,
+        который человек сверяет на экране кабинета по ссылке `verification_url`. Срок заявки —
+        `expires_at` (10 минут); ключ выпускает только человек кликом в кабинете, сама заявка
+        ничего не выпускает. На экране подтверждения человек видит, откуда создана заявка
+        (адрес и страну устройства), и отдельно подтверждает, что команду запускал он сам или
+        его разработчик. `client.name` показывается как самоописание устройства. Подтверждайте
+        только заявку, которую создала команда на вашем компьютере: ссылку подтверждения,
+        присланную посторонним, подтверждать нельзя — выпущенный ключ получит то устройство,
+        которое создало заявку.
+
+        `kind: webhook_secret` — секрет подписи для уже существующего ключа `api_key_id`
+        (если у ключа секрет уже есть, кабинет откажет — заменить его можно на обычном экране).
+        `organization_id` и `setup_id` необязательны: это пожелание, решает человек при
+        подтверждении. Частота создания заявок ограничена (`429 request_rate_limited`).
+        Ответ — `Cache-Control: no-store`.
+      operationId: createDevicePairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, client]
+              properties:
+                kind:
+                  type: string
+                  enum: [api_key, webhook_secret]
+                organization_id:
+                  type: integer
+                  nullable: true
+                  description: Организация, для которой просят ключ (необязательно).
+                api_key_id:
+                  type: integer
+                  nullable: true
+                  description: Обязателен при `kind = webhook_secret` — ключ, которому нужен секрет.
+                setup_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    Настройка подключения ИИ-помощника. Если она принадлежит той же организации и
+                    человек вправе её менять, выпущенный ключ будет назначен ей.
+                client:
+                  type: object
+                  required: [name, version]
+                  properties:
+                    name: {type: string, maxLength: 40, example: apipay-cli}
+                    version: {type: string, maxLength: 20, example: 0.1.0}
+      responses:
+        '201':
+          description: Заявка создана
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device_code:
+                    type: string
+                    description: Предъявительский код опроса, `dpc_` + 43 символа base64url. Не печатайте и не логируйте.
+                    example: dpc_Q2hhbmdlTWVDaGFuZ2VNZUNoYW5nZU1lQ2hhbmdlTWU
+                  user_code:
+                    type: string
+                    description: Код для сверки человеком, `XXXX-XXXX`.
+                    example: KXRT-BZMQ
+                  verification_url:
+                    type: string
+                    format: uri
+                    example: https://apipay.kz/setup/key?pair=KXRT-BZMQ&returnTo=ai&org=12345
+                  expires_at:
+                    type: string
+                    format: date-time
+                  interval:
+                    type: integer
+                    description: Интервал опроса `POST /device-pairings/token`, секунд.
+                    example: 3
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          description: Слишком много заявок (`request_rate_limited`)
+  "/device-pairings/token":
+    post:
+      tags: [Device Pairing]
+      summary: Забрать ключ по одобренной заявке
+      description: |
+        Опрос заявки по `device_code` не чаще `interval` секунд. **Без авторизации.**
+
+        - `{status: pending}` — человек ещё не подтвердил;
+        - `{status: denied}` — человек нажал «Это не я»;
+        - `{status: expired}` — срок вышел, начните заново;
+        - `{status: approved, credentials: {...}}` — ключ и секрет, **ровно один раз**: следующий
+          опрос отвечает `{status: consumed}`, значения на сервере больше не хранятся.
+          Сохраните их сразу (в `.env`), не печатайте и не логируйте. У `kind = webhook_secret`
+          поле `credentials.api_key` равно `null` — открытого ключа у сервера нет.
+
+        После подтверждения на выдачу остаётся не меньше 5 минут. Опрос чаще `interval` —
+        `429 slow_down` с `retry_after_seconds`. Ответ — `Cache-Control: no-store`.
+      operationId: pollDevicePairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_code]
+              properties:
+                device_code: {type: string}
+      responses:
+        '200':
+          description: Состояние заявки
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [pending, approved, denied, expired, consumed]
+                  credentials:
+                    type: object
+                    description: Только при `status = approved`, один раз.
+                    properties:
+                      api_key: {type: string, nullable: true}
+                      webhook_secret: {type: string, nullable: true}
+                      api_key_id: {type: integer}
+                      organization_id: {type: integer}
+                      sandbox: {type: boolean}
+        '404':
+          description: Заявка не найдена (`pairing_not_found`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: pairing_not_found}
+                  error_code: {type: string, example: pairing_not_found}
+                  message: {type: string}
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          description: Опрос чаще `interval` (`slow_down`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: string, example: slow_down}
+                  error_code: {type: string, example: slow_down}
+                  message: {type: string}
+                  retry_after_seconds: {type: integer, example: 3}
   "/invoices":
     get:
       tags: [Invoices]
@@ -1094,6 +1270,10 @@ paths:
             `qr_cancel_unsupported` — счёт выставлен по QR, отмена для него не
             поддерживается. Статус счёта не изменён. Дождитесь `expired` (момент — в
             `expires_at`).
+
+            Только песочница: `sandbox_effect_in_progress` — счёт или организацию в этот
+            момент меняет другая операция; отмена не исполнена, повторите через
+            `retry_after_seconds`.
           content:
             application/json:
               schema:
@@ -1458,7 +1638,9 @@ paths:
               properties:
                 invoice_ids:
                   type: array
-                  description: ID счетов для проверки. Отправляйте не более 100 ID за запрос, крупные списки разбивайте на части.
+                  minItems: 1
+                  maxItems: 100
+                  description: ID счетов для проверки. Не более 100 ID за запрос (больше — `422`), крупные списки разбивайте на части.
                   items:
                     type: integer
                   example: [42, 43, 44]
@@ -1863,7 +2045,9 @@ paths:
         Меняет только переданные поля, остальные остаются прежними. Неизвестное поле —
         `422` (а не молчание). Действует на все следующие запросы без `X-Sandbox-Scenario`.
         Сбрасывается сменой режима и `POST /sandbox/clear`. Боевая организация —
-        `403 not_sandbox`.
+        `403 not_sandbox`. Ключ партнёрской интеграции меняет состояние только организации,
+        которой владеет сам партнёр; на организации мерчанта — `403 grant_not_granted`
+        (читать состояние `GET` можно).
       operationId: updateSandboxState
       requestBody:
         required: true
@@ -1873,7 +2057,7 @@ paths:
           description: Новое состояние (все поля)
           content: {application/json: {schema: {$ref: '#/components/schemas/SandboxState'}}}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {description: "not_sandbox"}
+        '403': {description: "not_sandbox / grant_not_granted — ключ партнёрской интеграции на организации, которой партнёр не владеет"}
         '422': {$ref: '#/components/responses/ValidationError'}
   "/sandbox/clear":
     post:
@@ -1882,7 +2066,9 @@ paths:
       description: |
         Удаляет песочные счета, подписки, возвраты, сессии возвратов и позиции каталога
         организации, заказанные исходы и состояние песочницы — снимает потолок песочных
-        счетов (`sandbox_invoice_limit`). Та же очистка, что в кабинете. Слишком частая
+        счетов (`sandbox_invoice_limit`). Песочные печатные листы не удаляются, а отключаются
+        (`status: disabled`): по ним больше не выставляется счёт, а их ключ идемпотентности
+        (`external_order_id_idempotency`) освобождается. Та же очистка, что в кабинете. Слишком частая
         очистка — `429 clear_cooldown` с `retry_after` (секунды); очистка уже идёт —
         `409 operation_in_progress`; боевая организация — `403 not_sandbox`.
       operationId: clearSandbox
@@ -2093,6 +2279,9 @@ paths:
         только листы и ссылки, созданные его ключами; ключ интеграции без права чтения счетов не
         видит ни одного. Ключ
         мерчанта и интеграция с `invoices.read_all` — без изменений.
+
+        Организация в боевом режиме не видит листов, созданных в песочнице (`is_sandbox: true`);
+        песочная организация видит все свои листы, в том числе боевые.
       operationId: listStaticQr
       parameters:
         - name: per_page
@@ -2124,7 +2313,8 @@ paths:
       summary: Получить печатный QR под сделку
       description: |
         Карточка листа или ссылки на оплату. Чужой id и лист, который ваш ключ не видит (см.
-        `GET /static-qr`), → `404` (non-enumeration).
+        `GET /static-qr`, в том числе песочный лист боевой организации), → `404`
+        (non-enumeration). То же правило — у `DELETE /static-qr/{id}`.
 
         `state_version` — версия денежного состояния: меняется, когда появляется новая
         попытка оплаты, меняются статус, сумма или итог возвратов попытки, возврат по ней или
@@ -2421,7 +2611,8 @@ paths:
       description: |
         Возвращает текущий статус чека и его реквизиты (`fpd`, `operation_id`, `link` —
         публичная страница чека, открывается в обычном браузере, — `shift_number`).
-        `status`: `pending` | `issued` | `failed`. Чужой `id` → `404`.
+        `status`: `pending` | `issued` | `failed`. Чужой `id` → `404`; чек другого режима
+        (песочный у боевой организации и наоборот) — тоже `404`, как в списке `GET /receipts`.
       operationId: showReceipt
       parameters:
         - name: id
@@ -2597,7 +2788,7 @@ paths:
                       catalog_item_id: {type: integer, minimum: 1}
                       count: {type: integer, minimum: 1}
                       amount: {type: number, minimum: 0.01, description: "Не больше двух знаков после точки."}
-                reason: {type: string, nullable: true, maxLength: 500, description: "Причина возврата под счёт."}
+                reason: {type: string, nullable: true, maxLength: 255, description: "Причина возврата под счёт."}
                 source_refund_id:
                   type: integer
                   minimum: 1
@@ -2849,7 +3040,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/QrRefundSession'}}}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: "not_sandbox"}
-        '404': {description: "not_found"}
+        '404': {description: "not_found — сессии нет (в том числе удалена во время запроса); повтор не поможет"}
         '409': {description: "qr_refund_simulation_not_applicable — событие из текущего состояния не исполняется; refund_effect_in_progress — по сессии идёт другая операция, повторите через `retry_after_seconds`"}
         '422': {$ref: '#/components/responses/ValidationError'}
   "/refunds":
@@ -3103,7 +3294,12 @@ paths:
         в кабинете). Повторяет строку `status: failed` тем же телом, подписывая его текущим
         секретом и отправляя на ТЕКУЩИЙ адрес вебхука ключа — так проверяется починка
         адреса или обработчика. Строку `skipped` (пауза отправки) и успешную доставку не
-        повторяет (`422 webhook_log_not_retryable`). На паузе отправки ключа отказывает
+        повторяет (`422 webhook_log_not_retryable`). Событие чека (`receipt.*`) или событие
+        подписки по счёту (`subscription.*` с `invoice_id`), которое этот ключ уже принял (в том числе автоматическим
+        повтором), не повторяется — `409 webhook_already_delivered`, повторять нечего. Обработчик
+        всё равно держите идемпотентным (`(event, receipt.id)`, `(event, subscription.id,
+        invoice_id)`): автоматический повтор, ответ на который не дошёл до ApiPay, может прийти
+        второй раз. На паузе отправки ключа отказывает
         `409 webhook_circuit_open`. Частота повторов ограничена: `429 request_rate_limited`
         с `Retry-After`. Новая строка журнала ссылается `retry_of` на исходную доставку
         цепочки повторов.
@@ -3138,7 +3334,9 @@ paths:
           description: |
             `webhook_circuit_open` — отправка вебхуков ключа на паузе (см.
             `GET /webhook-logs/delivery-state`); `sandbox_effect_in_progress` — организация
-            сейчас меняет режим, повторите через `retry_after_seconds`.
+            сейчас меняет режим, повторите через `retry_after_seconds`;
+            `webhook_already_delivered` — этот чек или это событие подписки ключ уже принял,
+            повторять нечего.
           content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
         '422':
           description: |
@@ -3161,6 +3359,9 @@ paths:
         Две последние проверяют, что ваш обработчик ОТКАЗЫВАЕТ поддельному и
         неподписанному телу, и доступны **только в песочнице** (боевая организация →
         `403 not_sandbox`).
+
+        Частота ограничена и на ключ, и на организацию в целом (суммарно по всем её
+        ключам): `429 request_rate_limited` с `Retry-After`.
       operationId: sendWebhookTest
       requestBody:
         required: false
@@ -3196,6 +3397,129 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '429':
           $ref: '#/components/responses/RateLimitWindow'
+  "/webhook-listen/sessions":
+    post:
+      tags: [Webhooks]
+      summary: Открыть сессию приёма уведомлений песочницы на компьютере
+      description: |
+        **Песочница без публичного адреса.** Пока сессия ключа жива (её опрашивают не реже раза
+        в минуту), уведомления этого ключа о песочных событиях не уходят на `webhook_url`, а
+        ждут в сессии: утилита `apipay-cli listen --forward-to <локальный адрес>` забирает их
+        `GET …/events`, отправляет на ваш локальный обработчик как есть (тело и подпись — как при
+        обычной доставке) и сообщает результат `POST …/events/{delivery_id}/result`. Результат
+        пишется в журнал доставок обычной строкой с `via: cli_listen`; нет результата за
+        несколько секунд — обычная недоставка с повтором. Одна сессия на ключ: новая закрывает
+        прежнюю. Только песочная организация (`403 listen_sandbox_only`); после перевода в бой
+        сессия ничего не перехватывает — для боя нужен публичный адрес вебхука. Частота
+        запросов к сессиям ограничена отдельно от общего лимита ключа.
+
+        Через сессию идут события счёта (`invoice.status_changed`, `invoice.qr_scanned`),
+        `invoice.refunded` и `qr_refund.*`. ⚠️ **Не идут** `subscription.*`, `receipt.*`,
+        `cashbox.*` и `catalog.*`: их получает только адрес вебхука ключа, а у ключа без адреса их
+        не будет и при открытой сессии. Строку журнала с `via: cli_listen` повторить нельзя
+        (`POST /webhook-logs/{id}/retry` → `422 webhook_log_not_retryable`) — повторите событие в
+        песочнице заново.
+      operationId: openWebhookListenSession
+      responses:
+        '201':
+          description: Сессия открыта
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: {type: string, format: uuid}
+                  expires_at: {type: string, format: date-time}
+                  poll_interval: {type: integer, example: 2, description: "Интервал опроса событий, секунд."}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: "`listen_sandbox_only` — организация в рабочем режиме; `listen_not_available` — ключ не поддерживает пересылку"
+  "/webhook-listen/sessions/{session}":
+    delete:
+      tags: [Webhooks]
+      summary: Закрыть сессию приёма уведомлений
+      operationId: closeWebhookListenSession
+      parameters:
+        - {name: session, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Сессия закрыта
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: closed}
+        '404':
+          description: "`listen_session_not_found` — нет такой сессии у этого ключа"
+  "/webhook-listen/sessions/{session}/events":
+    get:
+      tags: [Webhooks]
+      summary: Забрать уведомления сессии
+      description: |
+        Короткий опрос: ответ приходит сразу. Опрашивайте раз в `poll_interval` секунд и передавайте
+        `cursor` из прошлого ответа в `after`. Событие из ответа отправьте на локальный обработчик
+        ровно с этими `body` и `headers` и сообщите результат. Сессия, которую не опрашивали
+        дольше минуты, перестаёт перехватывать доставку.
+      operationId: pollWebhookListenEvents
+      parameters:
+        - {name: session, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: after, in: query, required: false, schema: {type: integer, minimum: 0}}
+      responses:
+        '200':
+          description: События
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        delivery_id: {type: string, format: uuid}
+                        event: {type: string, nullable: true, example: invoice.status_changed}
+                        body: {type: string, description: "Сырое тело уведомления (JSON-строка), как при обычной доставке."}
+                        headers: {type: object, additionalProperties: {type: string}, description: "Заголовки обычной доставки, включая `X-Webhook-Signature`."}
+                  cursor: {type: string}
+                  poll_interval: {type: integer, example: 2}
+        '404':
+          description: "`listen_session_not_found`"
+        '409':
+          description: "`listen_session_closed` — сессия закрыта, истекла или организация вышла из песочницы"
+  "/webhook-listen/sessions/{session}/events/{delivery}/result":
+    post:
+      tags: [Webhooks]
+      summary: Сообщить результат пересылки события
+      description: |
+        `status_code` — HTTP-код ответа вашего обработчика; если он не ответил вовсе (не запущен,
+        отказ соединения) — `error` без `status_code`. 2xx — доставлено; 5xx, 429 и отсутствие
+        ответа — повтор по обычной сетке; прочие коды — окончательная недоставка.
+      operationId: reportWebhookListenResult
+      parameters:
+        - {name: session, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: delivery, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status_code: {type: integer, minimum: 100, maximum: 599, nullable: true}
+                duration_ms: {type: integer, minimum: 0, nullable: true}
+                error: {type: string, maxLength: 255, nullable: true}
+      responses:
+        '200':
+          description: Результат записан
+        '404':
+          description: "`listen_session_not_found`"
+        '409':
+          description: "`listen_delivery_closed` — событие не найдено или срок ответа вышел (доставку повторит обычная сетка)"
+        '422':
+          $ref: '#/components/responses/ValidationError'
   "/request-logs":
     get:
       tags: [Request Logs]
@@ -3642,6 +3966,44 @@ paths:
                 type: object
                 properties:
                   message: {type: string, example: Organization not resolved}
+  "/account/webhook-secret/check":
+    post:
+      tags: [Tariff & Account]
+      summary: Сверить секрет подписи вебхуков, не передавая его
+      description: |
+        Проверка, что секрет подписи в вашем окружении совпадает с секретом ключа запроса.
+        Пришлите случайный `nonce` (16–64 hex-символа) и `signature` —
+        `HMAC-SHA256(secret, nonce)` в hex, где `nonce` берётся строкой как есть. Ответ:
+        `has_secret` (есть ли секрет у ключа) и `match` (`null`, если секрета нет). Сам секрет
+        не передаётся ни в запросе, ни в ответе. Работает и без оплаченного тарифа. Свой
+        минутный лимит на ключ (`429 request_rate_limited`).
+      operationId: checkWebhookSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nonce, signature]
+              properties:
+                nonce: {type: string, pattern: '^[0-9a-fA-F]{16,64}$', example: 9f86d081884c7d659a2feaa0c55ad015}
+                signature: {type: string, pattern: '^[0-9a-fA-F]{64}$'}
+      responses:
+        '200':
+          description: Результат сверки
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  has_secret: {type: boolean}
+                  match: {type: boolean, nullable: true}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          description: Превышен лимит (`request_rate_limited`)
   "/connections":
     get:
       tags: [Connections]
@@ -5357,13 +5719,15 @@ paths:
         `bill_immediately=true` — первый счёт сразу; иначе по расписанию в `next_billing_at`.
 
         ⛔ **Сумма списания — только целые тенге.** Списание выставляется счётом на номер
-        телефона, поэтому дробная сумма уходит в статус `error` с
-        `error_code: amount_must_be_whole_tenge` — вебхуком `invoice.status_changed`, и так при
-        КАЖДОМ списании. Дробную `amount` создание подписки примет. Итог `cart_items`
-        проверяется при создании и изменении, но при каждом списании считается заново по
-        текущим ценам каталога: если цену позиции поменяли позже, дробный итог даст тот же
-        `error`. Проверьте суммы действующих подписок и цены каталожных позиций, из которых
-        считается итог.
+        телефона, поэтому дробная `amount` (без корзины) отбивается при создании и изменении:
+        `422`, `error_code: amount_must_be_whole_tenge`, текст — в `errors.amount`. Сумма, которая
+        у подписки уже стоит, правку прочих полей не блокирует, но если она дробная — каждое
+        списание такой подписки по-прежнему уходит в статус `error` с тем же `error_code`:
+        смените её на целую через `PUT /subscriptions/{id}`. Итог `cart_items` проверяется при
+        создании и изменении, но при каждом списании считается заново по текущим ценам каталога:
+        если цену позиции поменяли позже, дробный итог уйдёт в статус `error` с тем же
+        `error_code` вебхуком `invoice.status_changed`. Проверьте суммы действующих подписок и
+        цены каталожных позиций, из которых считается итог.
 
         ⛔ **Позиция корзины с `operation=delete` отбивается `422`** — здесь и в
         `PUT /subscriptions/{id}`; текст в `errors["cart_items.N.catalog_item_id"]`.
@@ -5493,7 +5857,7 @@ paths:
                   type: number
                   minimum: 100
                   maximum: 1000000
-                  description: Обязателен, если этим же запросом снимают корзину (cart_items=null).
+                  description: Обязателен, если этим же запросом снимают корзину (cart_items=null). Новая сумма — только целые тенге (`422 amount_must_be_whole_tenge`); прежняя сумма подписки проходит как есть.
                 billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28). У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье, и значения больше 7 на этих периодах отклоняются (раньше они принимались и молча игнорировались). У `daily` не используется. Взаимоисключающе с `billing_day_from_end`."}
                 billing_day_from_end: {type: integer, minimum: 0, maximum: 1, nullable: true, description: "Опора от конца месяца: 0 — последний день, 1 — предпоследний. Доступна только для `monthly`, `quarterly`, `yearly`. Взаимоисключающе с `billing_day`."}
                 billing_time: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', nullable: true, description: "Время списания по Алматы в формате ЧЧ:ММ. Допустимое окно — 06:00–22:00. По умолчанию 13:00."}
@@ -5525,7 +5889,7 @@ paths:
                 bill_until_paid: {type: boolean, description: "Режим «выставлять, пока не оплатят» (см. `CreateSubscriptionRequest`). Смена режима в любую сторону обнуляет `failed_attempts`; включение возвращает подписку из льготного периода к выставлению счетов. У автоплатежа по календарю — 422. `null` — «не менять»."}
                 retry_interval_hours: {type: integer, minimum: 1, maximum: 168}
                 grace_period_days: {type: integer, minimum: 1, maximum: 30}
-                metadata: {type: object}
+                metadata: {type: object, description: "Не больше 20 ключей верхнего уровня (больше — `422`); служебные ключи, которые пишет сервер и отдаёт GET (`autopay_items`, `provider_fault_retry_after`), в счёт не входят."}
                 cart_items:
                   type: array
                   nullable: true
@@ -6524,6 +6888,13 @@ components:
       enum:
         - idempotency_conflict
         - network_unavailable
+        - pairing_not_found
+        - slow_down
+        - listen_sandbox_only
+        - listen_not_available
+        - listen_session_not_found
+        - listen_session_closed
+        - listen_delivery_closed
         - session_transient
         - client_not_found
         - kaspi_throttled
@@ -7547,7 +7918,7 @@ components:
           description: Сумма возврата. Без неё — полный возврат.
         reason:
           type: string
-          maxLength: 500
+          maxLength: 255
         return_items:
           type: array
           minItems: 1
@@ -7732,6 +8103,7 @@ components:
         error_message: {type: string, nullable: true}
         created_at: {type: string, format: date-time}
         retry_of: {type: integer, nullable: true, description: "ID исходного лога, если это повторная отправка."}
+        via: {type: string, nullable: true, enum: [cli_listen, null], description: "`cli_listen` — событие песочницы доставлено через `apipay-cli listen` на компьютер разработчика (`url` тогда вида `cli-listen://session/<id>`, повтор такой строки невозможен — повторите событие в песочнице заново); `null` — обычная доставка по адресу ключа."}
     SandboxState:
       type: object
       description: |
@@ -7785,6 +8157,11 @@ components:
       description: |
         Расход лимита счетов — тот же, что видит кабинет. `count`/`limit` — сегодняшние
         сутки; `period_*` — бюджет текущего периода (сутки или 30-дневный блок, `mode`).
+
+        Ключу партнёрской интеграции `count` и `period_used` считаются только по счетам
+        ключей этой интеграции; `limit`, `period_limit`, `status`, `mode` и `hard_limited`
+        — общие для организации: лимит один на все интеграции, и `status: red` значит, что
+        его выбрала организация, даже если своих счетов у интеграции мало.
       properties:
         count: {type: integer, description: Счетов за сегодня., example: 12}
         limit: {type: integer, nullable: true, description: Суточный лимит тарифа., example: 300}
@@ -8031,6 +8408,10 @@ components:
           enum: [sandbox, production]
           description: Режим организации ключа. В песочнице счета и события тестовые.
           example: production
+        organization_id:
+          type: integer
+          description: Организация ключа.
+          example: 12345
         api:
           type: object
           properties:
@@ -8202,7 +8583,8 @@ components:
           type: number
           minimum: 100
           maximum: 1000000
-          description: Обязателен, когда cart_items не передан. С корзиной игнорируется — сумму считает сервер.
+          multipleOf: 1
+          description: Обязателен, когда cart_items не передан. Только целые тенге (дробная — `422 amount_must_be_whole_tenge`). С корзиной игнорируется — сумму считает сервер.
         billing_day: {type: integer, minimum: 1, maximum: 28, description: "День списания. У `monthly`, `quarterly`, `yearly` — число месяца (1–28). У `weekly` и `biweekly` — ДЕНЬ НЕДЕЛИ: 1 — понедельник … 7 — воскресенье, и значения больше 7 на этих периодах отклоняются (раньше они принимались и молча игнорировались). У `daily` не используется. Взаимоисключающе с `billing_day_from_end`."}
         billing_day_from_end: {type: integer, minimum: 0, maximum: 1, nullable: true, description: "Опора от конца месяца: 0 — последний день, 1 — предпоследний. Доступна только для `monthly`, `quarterly`, `yearly`. Взаимоисключающе с `billing_day`."}
         billing_time: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', nullable: true, description: "Время списания по Алматы в формате ЧЧ:ММ. Допустимое окно — 06:00–22:00. По умолчанию 13:00."}
@@ -8217,7 +8599,7 @@ components:
         bill_until_paid: {type: boolean, description: "Режим «выставлять, пока не оплатят». Не передано или `false` — прежнее поведение с потолком `max_retry_attempts`. `true` — подписка по неоплате не истекает: истёкший счёт перевыставляется сразу, пока не наступил момент следующего планового списания; счёт, отменённый не плательщиком, и ошибка счёта закрывают период без повтора; `error_code = client_not_found` отменяет подписку (`subscription.cancelled`, `reason: payer_error`)."}
         retry_interval_hours: {type: integer, minimum: 1, maximum: 168}
         grace_period_days: {type: integer, minimum: 1, maximum: 30}
-        metadata: {type: object}
+        metadata: {type: object, description: "Не больше 20 ключей верхнего уровня (больше — `422`); служебные ключи, которые пишет сервер и отдаёт GET (`autopay_items`, `provider_fault_retry_after`), в счёт не входят."}
         cart_items:
           type: array
           minItems: 1
