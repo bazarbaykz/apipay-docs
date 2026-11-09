@@ -216,7 +216,7 @@ Your limits grid is visible in the tariff catalog — `GET /tariff-plans` return
 
 ### GET /tariff-plans
 
-The tariff catalog: 4 tiers (`start`, `business`, `pro`, `pro_max`) and 12 plans — tier × period of 1/3/6 months, with discounts for longer periods.
+The tariff catalog: 4 tiers (`start`, `business`, `pro`, `pro_max`) and 8 plans — tier × period of 1 or 3 months, with a discount for 3 months.
 
 The catalog is returned **through the eyes of your partner account**. If ApiPay assigned you a limits grid (white-label), `tiers[].daily_limit` and `tiers[].label` carry your values, and `tiers[].limits_source` shows the source: `partner_grid` for the grid, `config` for the global catalog. **The grid never changes prices**: `base_price` and `plans[].price` are always global. Another partner's grid is never returned.
 
